@@ -1,4 +1,10 @@
 import { PREFIX, PRESETS } from "./shared/config.js";
+import {
+  DEFAULT_INTERVAL_SEC,
+  clampInterval,
+  formatCountdown,
+  formatInterval
+} from "./shared/logic.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -6,7 +12,8 @@ const RESTRICTED = /^(chrome|edge|devtools|about|chrome-extension|moz-extension)
 
 let currentTab = null;
 let tasks = {};
-let settings = { bypassCache: true };
+let settings = { bypassCache: true, skipDiscarded: false };
+let pausedAll = false;
 let alarmsMap = {};
 let msgTimer = null;
 
@@ -27,18 +34,11 @@ function send(message) {
 }
 
 function fmtInterval(sec) {
-  if (sec % 3600 === 0) return sec / 3600 + " " + msg("unitHours");
-  if (sec % 60 === 0) return sec / 60 + " " + msg("unitMinutes");
-  return sec + " " + msg("unitSeconds");
-}
-
-function fmtCountdown(ms) {
-  const total = Math.max(0, Math.ceil(ms / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const pad = (n) => String(n).padStart(2, "0");
-  return h > 0 ? h + ":" + pad(m) + ":" + pad(s) : pad(m) + ":" + pad(s);
+  return formatInterval(sec, {
+    hours: msg("unitHours"),
+    minutes: msg("unitMinutes"),
+    seconds: msg("unitSeconds")
+  });
 }
 
 function setMsg(text) {
@@ -68,10 +68,22 @@ async function syncAlarms() {
 }
 
 async function refreshState() {
-  const t = await chrome.storage.local.get(["tasks", "settings"]);
-  tasks = t.tasks || {};
-  settings = Object.assign({ bypassCache: true }, t.settings || {});
+  let data = await chrome.storage.sync.get("settings");
+  if (!data.settings) {
+    /* 兼容 1.1.0 及之前存在 local 里的设置 */
+    data = await chrome.storage.local.get("settings");
+  }
+  const local = await chrome.storage.local.get(["tasks", "pausedAll"]);
+  tasks = local.tasks || {};
+  settings = Object.assign({ bypassCache: true, skipDiscarded: false }, data.settings || {});
+  pausedAll = !!local.pausedAll;
   await syncAlarms();
+}
+
+function renderPauseAll() {
+  const btn = $("pauseAllBtn");
+  btn.textContent = pausedAll ? msg("resumeAll") : msg("pauseAll");
+  btn.classList.toggle("active", pausedAll);
 }
 
 function renderCurrentTab() {
@@ -92,7 +104,10 @@ function renderCurrentTab() {
   btn.textContent = running ? msg("btnStop") : msg("btnStart");
   btn.classList.toggle("stop", running);
   const count = Object.keys(tasks).length;
-  $("globalStatus").textContent = count > 0 ? msg("statusTabs", [String(count)]) : "";
+  $("globalStatus").textContent = pausedAll
+    ? msg("statusPaused")
+    : count > 0 ? msg("statusTabs", [String(count)]) : "";
+  renderPauseAll();
 }
 
 function buildTaskItem(tabId, task, tab) {
@@ -179,9 +194,13 @@ async function renderTasks() {
 function renderCountdowns() {
   const nodes = document.querySelectorAll(".next[data-tab]");
   for (const node of nodes) {
+    if (pausedAll) {
+      node.textContent = msg("pausedHint");
+      continue;
+    }
     const alarm = alarmsMap[node.dataset.tab];
     if (alarm && alarm.scheduledTime) {
-      node.textContent = msg("nextIn", [fmtCountdown(alarm.scheduledTime - Date.now())]);
+      node.textContent = msg("nextIn", [formatCountdown(alarm.scheduledTime - Date.now())]);
     }
   }
 }
@@ -200,11 +219,17 @@ function initPresetSelect() {
     opt.textContent = msg(p.key);
     sel.appendChild(opt);
   }
-  sel.value = "300"; /* 默认 5 分钟 */
+  sel.value = String(DEFAULT_INTERVAL_SEC);
 }
 
 async function saveSettings() {
-  await send({ type: "save-settings", settings: { bypassCache: $("bypassCheck").checked } });
+  await send({
+    type: "save-settings",
+    settings: {
+      bypassCache: $("bypassCheck").checked,
+      skipDiscarded: $("skipDiscardedCheck").checked
+    }
+  });
 }
 
 async function init() {
@@ -215,6 +240,7 @@ async function init() {
 
   await refreshState();
   $("bypassCheck").checked = settings.bypassCache !== false;
+  $("skipDiscardedCheck").checked = !!settings.skipDiscarded;
   await renderAll();
 
   $("toggleBtn").addEventListener("click", async () => {
@@ -224,8 +250,15 @@ async function init() {
       setMsg(msg("msgStopped"));
     } else {
       const custom = parseInt($("customInput").value, 10);
-      const clamped = custom > 0 && custom < 30;
-      const seconds = custom > 0 ? Math.max(custom, 30) : parseInt($("presetSelect").value, 10);
+      let seconds;
+      let clamped = false;
+      if (custom > 0) {
+        const c = clampInterval(custom);
+        seconds = c.seconds;
+        clamped = c.clamped;
+      } else {
+        seconds = parseInt($("presetSelect").value, 10);
+      }
       const res = await send({ type: "start", tabId: currentTab.id, seconds });
       if (!res.ok) {
         setMsg(msg("errStart", [res.error || msg("errUnknown")]));
@@ -240,6 +273,13 @@ async function init() {
   });
 
   $("bypassCheck").addEventListener("change", saveSettings);
+  $("skipDiscardedCheck").addEventListener("change", saveSettings);
+
+  $("pauseAllBtn").addEventListener("click", async () => {
+    await send({ type: "toggle-pause-all" });
+    await refreshState();
+    await renderAll();
+  });
 
   /* alarm 周期触发会更新 scheduledTime 但不触发 storage.onChanged，
      每秒同步一次才能让倒计时在归零后继续滚动 */

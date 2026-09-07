@@ -8,7 +8,10 @@
 <body>
   <header>
     <div class="brand" data-i18n="extName"></div>
-    <div id="globalStatus" class="status"></div>
+    <div class="header-right">
+      <span id="globalStatus" class="status"></span>
+      <button id="pauseAllBtn" class="mini"></button>
+    </div>
   </header>
 
   <section class="card">
@@ -28,6 +31,10 @@
     <label class="row-check">
       <input id="bypassCheck" type="checkbox">
       <span data-i18n="bypassLabel"></span>
+    </label>
+    <label class="row-check">
+      <input id="skipDiscardedCheck" type="checkbox">
+      <span data-i18n="skipDiscardedLabel"></span>
     </label>
     <button id="toggleBtn" class="primary"></button>
     <div id="msg" class="hint"></div>

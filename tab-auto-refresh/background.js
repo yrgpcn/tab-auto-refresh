@@ -1,6 +1,9 @@
 /* 标签页定时刷新 · Manifest V3 后台 service worker（ES module） */
 
 import { PREFIX, PRESETS } from "./shared/config.js";
+import { DEFAULT_INTERVAL_SEC, clampInterval } from "./shared/logic.js";
+
+const DEFAULT_SETTINGS = { bypassCache: true, skipDiscarded: false };
 
 function alarmName(tabId) {
   return PREFIX + tabId;
@@ -15,9 +18,28 @@ async function setTasks(tasks) {
   await chrome.storage.local.set({ tasks });
 }
 
+/* 偏好设置存 chrome.storage.sync 跨设备同步；旧版本留在 local 的设置自动迁移 */
 async function getSettings() {
-  const data = await chrome.storage.local.get("settings");
-  return Object.assign({ bypassCache: true }, data.settings || {});
+  const [syncData, localData] = await Promise.all([
+    chrome.storage.sync.get("settings"),
+    chrome.storage.local.get("settings"),
+  ]);
+  if (syncData.settings) {
+    return Object.assign({}, DEFAULT_SETTINGS, syncData.settings);
+  }
+  if (localData.settings) {
+    const migrated = Object.assign({}, DEFAULT_SETTINGS, localData.settings);
+    await chrome.storage.sync.set({ settings: migrated });
+    await chrome.storage.local.remove("settings");
+    return migrated;
+  }
+  return Object.assign({}, DEFAULT_SETTINGS);
+}
+
+/* 全局暂停是本机状态，跟随任务一起存 chrome.storage.local */
+async function isPausedAll() {
+  const data = await chrome.storage.local.get("pausedAll");
+  return !!data.pausedAll;
 }
 
 /* tasks 的读改写走同一队列，避免弹窗 / 右键菜单 / 定时器并发覆盖 */
@@ -28,14 +50,15 @@ function withTaskLock(fn) {
   return run;
 }
 
-/* 为某个标签页开启定时刷新，返回实际生效的间隔秒数 */
+/* 为某个标签页开启定时刷新，返回实际生效的间隔秒数；开始新任务即解除全局暂停 */
 function startTask(tabId, seconds) {
-  const safe = Math.max(30, Math.floor(Number(seconds) || 0) || 30);
+  const { seconds: safe } = clampInterval(seconds);
   return withTaskLock(async () => {
     const tasks = await getTasks();
     tasks[tabId] = { intervalSec: safe, createdAt: Date.now() };
     await setTasks(tasks);
     await chrome.alarms.create(alarmName(tabId), { periodInMinutes: safe / 60 });
+    await chrome.storage.local.set({ pausedAll: false });
     await updateBadge();
     return safe;
   });
@@ -57,12 +80,14 @@ async function reloadTab(tabId) {
   await chrome.tabs.reload(tabId, { bypassCache: !!settings.bypassCache });
 }
 
-/* 工具栏图标角标 = 当前定时刷新中的标签页数量 */
+/* 工具栏角标 = 监控中的标签页数量；全局暂停时显示暂停符号 */
 async function updateBadge() {
-  const tasks = await getTasks();
+  const [tasks, paused] = await Promise.all([getTasks(), isPausedAll()]);
   const n = Object.keys(tasks).length;
-  await chrome.action.setBadgeBackgroundColor({ color: "#2563eb" });
-  await chrome.action.setBadgeText({ text: n > 0 ? String(n) : "" });
+  await chrome.action.setBadgeBackgroundColor({ color: paused ? "#6b7280" : "#2563eb" });
+  await chrome.action.setBadgeText({
+    text: paused && n > 0 ? "‖" : n > 0 ? String(n) : "",
+  });
 }
 
 function notifyTaskStopped(tabId) {
@@ -78,11 +103,20 @@ function notifyTaskStopped(tabId) {
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (!alarm.name.startsWith(PREFIX)) return;
   const tabId = Number(alarm.name.slice(PREFIX.length));
-  const tasks = await getTasks();
+  const [tasks, paused] = await Promise.all([getTasks(), isPausedAll()]);
   if (!tasks[tabId]) {
     await chrome.alarms.clear(alarm.name);
     return;
   }
+  if (paused) return; /* 暂停期间跳过，恢复后按原周期继续 */
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab) {
+    await stopTask(tabId);
+    notifyTaskStopped(tabId);
+    return;
+  }
+  const settings = await getSettings();
+  if (settings.skipDiscarded && tab.discarded) return; /* 休眠标签页不唤醒 */
   try {
     await reloadTab(tabId);
   } catch (e) {
@@ -111,27 +145,27 @@ async function prune() {
 chrome.runtime.onStartup.addListener(prune);
 chrome.runtime.onInstalled.addListener(prune);
 
-/* 右键标签页的快捷菜单 */
+/* 标签页与网页上的右键菜单 */
 function buildMenus() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: "root",
       title: chrome.i18n.getMessage("menuRoot"),
-      contexts: ["tab"]
+      contexts: ["tab", "page"]
     });
     for (const p of PRESETS) {
       chrome.contextMenus.create({
         id: "start-" + p.seconds,
         parentId: "root",
         title: chrome.i18n.getMessage(p.key),
-        contexts: ["tab"]
+        contexts: ["tab", "page"]
       });
     }
     chrome.contextMenus.create({
       id: "stop",
       parentId: "root",
       title: chrome.i18n.getMessage("menuStop"),
-      contexts: ["tab"]
+      contexts: ["tab", "page"]
     });
   });
 }
@@ -144,6 +178,20 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     await stopTask(tab.id);
   } else if (id.startsWith("start-")) {
     await startTask(tab.id, Number(id.slice("start-".length)));
+  }
+});
+
+/* 快捷键 Alt+Shift+R：开关当前标签页的定时刷新 */
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command !== "toggle-refresh") return;
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = tabs && tabs[0];
+  if (!tab || typeof tab.id !== "number") return;
+  const tasks = await getTasks();
+  if (tasks[tab.id]) {
+    await stopTask(tab.id);
+  } else {
+    await startTask(tab.id, DEFAULT_INTERVAL_SEC);
   }
 });
 
@@ -160,8 +208,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       } else if (msg.type === "reload-now") {
         await reloadTab(msg.tabId);
         sendResponse({ ok: true });
+      } else if (msg.type === "toggle-pause-all") {
+        const paused = !(await isPausedAll());
+        await chrome.storage.local.set({ pausedAll: paused });
+        await updateBadge();
+        sendResponse({ ok: true, pausedAll: paused });
       } else if (msg.type === "save-settings") {
-        await chrome.storage.local.set({ settings: msg.settings });
+        await chrome.storage.sync.set({ settings: msg.settings });
         sendResponse({ ok: true });
       } else {
         sendResponse({ ok: false });

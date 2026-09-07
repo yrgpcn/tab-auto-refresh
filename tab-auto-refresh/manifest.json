@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extName__",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "minimum_chrome_version": "120",
   "default_locale": "zh_CN",
   "description": "__MSG_extDesc__",
@@ -12,11 +12,17 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "标签页定时刷新",
+    "default_title": "__MSG_extName__",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
+    }
+  },
+  "commands": {
+    "toggle-refresh": {
+      "suggested_key": { "default": "Alt+Shift+R" },
+      "description": "开关当前标签页的定时刷新"
     }
   },
   "icons": {

@@ -1,0 +1,70 @@
+{
+  "extName": { "message": "Tab Auto Refresh" },
+  "extDesc": { "message": "Set up automatic tab refresh with intervals from 30 seconds: custom intervals, force refresh, multiple tabs with countdown, right-click menus, and a keyboard shortcut." },
+  "menuRoot": { "message": "Tab Auto Refresh" },
+  "menuStop": { "message": "Stop auto refresh" },
+  "notifTitle": { "message": "Tab Auto Refresh" },
+  "notifStopped": { "message": "An auto refresh task was cancelled (the tab was closed or the page is restricted)" },
+  "preset30s": { "message": "Every 30 seconds" },
+  "preset1m": { "message": "Every 1 minute" },
+  "preset2m": { "message": "Every 2 minutes" },
+  "preset5m": { "message": "Every 5 minutes" },
+  "preset10m": { "message": "Every 10 minutes" },
+  "preset30m": { "message": "Every 30 minutes" },
+  "preset1h": { "message": "Every 1 hour" },
+  "untitledTab": { "message": "(untitled)" },
+  "btnStart": { "message": "Start auto refresh for this tab" },
+  "btnStop": { "message": "Stop auto refresh" },
+  "statusTabs": {
+    "message": "$COUNT$ tab(s) monitored",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "statusPaused": { "message": "All paused" },
+  "taskTitleFallback": {
+    "message": "Tab $ID$",
+    "placeholders": { "id": { "content": "$1" } }
+  },
+  "taskInvalid": { "message": "Tab unavailable" },
+  "perInterval": {
+    "message": "Every $INTERVAL$",
+    "placeholders": { "interval": { "content": "$1" } }
+  },
+  "nextIn": {
+    "message": " - next in $TIME$",
+    "placeholders": { "time": { "content": "$1" } }
+  },
+  "pausedHint": { "message": " - paused" },
+  "actionNow": { "message": "Refresh now" },
+  "actionCancel": { "message": "Cancel" },
+  "errRefresh": {
+    "message": "Refresh failed: $ERROR$",
+    "placeholders": { "error": { "content": "$1" } }
+  },
+  "errStart": {
+    "message": "Failed to start: $ERROR$",
+    "placeholders": { "error": { "content": "$1" } }
+  },
+  "errUnknown": { "message": "unknown error" },
+  "msgStopped": { "message": "Auto refresh stopped for this tab" },
+  "msgSet": {
+    "message": "Auto refresh set: every $INTERVAL$",
+    "placeholders": { "interval": { "content": "$1" } }
+  },
+  "msgClamped": { "message": "Minimum custom interval is 30 seconds; set to 30 seconds" },
+  "unitHours": { "message": "hours" },
+  "unitMinutes": { "message": "min" },
+  "unitSeconds": { "message": "sec" },
+  "taskCountUnit": {
+    "message": "$COUNT$ item(s)",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "restrictHint": { "message": "Browser internal pages (chrome:// etc.) may not support auto refresh" },
+  "intervalLabel": { "message": "Interval" },
+  "customPlaceholder": { "message": "Custom seconds" },
+  "bypassLabel": { "message": "Bypass cache when refreshing (like Ctrl+F5)" },
+  "skipDiscardedLabel": { "message": "Skip discarded (sleeping) tabs" },
+  "pauseAll": { "message": "Pause all" },
+  "resumeAll": { "message": "Resume all" },
+  "listTitle": { "message": "Tabs being auto-refreshed" },
+  "emptyHint": { "message": "No tasks yet: click \"Start auto refresh\" on any tab." }
+}
