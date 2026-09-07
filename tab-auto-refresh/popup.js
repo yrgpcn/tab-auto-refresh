@@ -1,17 +1,7 @@
-"use strict";
+import { PREFIX, PRESETS } from "./shared/config.js";
 
 const $ = (id) => document.getElementById(id);
 
-const PREFIX = "refresh-";
-const PRESETS = [
-  { label: "每 30 秒", seconds: 30 },
-  { label: "每 1 分钟", seconds: 60 },
-  { label: "每 2 分钟", seconds: 120 },
-  { label: "每 5 分钟", seconds: 300 },
-  { label: "每 10 分钟", seconds: 600 },
-  { label: "每 30 分钟", seconds: 1800 },
-  { label: "每 1 小时", seconds: 3600 }
-];
 const RESTRICTED = /^(chrome|edge|devtools|about|chrome-extension|moz-extension):/i;
 
 let currentTab = null;
@@ -19,6 +9,10 @@ let tasks = {};
 let settings = { bypassCache: true };
 let alarmsMap = {};
 let msgTimer = null;
+
+function msg(key, subs) {
+  return chrome.i18n.getMessage(key, subs) || key;
+}
 
 function send(message) {
   return new Promise((resolve) => {
@@ -33,9 +27,9 @@ function send(message) {
 }
 
 function fmtInterval(sec) {
-  if (sec % 3600 === 0) return sec / 3600 + " 小时";
-  if (sec % 60 === 0) return sec / 60 + " 分钟";
-  return sec + " 秒";
+  if (sec % 3600 === 0) return sec / 3600 + " " + msg("unitHours");
+  if (sec % 60 === 0) return sec / 60 + " " + msg("unitMinutes");
+  return sec + " " + msg("unitSeconds");
 }
 
 function fmtCountdown(ms) {
@@ -53,12 +47,19 @@ function setMsg(text) {
   if (text) msgTimer = setTimeout(() => { $("msg").textContent = ""; }, 4000);
 }
 
-async function refreshState() {
-  const t = await chrome.storage.local.get(["tasks", "settings"]);
-  tasks = t.tasks || {};
-  settings = Object.assign({ bypassCache: true }, t.settings || {});
-  alarmsMap = {};
+function applyI18n() {
+  document.title = msg("extName");
+  for (const el of document.querySelectorAll("[data-i18n]")) {
+    el.textContent = msg(el.dataset.i18n);
+  }
+  for (const el of document.querySelectorAll("[data-i18n-placeholder]")) {
+    el.placeholder = msg(el.dataset.i18nPlaceholder);
+  }
+}
+
+async function syncAlarms() {
   const list = await chrome.alarms.getAll();
+  alarmsMap = {};
   for (const a of list) {
     if (a.name.startsWith(PREFIX)) {
       alarmsMap[a.name.slice(PREFIX.length)] = a;
@@ -66,18 +67,32 @@ async function refreshState() {
   }
 }
 
+async function refreshState() {
+  const t = await chrome.storage.local.get(["tasks", "settings"]);
+  tasks = t.tasks || {};
+  settings = Object.assign({ bypassCache: true }, t.settings || {});
+  await syncAlarms();
+}
+
 function renderCurrentTab() {
-  $("tabTitle").textContent = currentTab ? currentTab.title || "（无标题）" : "";
+  const favicon = $("tabFavicon");
+  if (currentTab && currentTab.favIconUrl) {
+    favicon.src = currentTab.favIconUrl;
+    favicon.hidden = false;
+  } else {
+    favicon.removeAttribute("src");
+    favicon.hidden = true;
+  }
+  $("tabTitle").textContent = currentTab ? currentTab.title || msg("untitledTab") : "";
   $("tabUrl").textContent = currentTab && currentTab.url ? currentTab.url : "";
-  $("tabFavicon").src = (currentTab && currentTab.favIconUrl) || "";
   $("restrictHint").hidden = !(currentTab && RESTRICTED.test(currentTab.url || ""));
 
   const running = !!(currentTab && tasks[currentTab.id]);
   const btn = $("toggleBtn");
-  btn.textContent = running ? "停止定时刷新" : "开始定时刷新当前标签页";
+  btn.textContent = running ? msg("btnStop") : msg("btnStart");
   btn.classList.toggle("stop", running);
-  $("globalStatus").textContent =
-    Object.keys(tasks).length > 0 ? Object.keys(tasks).length + " 个标签页监控中" : "";
+  const count = Object.keys(tasks).length;
+  $("globalStatus").textContent = count > 0 ? msg("statusTabs", [String(count)]) : "";
 }
 
 function buildTaskItem(tabId, task, tab) {
@@ -89,7 +104,7 @@ function buildTaskItem(tabId, task, tab) {
   const title = document.createElement("div");
   title.className = "task-title";
   if (tab) {
-    title.textContent = tab.title || tab.url || "标签页 " + tabId;
+    title.textContent = tab.title || tab.url || msg("taskTitleFallback", [String(tabId)]);
     title.title = tab.url || "";
     title.addEventListener("click", async () => {
       try {
@@ -99,13 +114,16 @@ function buildTaskItem(tabId, task, tab) {
       } catch (e) { /* 标签页可能刚被关闭 */ }
     });
   } else {
-    title.innerHTML = '<span class="invalid">标签页已失效</span>';
+    const invalid = document.createElement("span");
+    invalid.className = "invalid";
+    invalid.textContent = msg("taskInvalid");
+    title.appendChild(invalid);
   }
   meta.appendChild(title);
 
   const sub = document.createElement("div");
   sub.className = "task-sub";
-  const base = "每 " + fmtInterval(task.intervalSec);
+  const base = msg("perInterval", [fmtInterval(task.intervalSec)]);
   const alarm = alarmsMap[String(tabId)];
   if (tab && alarm && alarm.scheduledTime) {
     sub.textContent = base;
@@ -124,16 +142,16 @@ function buildTaskItem(tabId, task, tab) {
   if (tab) {
     const now = document.createElement("button");
     now.className = "mini";
-    now.textContent = "立即刷新";
+    now.textContent = msg("actionNow");
     now.addEventListener("click", async () => {
       const res = await send({ type: "reload-now", tabId });
-      if (!res.ok) setMsg("刷新失败：" + (res.error || "未知错误"));
+      if (!res.ok) setMsg(msg("errRefresh", [res.error || msg("errUnknown")]));
     });
     actions.appendChild(now);
   }
   const cancel = document.createElement("button");
   cancel.className = "mini danger";
-  cancel.textContent = "取消";
+  cancel.textContent = msg("actionCancel");
   cancel.addEventListener("click", async () => {
     await send({ type: "stop", tabId });
     await refreshState();
@@ -149,13 +167,13 @@ async function renderTasks() {
   const ul = $("taskList");
   ul.textContent = "";
   const ids = Object.keys(tasks).map(Number).sort((a, b) => tasks[a].createdAt - tasks[b].createdAt);
-  $("taskCount").textContent = ids.length > 0 ? String(ids.length) + " 项" : "";
+  $("taskCount").textContent = ids.length > 0 ? msg("taskCountUnit", [String(ids.length)]) : "";
   $("emptyHint").hidden = ids.length > 0;
 
-  for (const tabId of ids) {
-    const tab = await chrome.tabs.get(tabId).catch(() => null);
-    ul.appendChild(buildTaskItem(tabId, tasks[tabId], tab));
-  }
+  const tabResults = await Promise.all(ids.map((tabId) => chrome.tabs.get(tabId).catch(() => null)));
+  ids.forEach((tabId, index) => {
+    ul.appendChild(buildTaskItem(tabId, tasks[tabId], tabResults[index]));
+  });
 }
 
 function renderCountdowns() {
@@ -163,7 +181,7 @@ function renderCountdowns() {
   for (const node of nodes) {
     const alarm = alarmsMap[node.dataset.tab];
     if (alarm && alarm.scheduledTime) {
-      node.textContent = " · 下次刷新 " + fmtCountdown(alarm.scheduledTime - Date.now()) + " 后";
+      node.textContent = msg("nextIn", [fmtCountdown(alarm.scheduledTime - Date.now())]);
     }
   }
 }
@@ -179,7 +197,7 @@ function initPresetSelect() {
   for (const p of PRESETS) {
     const opt = document.createElement("option");
     opt.value = String(p.seconds);
-    opt.textContent = p.label;
+    opt.textContent = msg(p.key);
     sel.appendChild(opt);
   }
   sel.value = "300"; /* 默认 5 分钟 */
@@ -190,6 +208,7 @@ async function saveSettings() {
 }
 
 async function init() {
+  applyI18n();
   initPresetSelect();
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTab = tabs && tabs[0] ? tabs[0] : null;
@@ -202,15 +221,18 @@ async function init() {
     if (!currentTab) return;
     if (tasks[currentTab.id]) {
       await send({ type: "stop", tabId: currentTab.id });
-      setMsg("已停止该标签页的定时刷新");
+      setMsg(msg("msgStopped"));
     } else {
       const custom = parseInt($("customInput").value, 10);
+      const clamped = custom > 0 && custom < 30;
       const seconds = custom > 0 ? Math.max(custom, 30) : parseInt($("presetSelect").value, 10);
       const res = await send({ type: "start", tabId: currentTab.id, seconds });
       if (!res.ok) {
-        setMsg("启动失败：" + (res.error || "未知错误"));
+        setMsg(msg("errStart", [res.error || msg("errUnknown")]));
+      } else if (clamped) {
+        setMsg(msg("msgClamped"));
       } else {
-        setMsg("已设置每 " + fmtInterval(res.intervalSec) + " 自动刷新一次");
+        setMsg(msg("msgSet", [fmtInterval(res.intervalSec)]));
       }
     }
     await refreshState();
@@ -219,7 +241,12 @@ async function init() {
 
   $("bypassCheck").addEventListener("change", saveSettings);
 
-  setInterval(renderCountdowns, 1000);
+  /* alarm 周期触发会更新 scheduledTime 但不触发 storage.onChanged，
+     每秒同步一次才能让倒计时在归零后继续滚动 */
+  setInterval(async () => {
+    await syncAlarms();
+    renderCountdowns();
+  }, 1000);
 
   chrome.storage.onChanged.addListener(async () => {
     await refreshState();

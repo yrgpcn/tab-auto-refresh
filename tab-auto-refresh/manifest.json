@@ -1,11 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "标签页定时刷新",
-  "version": "1.0.0",
-  "description": "为任意标签页设置定时自动刷新：30 秒起步、支持自定义间隔与强制刷新，浏览器重启后自动继续，还可在标签页右键快速设置。",
-  "permissions": ["alarms", "storage", "tabs", "contextMenus"],
+  "name": "__MSG_extName__",
+  "version": "1.1.0",
+  "minimum_chrome_version": "120",
+  "default_locale": "zh_CN",
+  "description": "__MSG_extDesc__",
+  "permissions": ["alarms", "storage", "tabs", "contextMenus", "notifications"],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "action": {
     "default_popup": "popup.html",

@@ -1,0 +1,34 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "tab-auto-refresh/v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build package
+        run: |
+          VERSION="${GITHUB_REF_NAME#tab-auto-refresh/}"
+          git archive --format=zip -o "tab-auto-refresh-${VERSION}.zip" "${GITHUB_REF_NAME}:tab-auto-refresh"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#tab-auto-refresh/}"
+          cat > release-notes.md <<EOF
+          ## 标签页定时刷新 ${VERSION}
+
+          安装：下载 zip 并解压，打开 chrome://extensions 开启「开发者模式」，点「加载已解压的扩展程序」选择解压出的文件夹。
+
+          完整变更：https://github.com/${GITHUB_REPOSITORY}/commits/tag/${GITHUB_REF_NAME}
+          EOF
+          gh release create "${GITHUB_REF_NAME}" --title "标签页定时刷新 ${VERSION}" --notes-file release-notes.md "tab-auto-refresh-${VERSION}.zip"

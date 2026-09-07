@@ -1,18 +1,6 @@
-/* 标签页定时刷新 · Manifest V3 后台 service worker */
-"use strict";
+/* 标签页定时刷新 · Manifest V3 后台 service worker（ES module） */
 
-const PREFIX = "refresh-";
-
-/* 预设间隔（秒），popup.js 中有一份对应文案列表 */
-const PRESETS = [
-  { label: "每 30 秒", seconds: 30 },
-  { label: "每 1 分钟", seconds: 60 },
-  { label: "每 2 分钟", seconds: 120 },
-  { label: "每 5 分钟", seconds: 300 },
-  { label: "每 10 分钟", seconds: 600 },
-  { label: "每 30 分钟", seconds: 1800 },
-  { label: "每 1 小时", seconds: 3600 }
-];
+import { PREFIX, PRESETS } from "./shared/config.js";
 
 function alarmName(tabId) {
   return PREFIX + tabId;
@@ -32,23 +20,36 @@ async function getSettings() {
   return Object.assign({ bypassCache: true }, data.settings || {});
 }
 
-/* 为某个标签页开启定时刷新，返回实际生效的间隔秒数 */
-async function startTask(tabId, seconds) {
-  const safe = Math.max(30, Math.floor(Number(seconds) || 0) || 30);
-  const tasks = await getTasks();
-  tasks[tabId] = { intervalSec: safe, createdAt: Date.now() };
-  await setTasks(tasks);
-  await chrome.alarms.create(alarmName(tabId), { periodInMinutes: safe / 60 });
-  await updateBadge();
-  return safe;
+/* tasks 的读改写走同一队列，避免弹窗 / 右键菜单 / 定时器并发覆盖 */
+let taskQueue = Promise.resolve();
+function withTaskLock(fn) {
+  const run = taskQueue.then(fn);
+  taskQueue = run.then(() => {}, () => {});
+  return run;
 }
 
-async function stopTask(tabId) {
-  const tasks = await getTasks();
-  delete tasks[tabId];
-  await setTasks(tasks);
-  await chrome.alarms.clear(alarmName(tabId));
-  await updateBadge();
+/* 为某个标签页开启定时刷新，返回实际生效的间隔秒数 */
+function startTask(tabId, seconds) {
+  const safe = Math.max(30, Math.floor(Number(seconds) || 0) || 30);
+  return withTaskLock(async () => {
+    const tasks = await getTasks();
+    tasks[tabId] = { intervalSec: safe, createdAt: Date.now() };
+    await setTasks(tasks);
+    await chrome.alarms.create(alarmName(tabId), { periodInMinutes: safe / 60 });
+    await updateBadge();
+    return safe;
+  });
+}
+
+function stopTask(tabId) {
+  return withTaskLock(async () => {
+    const tasks = await getTasks();
+    if (!tasks[tabId]) return;
+    delete tasks[tabId];
+    await setTasks(tasks);
+    await chrome.alarms.clear(alarmName(tabId));
+    await updateBadge();
+  });
 }
 
 async function reloadTab(tabId) {
@@ -64,6 +65,15 @@ async function updateBadge() {
   await chrome.action.setBadgeText({ text: n > 0 ? String(n) : "" });
 }
 
+function notifyTaskStopped(tabId) {
+  chrome.notifications.create("refresh-stopped-" + tabId, {
+    type: "basic",
+    iconUrl: "icons/icon48.png",
+    title: chrome.i18n.getMessage("notifTitle"),
+    message: chrome.i18n.getMessage("notifStopped")
+  });
+}
+
 /* 定时器触发：刷新对应标签页 */
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (!alarm.name.startsWith(PREFIX)) return;
@@ -76,8 +86,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   try {
     await reloadTab(tabId);
   } catch (e) {
-    /* 标签页已关闭或页面受限，自动清理任务 */
+    /* 标签页已关闭或页面受限：清理任务并通知用户 */
     await stopTask(tabId);
+    notifyTaskStopped(tabId);
   }
 });
 
@@ -103,16 +114,25 @@ chrome.runtime.onInstalled.addListener(prune);
 /* 右键标签页的快捷菜单 */
 function buildMenus() {
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({ id: "root", title: "标签页定时刷新", contexts: ["tab"] });
+    chrome.contextMenus.create({
+      id: "root",
+      title: chrome.i18n.getMessage("menuRoot"),
+      contexts: ["tab"]
+    });
     for (const p of PRESETS) {
       chrome.contextMenus.create({
         id: "start-" + p.seconds,
         parentId: "root",
-        title: p.label,
+        title: chrome.i18n.getMessage(p.key),
         contexts: ["tab"]
       });
     }
-    chrome.contextMenus.create({ id: "stop", parentId: "root", title: "停止定时刷新", contexts: ["tab"] });
+    chrome.contextMenus.create({
+      id: "stop",
+      parentId: "root",
+      title: chrome.i18n.getMessage("menuStop"),
+      contexts: ["tab"]
+    });
   });
 }
 chrome.runtime.onInstalled.addListener(buildMenus);
