@@ -4,7 +4,8 @@
 
 ## 仓库结构
 
-- 仓库远端为 `https://github.com/yrgpcn/tab-auto-refresh.git`；旧名 `chrome-extensions` 会由 GitHub 重定向
+- 仓库远端为 `https://github.com/yrgpcn/tab-auto-refresh.git`，GitHub 仓库是 public，默认分支为 `main`；旧名 `chrome-extensions` 会由 GitHub 重定向
+- 本地检出目录仍可能是历史名称 `D:\Github\chrome-extensions`
 - Chrome 扩展集合（monorepo），每个插件一个独立文件夹，当前有 `tab-auto-refresh/`
 - 根目录 `README.md` 是仓库总览；每个插件文件夹内有自己的 README
 - `.github/workflows/release.yml`：tag 驱动的自动发布
@@ -13,7 +14,7 @@
 - `scripts/screenshot-popup.mjs`：mock chrome API 后用本机 Chrome 渲染弹窗截图
 - `tests/`：Node 内置 test runner 的单元测试（位于仓库根，避免被打进插件 zip）
 - `docs/`：README 用的截图等文档资源
-- 根 `package.json` 仅声明 `"type": "module"` 和脚本，无 npm 依赖；不影响插件打包
+- 根 `package.json` 是私有的仓库工具配置，声明 `"type": "module"`、脚本和 repository 元数据，无 npm 依赖；不影响插件打包
 - `CHANGELOG.md`：按 Keep a Changelog 格式记录，按插件分段版本号
 
 ## 约定
@@ -41,7 +42,9 @@
 - 弹窗每秒重新拉取 alarm 列表再重绘倒计时：alarm 周期触发不会触发 `storage.onChanged`，只重绘文本会让倒计时停在 00:00
 - 后台保存设置时合并既有 `settings`，避免只更新复选框时丢失 `lastIntervalSec`
 
-## 当前发布状态
+## 当前仓库状态
+
+- GitHub 仓库 `yrgpcn/tab-auto-refresh` 已设置为 public
 
 - `tab-auto-refresh` 最新版本是 `1.3.0`，tag 为 `tab-auto-refresh/v1.3.0`
 - 该版本起 Release zip 顶层包含 `tab-auto-refresh/` 文件夹
@@ -58,8 +61,8 @@
 3. UI 改动后可用 `scripts/screenshot-popup.mjs` 重新生成 `docs/tab-auto-refresh/popup.png`
 4. `chrome://extensions` 开发者模式加载插件文件夹，验证：设置/停止、倒计时归零后继续、右键菜单（页面+标签页）、立即刷新、角标计数、暂停/恢复全部、快捷键记住上次间隔、自动清理通知
 
-## 本机环境备注
+## 环境备注
 
-- 直连 GitHub 经常失败；本机 10808 端口有 SOCKS 代理，临时推送可用：
+- 如果 GitHub 直连失败，可在本机使用 SOCKS 代理；推送示例：
   `git -c http.proxy=socks5://127.0.0.1:10808 push`
 - 本机 Codex PowerShell 可能没有 `npm`；验证和测试直接使用 `node` 命令
