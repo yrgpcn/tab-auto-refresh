@@ -1,6 +1,6 @@
 # Chrome Extensions
 
-个人开发的 Chrome 浏览器扩展集合，每个插件独立一个分支。
+个人开发的 Chrome 浏览器扩展集合，每个插件一个独立文件夹。
 
 ## 插件列表
 
@@ -18,26 +18,13 @@
 - 持久化：浏览器重启后任务自动继续
 - 角标提示：工具栏图标显示当前监控数量
 
-**分支**：`tab-auto-refresh`
-
 **详细文档**：[tab-auto-refresh/README.md](./tab-auto-refresh/README.md)
 
 ## 安装方法
 
-1. 克隆仓库或下载对应分支的代码
+1. 克隆仓库
 2. 打开 `chrome://extensions`，开启「开发者模式」
-3. 点「加载已解压的扩展程序」，选择插件文件夹
-
-## 技术栈
-
-- Manifest V3（Chrome 扩展最新规范）
-- Background Service Worker（后台定时任务）
-- Chrome Extensions API（Alarms / Storage / Context Menus / Tabs）
-
-## 开发环境
-
-- Chrome 120+
-- Node.js（用于脚本生成图标等资源）
+3. 点「加载已解压的扩展程序」，选择对应插件文件夹
 
 ## License
 
