@@ -2,7 +2,7 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
-## [Unreleased]
+## [tab-auto-refresh 1.3.0] - 2026-09-07
 
 ### Added
 - tab-auto-refresh 快捷键启动任务时使用最近一次成功设置的间隔（默认仍为 5 分钟）
