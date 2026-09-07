@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "标签页定时刷新",
+  "version": "1.0.0",
+  "description": "为任意标签页设置定时自动刷新：30 秒起步、支持自定义间隔与强制刷新，浏览器重启后自动继续，还可在标签页右键快速设置。",
+  "permissions": ["alarms", "storage", "tabs", "contextMenus"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "标签页定时刷新",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

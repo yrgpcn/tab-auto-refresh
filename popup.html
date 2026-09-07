@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>标签页定时刷新</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div class="brand">标签页定时刷新</div>
+    <div id="globalStatus" class="status"></div>
+  </header>
+
+  <section class="card">
+    <div class="tab-line">
+      <img id="tabFavicon" alt="">
+      <div class="tab-meta">
+        <div id="tabTitle" class="tab-title"></div>
+        <div id="tabUrl" class="tab-url"></div>
+      </div>
+    </div>
+    <div id="restrictHint" class="hint warn" hidden>浏览器内部页面（chrome:// 等）可能无法被自动刷新</div>
+    <div class="row">
+      <span class="label">刷新间隔</span>
+      <select id="presetSelect"></select>
+      <input id="customInput" type="number" min="30" step="1" placeholder="自定义秒数（≥30）">
+    </div>
+    <label class="row-check">
+      <input id="bypassCheck" type="checkbox">
+      <span>刷新时忽略缓存（相当于 Ctrl+F5）</span>
+    </label>
+    <button id="toggleBtn" class="primary"></button>
+    <div id="msg" class="hint"></div>
+  </section>
+
+  <section class="card">
+    <div class="list-head">
+      <span class="list-title">定时刷新中的标签页</span>
+      <span id="taskCount" class="count"></span>
+    </div>
+    <ul id="taskList"></ul>
+    <div id="emptyHint" class="hint" hidden>暂无任务：在任意标签页点击“开始定时刷新”即可。</div>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>
