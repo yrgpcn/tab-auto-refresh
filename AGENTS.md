@@ -4,6 +4,7 @@
 
 ## 仓库结构
 
+- 仓库远端为 `https://github.com/yrgpcn/tab-auto-refresh.git`；旧名 `chrome-extensions` 会由 GitHub 重定向
 - Chrome 扩展集合（monorepo），每个插件一个独立文件夹，当前有 `tab-auto-refresh/`
 - 根目录 `README.md` 是仓库总览；每个插件文件夹内有自己的 README
 - `.github/workflows/release.yml`：tag 驱动的自动发布
@@ -61,3 +62,4 @@
 
 - 直连 GitHub 经常失败；本机 10808 端口有 SOCKS 代理，临时推送可用：
   `git -c http.proxy=socks5://127.0.0.1:10808 push`
+- 本机 Codex PowerShell 可能没有 `npm`；验证和测试直接使用 `node` 命令

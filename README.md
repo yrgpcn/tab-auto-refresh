@@ -1,8 +1,8 @@
-# Chrome Extensions
+# Tab Auto Refresh
 
-个人开发的 Chrome 浏览器扩展集合，每个插件一个独立文件夹。
+轻量的 Chrome 标签页定时刷新扩展。仓库采用插件独立文件夹布局，便于后续加入其他扩展。
 
-[![CI](https://github.com/yrgpcn/chrome-extensions/actions/workflows/ci.yml/badge.svg)](https://github.com/yrgpcn/chrome-extensions/actions/workflows/ci.yml)
+[![CI](https://github.com/yrgpcn/tab-auto-refresh/actions/workflows/ci.yml/badge.svg)](https://github.com/yrgpcn/tab-auto-refresh/actions/workflows/ci.yml)
 
 ## 插件列表
 
@@ -31,12 +31,12 @@
 
 ## 开发
 
-- 仓库校验与单元测试：`node scripts/validate.mjs`、`node --test tests/`（CI 自动执行）
+- 仓库校验与单元测试：`node scripts/validate.mjs`、`node --test "tests/**/*.test.mjs"`（CI 自动执行）
 - 发布：打 tag `tab-auto-refresh/vX.Y.Z` 并推送，Actions 自动打包并创建 GitHub Release
 
 ## 安装方法
 
-1. 克隆仓库
+1. 克隆仓库：`git clone https://github.com/yrgpcn/tab-auto-refresh.git`
 2. 打开 `chrome://extensions`，开启「开发者模式」
 3. 点「加载已解压的扩展程序」，选择对应插件文件夹
 

@@ -1,7 +1,11 @@
 {
-  "name": "chrome-extensions",
+  "name": "tab-auto-refresh",
   "private": true,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yrgpcn/tab-auto-refresh.git"
+  },
   "scripts": {
     "validate": "node scripts/validate.mjs",
     "test": "node --test \"tests/**/*.test.mjs\""
