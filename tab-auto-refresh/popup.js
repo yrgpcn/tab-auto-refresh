@@ -75,7 +75,10 @@ async function refreshState() {
   }
   const local = await chrome.storage.local.get(["tasks", "pausedAll"]);
   tasks = local.tasks || {};
-  settings = Object.assign({ bypassCache: true, skipDiscarded: false }, data.settings || {});
+  settings = Object.assign(
+    { bypassCache: true, skipDiscarded: false, lastIntervalSec: DEFAULT_INTERVAL_SEC },
+    data.settings || {}
+  );
   pausedAll = !!local.pausedAll;
   await syncAlarms();
 }
@@ -219,7 +222,15 @@ function initPresetSelect() {
     opt.textContent = msg(p.key);
     sel.appendChild(opt);
   }
-  sel.value = String(DEFAULT_INTERVAL_SEC);
+  const preferred = clampInterval(settings.lastIntervalSec).seconds;
+  const preferredPreset = PRESETS.find((p) => p.seconds === preferred);
+  if (preferredPreset) {
+    sel.value = String(preferred);
+    $("customInput").value = "";
+  } else {
+    sel.value = String(DEFAULT_INTERVAL_SEC);
+    $("customInput").value = String(preferred);
+  }
 }
 
 async function saveSettings() {
@@ -234,11 +245,11 @@ async function saveSettings() {
 
 async function init() {
   applyI18n();
-  initPresetSelect();
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTab = tabs && tabs[0] ? tabs[0] : null;
 
   await refreshState();
+  initPresetSelect();
   $("bypassCheck").checked = settings.bypassCache !== false;
   $("skipDiscardedCheck").checked = !!settings.skipDiscarded;
   await renderAll();

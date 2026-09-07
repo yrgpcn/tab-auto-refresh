@@ -3,7 +3,11 @@
 import { PREFIX, PRESETS } from "./shared/config.js";
 import { DEFAULT_INTERVAL_SEC, clampInterval } from "./shared/logic.js";
 
-const DEFAULT_SETTINGS = { bypassCache: true, skipDiscarded: false };
+const DEFAULT_SETTINGS = {
+  bypassCache: true,
+  skipDiscarded: false,
+  lastIntervalSec: DEFAULT_INTERVAL_SEC
+};
 
 function alarmName(tabId) {
   return PREFIX + tabId;
@@ -60,6 +64,7 @@ function startTask(tabId, seconds) {
     await chrome.alarms.create(alarmName(tabId), { periodInMinutes: safe / 60 });
     await chrome.storage.local.set({ pausedAll: false });
     await updateBadge();
+    await rememberLastInterval(safe);
     return safe;
   });
 }
@@ -73,6 +78,18 @@ function stopTask(tabId) {
     await chrome.alarms.clear(alarmName(tabId));
     await updateBadge();
   });
+}
+
+/* 快捷键没有显式间隔，复用最近一次手动任务的实际间隔 */
+async function rememberLastInterval(seconds) {
+  try {
+    const settings = await getSettings();
+    await chrome.storage.sync.set({
+      settings: Object.assign({}, settings, { lastIntervalSec: seconds })
+    });
+  } catch (e) {
+    /* 保存偏好失败不应阻止当前任务启动 */
+  }
 }
 
 async function reloadTab(tabId) {
@@ -191,7 +208,8 @@ chrome.commands.onCommand.addListener(async (command) => {
   if (tasks[tab.id]) {
     await stopTask(tab.id);
   } else {
-    await startTask(tab.id, DEFAULT_INTERVAL_SEC);
+    const settings = await getSettings();
+    await startTask(tab.id, settings.lastIntervalSec);
   }
 });
 
@@ -214,7 +232,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await updateBadge();
         sendResponse({ ok: true, pausedAll: paused });
       } else if (msg.type === "save-settings") {
-        await chrome.storage.sync.set({ settings: msg.settings });
+        const settings = await getSettings();
+        await chrome.storage.sync.set({
+          settings: Object.assign({}, settings, msg.settings)
+        });
         sendResponse({ ok: true });
       } else {
         sendResponse({ ok: false });

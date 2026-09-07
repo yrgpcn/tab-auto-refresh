@@ -22,7 +22,7 @@
   "commands": {
     "toggle-refresh": {
       "suggested_key": { "default": "Alt+Shift+R" },
-      "description": "开关当前标签页的定时刷新"
+      "description": "__MSG_commandToggleRefresh__"
     }
   },
   "icons": {

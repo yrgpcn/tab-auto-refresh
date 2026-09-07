@@ -1,6 +1,7 @@
 {
   "extName": { "message": "标签页定时刷新" },
   "extDesc": { "message": "为任意标签页设置定时自动刷新：30 秒起步、支持自定义间隔与强制刷新，浏览器重启后自动继续，还可在标签页右键快速设置。" },
+  "commandToggleRefresh": { "message": "开关当前标签页的定时刷新" },
   "menuRoot": { "message": "标签页定时刷新" },
   "menuStop": { "message": "停止定时刷新" },
   "notifTitle": { "message": "标签页定时刷新" },

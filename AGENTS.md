@@ -29,7 +29,8 @@
 - 权限：alarms / storage / tabs / contextMenus / notifications
 - `minimum_chrome_version: 120`（30 秒级 alarms 依赖该版本）
 - 任务与本机状态存于 `chrome.storage.local`：`tasks` 为 tabId → `{ intervalSec, createdAt }` 映射；`pausedAll` 为全局暂停标记
-- 偏好设置存于 `chrome.storage.sync`：`settings` 为 `{ bypassCache, skipDiscarded }`；读取时若 sync 为空会尝试从 local 迁移旧设置
+- 偏好设置存于 `chrome.storage.sync`：`settings` 为 `{ bypassCache, skipDiscarded, lastIntervalSec }`；读取时若 sync 为空会尝试从 local 迁移旧设置
+- 快捷键启动任务复用 `settings.lastIntervalSec`（最近一次成功任务的实际间隔）；无记录时由默认值回退到 5 分钟
 - 手动开始新任务（弹窗/右键/快捷键）会自动解除 `pausedAll`；暂停期间 alarm 跳过触发，恢复后按原周期继续；角标暂停时显示 `‖`
 - alarm 命名 `refresh-<tabId>`；`PREFIX` / `PRESETS` 定义在 `shared/config.js`，后台与弹窗共用（service worker 是 ES module）
 - 纯逻辑（间隔兜底、格式化）在 `shared/logic.js`，被 `tests/tab-auto-refresh/logic.test.mjs` 覆盖
@@ -41,8 +42,8 @@
 
 ## 打包规则
 
-- zip 根目录必须直接包含 `manifest.json`，不要多套一层文件夹
-- 优先用 `git archive --format=zip -o tab-auto-refresh-vX.Y.Z.zip <tag>:tab-auto-refresh`（正斜杠路径，跨平台安全）
+- zip 顶层必须包含 `tab-auto-refresh/` 文件夹，用户解压后可直接选择该文件夹；文件夹内根位置包含 `manifest.json`
+- 优先用 `git archive --format=zip --prefix=tab-auto-refresh/ -o tab-auto-refresh-vX.Y.Z.zip <tag>:tab-auto-refresh`（正斜杠路径，跨平台安全）
 
 ## 验证清单
 

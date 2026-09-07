@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### Added
+- tab-auto-refresh 快捷键启动任务时使用最近一次成功设置的间隔（默认仍为 5 分钟）
+
+### Changed
+- Release zip 增加顶层 `tab-auto-refresh/` 目录，解压后可直接选择文件夹加载
+
+### Fixed
+- tab-auto-refresh 快捷键描述改为中英文语言包文案
+
 ## [tab-auto-refresh 1.2.0] - 2026-09-07
 
 ### Added

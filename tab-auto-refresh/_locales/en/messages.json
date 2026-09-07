@@ -1,6 +1,7 @@
 {
   "extName": { "message": "Tab Auto Refresh" },
   "extDesc": { "message": "Set up automatic tab refresh with intervals from 30 seconds: custom intervals, force refresh, multiple tabs with countdown, right-click menus, and a keyboard shortcut." },
+  "commandToggleRefresh": { "message": "Toggle auto refresh for the current tab" },
   "menuRoot": { "message": "Tab Auto Refresh" },
   "menuStop": { "message": "Stop auto refresh" },
   "notifTitle": { "message": "Tab Auto Refresh" },

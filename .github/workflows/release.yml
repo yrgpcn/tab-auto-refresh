@@ -17,7 +17,7 @@ jobs:
       - name: Build package
         run: |
           VERSION="${GITHUB_REF_NAME#tab-auto-refresh/}"
-          git archive --format=zip -o "tab-auto-refresh-${VERSION}.zip" "${GITHUB_REF_NAME}:tab-auto-refresh"
+          git archive --format=zip --prefix="tab-auto-refresh/" -o "tab-auto-refresh-${VERSION}.zip" "${GITHUB_REF_NAME}:tab-auto-refresh"
 
       - name: Create GitHub Release
         env:
