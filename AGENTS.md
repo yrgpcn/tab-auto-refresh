@@ -41,12 +41,14 @@
 - 后台对 `tasks` 的读改写必须经过 `withTaskLock` 串行队列，防止弹窗 / 右键菜单 / 定时器并发覆盖
 - 弹窗每秒重新拉取 alarm 列表再重绘倒计时：alarm 周期触发不会触发 `storage.onChanged`，只重绘文本会让倒计时停在 00:00
 - 后台保存设置时合并既有 `settings`，避免只更新复选框时丢失 `lastIntervalSec`
+- 弹窗底部有仓库地址页脚（`#repoFooter`，popup.html 内静态 `<a target="_blank">`，URL 明文不参与 i18n）
 
 ## 当前仓库状态
 
 - GitHub 仓库 `yrgpcn/tab-auto-refresh` 已设置为 public
 
-- `tab-auto-refresh` 最新版本是 `1.4.5`，tag 为 `tab-auto-refresh/v1.4.5`；发布面只保留最新 Release 与 tag，旧版本发布随新版本清理
+- `tab-auto-refresh` 最新**已发布**版本是 `1.4.5`，tag 为 `tab-auto-refresh/v1.4.5`；发布面只保留最新 Release 与 tag，旧版本发布随新版本清理
+- `main` 上有未发布的改动（弹窗仓库地址页脚），下次发版时一并带上
 - 该版本起 Release zip 顶层包含 `tab-auto-refresh/` 文件夹
 
 ## 打包规则
