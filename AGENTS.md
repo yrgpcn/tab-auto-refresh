@@ -53,8 +53,8 @@
 
 - GitHub 仓库 `yrgpcn/tab-auto-refresh` 已设置为 public
 
-- `tab-auto-refresh` 最新**已发布**版本是 `1.4.5`，tag 为 `tab-auto-refresh/v1.4.5`；发布面只保留最新 Release 与 tag，旧版本发布随新版本清理
-- `main` 上有未发布的 `1.5.0` 改动（弹窗仓库地址页脚 + 代码校对修复、cookie 备份生命周期治理与资源优化，含二次修复：storage 通配符、tabId 复用挂接、hostOnly 还原、发布版本防呆），发版前勿打 tag
+- `tab-auto-refresh` 最新**已发布**版本是 `1.5.0`，tag 为 `tab-auto-refresh/v1.5.0`；发布面只保留最新 Release 与 tag，旧版本发布随新版本清理
+- `1.5.0` 包含弹窗仓库地址页脚 + 代码校对修复、cookie 备份生命周期治理与资源优化，以及二次修复：storage 通配符、tabId 复用挂接、hostOnly 还原、发布版本防呆
 - 该版本起 Release zip 顶层包含 `tab-auto-refresh/` 文件夹
 
 ## 打包规则
