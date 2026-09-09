@@ -16,6 +16,7 @@ let settings = { bypassCache: true, skipDiscarded: false };
 let pausedAll = false;
 let alarmsMap = {};
 let msgTimer = null;
+let renderSeq = 0;
 
 function msg(key, subs) {
   return chrome.i18n.getMessage(key, subs) || key;
@@ -70,7 +71,7 @@ async function syncAlarms() {
 async function refreshState() {
   let data = await chrome.storage.sync.get("settings");
   if (!data.settings) {
-    /* 兼容 1.1.0 及之前存在 local 里的设置 */
+    /* 鍏煎 1.1.0 鍙婁箣鍓嶅瓨鍦?local 閲岀殑璁剧疆 */
     data = await chrome.storage.local.get("settings");
   }
   const local = await chrome.storage.local.get(["tasks", "pausedAll"]);
@@ -129,7 +130,7 @@ function buildTaskItem(tabId, task, tab) {
         await chrome.tabs.update(tabId, { active: true });
         if (typeof tab.windowId === "number") await chrome.windows.update(tab.windowId, { focused: true });
         window.close();
-      } catch (e) { /* 标签页可能刚被关闭 */ }
+      } catch (e) { /* 鏍囩椤靛彲鑳藉垰琚叧闂?*/ }
     });
   } else {
     const invalid = document.createElement("span");
@@ -182,6 +183,7 @@ function buildTaskItem(tabId, task, tab) {
 }
 
 async function renderTasks() {
+  const seq = ++renderSeq;
   const ul = $("taskList");
   ul.textContent = "";
   const ids = Object.keys(tasks).map(Number).sort((a, b) => tasks[a].createdAt - tasks[b].createdAt);
@@ -189,6 +191,8 @@ async function renderTasks() {
   $("emptyHint").hidden = ids.length > 0;
 
   const tabResults = await Promise.all(ids.map((tabId) => chrome.tabs.get(tabId).catch(() => null)));
+  /* 并发渲染时只保留最新一次，避免列表重复追加 */
+  if (seq !== renderSeq) return;
   ids.forEach((tabId, index) => {
     ul.appendChild(buildTaskItem(tabId, tasks[tabId], tabResults[index]));
   });
@@ -245,7 +249,7 @@ async function saveSettings() {
 
 async function init() {
   applyI18n();
-  /* 打开弹窗时立即清理无效任务 */
+  /* 鎵撳紑寮圭獥鏃剁珛鍗虫竻鐞嗘棤鏁堜换鍔?*/
   await send({ type: "prune-now" });
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTab = tabs && tabs[0] ? tabs[0] : null;
@@ -294,8 +298,8 @@ async function init() {
     await renderAll();
   });
 
-  /* alarm 周期触发会更新 scheduledTime 但不触发 storage.onChanged，
-     每秒同步一次才能让倒计时在归零后继续滚动 */
+  /* alarm 鍛ㄦ湡瑙﹀彂浼氭洿鏂?scheduledTime 浣嗕笉瑙﹀彂 storage.onChanged锛?
+     姣忕鍚屾涓€娆℃墠鑳借鍊掕鏃跺湪褰掗浂鍚庣户缁粴鍔?*/
   setInterval(async () => {
     await syncAlarms();
     renderCountdowns();
