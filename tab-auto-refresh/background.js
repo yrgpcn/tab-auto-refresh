@@ -118,11 +118,13 @@ async function pruneCookieBackups(remainingTasks) {
     const r = siteRoot(hostOf(t.url));
     if (r) roots.add(r);
   }
-  const all = await chrome.storage.local.get(COOKIE_BACKUP_PREFIX + "*");
+  /* storage.get 不支持通配符，必须全量读取再按前缀过滤 */
+  const all = await chrome.storage.local.get(null);
   const now = Date.now();
   const fresh = [];
   const stale = [];
   for (const [key, value] of Object.entries(all)) {
+    if (!key.startsWith(COOKIE_BACKUP_PREFIX)) continue;
     const root = siteRoot(key.slice(COOKIE_BACKUP_PREFIX.length));
     const ts = value && typeof value.timestamp === "number" ? value.timestamp : 0;
     if (!root || !roots.has(root) || now - ts > COOKIE_BACKUP_TTL_MS) stale.push(key);
@@ -209,11 +211,12 @@ async function backupCookies(tabId) {
       secure: c.secure,
       httpOnly: c.httpOnly,
       sameSite: c.sameSite,
-      expirationDate: c.expirationDate
+      expirationDate: c.expirationDate,
+      hostOnly: c.hostOnly
     }));
     if (cookies.length > MAX_COOKIES_PER_HOST) cookies.length = MAX_COOKIES_PER_HOST;
     await chrome.storage.local.set({
-      [COOKIE_BACKUP_PREFIX + host]: { cookies, timestamp: Date.now() }
+      [COOKIE_BACKUP_PREFIX + host]: { cookies, timestamp: Date.now(), schemaVersion: 2 }
     });
   } catch (e) {
     console.warn("Cookie backup failed:", e);
@@ -248,19 +251,28 @@ async function restoreCookies(host) {
       if (c.expirationDate && c.expirationDate < nowSec) continue; /* 已过期的跳过 */
       const url =
         (c.secure ? "https://" : "http://") +
-        c.domain.replace(/^\./, "") + (c.path || "/");
+        String(c.domain || "").replace(/^\./, "") + (c.path || "/");
+      const base = {
+        url,
+        name: c.name,
+        value: c.value,
+        path: c.path || "/",
+        secure: !!c.secure,
+        httpOnly: !!c.httpOnly,
+        sameSite: c.sameSite,
+        expirationDate: c.expirationDate || undefined
+      };
+      /* hostOnly === true：主机专属 cookie，省略 domain 让 Chrome 从 url 推导
+         （带 domain 写入会失败或扩大作用域，__Host- 票据尤其致命）；
+         === false：域 cookie 按备份的 domain 写入；
+         缺失（v1 旧备份）：无法判定主机/域，保持旧行为统一传 domain，
+         至少比直接丢弃更接近升级前的表现 */
       try {
-        await chrome.cookies.set({
-          url,
-          name: c.name,
-          value: c.value,
-          domain: c.domain,
-          path: c.path || "/",
-          secure: !!c.secure,
-          httpOnly: !!c.httpOnly,
-          sameSite: c.sameSite,
-          expirationDate: c.expirationDate || undefined
-        });
+        if (c.hostOnly === true) {
+          await chrome.cookies.set(base);
+        } else {
+          await chrome.cookies.set(Object.assign({ domain: c.domain }, base));
+        }
         restored += 1;
       } catch (e) {
         /* 个别 cookie 不可写（公共后缀限制等）跳过 */
@@ -381,8 +393,11 @@ async function cleanupInvalidTasks() {
   await updateBadge();
 }
 
-/* 浏览器启动/扩展安装时：恢复 cookie → 任务重新挂接到会话恢复的标签页 → 失效任务兜底重开 */
-async function prune() {
+/* 浏览器启动/扩展安装时：恢复 cookie → 任务重新挂接到会话恢复的标签页 → 失效任务兜底重开
+   adoptLegacyUrls：仅扩展安装/更新时为真，此时浏览器未重启、tabId 仍有效，可为 v1.4.3
+   及更早（任务里只有间隔与创建时间、没有网址）的旧任务补记当前标签页网址；
+   浏览器重启后 tabId 已重新分配，旧 ID 会撞上无关标签页，无法辨认目标只能淘汰 */
+async function prune(adoptLegacyUrls = false) {
   /* 等待会话恢复的标签页出现，避免误判失效或重复打开 */
   await new Promise((resolve) => setTimeout(resolve, 1500));
 
@@ -404,24 +419,52 @@ async function prune() {
     if (await restoreCookies(host)) restoredHosts.add(host);
   }
 
+  /* 网址与任务一致（精确或 origin+pathname 相等）的标签页判定 */
+  const tabShowsUrl = (tab, url) => {
+    if (!tab || !tab.url || !url) return false;
+    if (tab.url === url) return true;
+    const k = urlKey(url);
+    return !!k && urlKey(tab.url) === k;
+  };
+
   /* 把死 tabId 的任务重新挂接到正在打开的标签页（会话恢复后 ID 会变），挂接不上就重新打开 */
   await withTaskLock(async () => {
     const tasks = await getTasks();
     const openTabs = await chrome.tabs.query({});
-    const used = new Set(openTabs.map((t) => t.id));
+    const openById = new Map(openTabs.map((t) => [t.id, t]));
+    /* 预扫描认领：ID 仍被占用不代表挂接正确（重启后 tabId 会重新分配，旧任务 ID
+       可能撞上无关的新标签页），只有网址一致才保留；无网址的旧任务按
+       adoptLegacyUrls 决定补记网址（扩展更新，tabId 仍有效）还是淘汰（浏览器重启） */
+    const claimed = new Set();
     let dirty = false;
+    for (const key of Object.keys(tasks)) {
+      const task = tasks[key];
+      const live = openById.get(Number(key));
+      if (!live) continue;
+      if (task.url) {
+        if (tabShowsUrl(live, task.url)) claimed.add(Number(key));
+        continue;
+      }
+      if (adoptLegacyUrls && /^https?:/i.test(live.url || "")) {
+        /* 扩展更新：浏览器没重启，ID 仍指向原页面，补记网址升级为正常任务 */
+        tasks[key] = Object.assign({}, task, { url: live.url });
+        claimed.add(Number(key));
+        dirty = true;
+      }
+      /* 浏览器重启：无从辨认目标，不认领，交由下方淘汰 */
+    }
     for (const key of Object.keys(tasks)) {
       const tabId = Number(key);
       const task = tasks[key];
-      if (used.has(tabId)) continue; /* 任务对应的标签页还在 */
-      const keyUrl = urlKey(task.url);
+      if (claimed.has(tabId)) continue;
+      /* 未认领的任务重映射时跳过已被其他任务认领的页面：同一网址开在多个
+         标签页时，一个页面只会被一个任务挂接，认领不到的走下方重开 */
       const match =
-        openTabs.find((t) => t.url === task.url) ||
-        (keyUrl && openTabs.find((t) => urlKey(t.url) === keyUrl)) ||
-        null;
+        openTabs.find((t) => !claimed.has(t.id) && tabShowsUrl(t, task.url)) || null;
       delete tasks[tabId];
       await chrome.alarms.clear(alarmName(tabId));
       if (match) {
+        claimed.add(match.id);
         tasks[match.id] = Object.assign({}, task, { url: match.url || task.url });
         await chrome.alarms.create(alarmName(match.id), {
           periodInMinutes: task.intervalSec / 60
@@ -444,6 +487,9 @@ async function prune() {
             periodInMinutes: task.intervalSec / 60
           });
         }
+      } else if (!task.url) {
+        /* 浏览器重启后的旧格式任务：目标页面无从辨认，只能淘汰 */
+        console.warn("Dropped legacy task without url:", tabId);
       }
       dirty = true;
     }
@@ -455,8 +501,10 @@ async function prune() {
   await updateBadge();
 }
 
-chrome.runtime.onStartup.addListener(prune);
-chrome.runtime.onInstalled.addListener(prune);
+/* 显式传参而非直接 addListener(prune)：onInstalled 会把事件详情对象作为首个实参传入，
+   会被 adoptLegacyUrls 误判为真值 */
+chrome.runtime.onStartup.addListener(() => prune(false));
+chrome.runtime.onInstalled.addListener(() => prune(true));
 
 /* 标签页与网页上的右键菜单 */
 function buildMenus() {

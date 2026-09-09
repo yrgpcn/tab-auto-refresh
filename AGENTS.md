@@ -8,7 +8,7 @@
 - 本地检出目录仍可能是历史名称 `D:\Github\chrome-extensions`
 - 本仓库是 `tab-auto-refresh` 插件的专属仓库（2026-09-09 起不再作为多插件集合仓库）；插件源码在 `tab-auto-refresh/` 文件夹，测试与工具在仓库根
 - 全仓库统一用根目录 `README.md` 承载插件功能、安装、边界与技术栈；插件文件夹内**不放**独立 README（已合并）
-- `.github/workflows/release.yml`：tag 驱动的自动发布
+- `.github/workflows/release.yml`：tag 驱动的自动发布；先跑仓库校验与单元测试，再比对 tag 版本与 manifest 版本，任一失败即不发布
 - `.github/workflows/ci.yml`：push/PR 时用 Node 24 跑仓库校验与单元测试
 - `scripts/validate.mjs`：JSON/manifest/语言包/JS 语法仓库级校验
 - `scripts/screenshot-popup.mjs`：mock chrome API 后用本机 Chrome 渲染弹窗截图
@@ -42,7 +42,10 @@
 - 弹窗每秒重新拉取 alarm 列表再重绘倒计时：alarm 周期触发不会触发 `storage.onChanged`，只重绘文本会让倒计时停在 00:00
 - 后台保存设置时合并既有 `settings`，避免只更新复选框时丢失 `lastIntervalSec`
 - 弹窗底部有仓库地址页脚（`#repoFooter`，popup.html 内静态 `<a target="_blank">`，URL 明文不参与 i18n）
-- cookie 备份（`cookieBackup:<host>`）只写入与监控目标同根域的站点；停止任务与启动恢复时统一淘汰：站点不再被任何任务使用、超过 30 天 TTL、超过 20 站上限（按时间留新）各计一条；单站备份封顶 200 条 cookie
+- cookie 备份（`cookieBackup:<host>`）只写入与监控目标同根域的站点；备份对象含 `schemaVersion: 2` 与每条 cookie 的 `hostOnly`；还原时 `hostOnly === true` 省略 `domain`（防止 `__Host-` 票据写入失败/作用域扩大），`=== false` 传 `domain`，字段缺失的 v1 旧备份统一传 `domain`（旧行为）
+- 备份淘汰三条件：站点不再被任何任务使用、超过 30 天 TTL、超过 20 站上限（按时间留新）；停止任务与启动恢复时统一执行。注意 `chrome.storage.local.get` 不支持通配符，清理必须 `get(null)` 后按前缀过滤
+- 启动恢复 `prune()` 采用"标签页认领"：任务 tabId 仍被占用不代表挂接正确（重启后 ID 会重新分配），需该标签页 URL 与任务精确相等或 `urlKey` 相等才保留认领；未认领任务做重映射时跳过已被其他任务认领的页面，同一网址开在多个标签页时每页至多挂一个任务，认领不到则重开
+- `prune(adoptLegacyUrls)` 区分触发来源：扩展安装/更新传 `true`（浏览器没重启，tabId 仍有效，可为 v1.4.3 前无网址的旧任务补记当前页面网址）；浏览器重启传 `false`（ID 已重新分配，旧任务无从辨认目标，淘汰并 console.warn）。注册必须写成 `() => prune(true/false)`，直接 `addListener(prune)` 会让 `onInstalled` 的事件详情对象把标志位判成真
 - `startTask` 拿不到标签页或网址时抛错，不再创建无网址的幽灵任务（弹窗显示 `errTabGone`；右键菜单/快捷键路径仅 console.warn）
 - `tabs.onUpdated` 先经过内存中的任务 tabId 快照过滤，非监控标签页不触发任何 storage 读取；快照在 `setTasks` 时更新，冷启动首次事件回读 storage
 
@@ -51,7 +54,7 @@
 - GitHub 仓库 `yrgpcn/tab-auto-refresh` 已设置为 public
 
 - `tab-auto-refresh` 最新**已发布**版本是 `1.4.5`，tag 为 `tab-auto-refresh/v1.4.5`；发布面只保留最新 Release 与 tag，旧版本发布随新版本清理
-- `main` 上有未发布的 `1.5.0` 改动（弹窗仓库地址页脚 + 代码校对修复与 cookie 备份清理、资源优化），发版前勿打 tag
+- `main` 上有未发布的 `1.5.0` 改动（弹窗仓库地址页脚 + 代码校对修复、cookie 备份生命周期治理与资源优化，含二次修复：storage 通配符、tabId 复用挂接、hostOnly 还原、发布版本防呆），发版前勿打 tag
 - 该版本起 Release zip 顶层包含 `tab-auto-refresh/` 文件夹
 
 ## 打包规则

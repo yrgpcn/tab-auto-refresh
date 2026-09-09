@@ -14,6 +14,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Validate and test
+        run: |
+          node scripts/validate.mjs
+          node --test "tests/**/*.test.mjs"
+
+      - name: Check version consistency
+        run: |
+          VERSION="${GITHUB_REF_NAME#tab-auto-refresh/}"
+          TAG_VERSION="${VERSION#v}"
+          MANIFEST_VERSION="$(node -p "require('./tab-auto-refresh/manifest.json').version")"
+          if [ "$TAG_VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "tag 版本 ${VERSION} 与 manifest 版本 ${MANIFEST_VERSION} 不一致，终止发布" >&2
+            exit 1
+          fi
+
       - name: Build package
         run: |
           VERSION="${GITHUB_REF_NAME#tab-auto-refresh/}"
