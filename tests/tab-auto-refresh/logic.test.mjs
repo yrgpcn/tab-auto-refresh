@@ -62,7 +62,7 @@ test("alarm prefix matches the documented naming scheme", () => {
 test("siteRoot slices the registered domain, incl. multi-level public suffixes", () => {
   assert.equal(siteRoot("www.example.com"), "example.com");
   assert.equal(siteRoot("example.com"), "example.com");
-  assert.equal(siteRoot("nsgt.szns.gov.cn"), "szns.gov.cn");
+  assert.equal(siteRoot("news.example.org.cn"), "example.org.cn");
   assert.equal(siteRoot("a.b.c.example.co.uk"), "example.co.uk");
   assert.equal(siteRoot("sub.domain.ac.cn"), "domain.ac.cn");
   assert.equal(siteRoot("192.168.1.10"), "192.168.1.10");
@@ -72,25 +72,25 @@ test("siteRoot slices the registered domain, incl. multi-level public suffixes",
 });
 
 test("sameSite treats subdomains as one site but different sites as drifted", () => {
-  /* 政务 SSO 在同站子域间跳转，不算漂移 */
-  assert.ok(sameSite("sso.szns.gov.cn", "nsgt.szns.gov.cn"));
-  assert.ok(sameSite("szns.gov.cn", "nsgt.szns.gov.cn"));
+  /* 登录 / SSO 常在同站子域间跳转，不算漂移 */
+  assert.ok(sameSite("sso.example.org.cn", "app.example.org.cn"));
+  assert.ok(sameSite("example.org.cn", "app.example.org.cn"));
   /* 完全不同的网站算漂移 */
-  assert.ok(!sameSite("evil.example.org", "nsgt.szns.gov.cn"));
-  assert.ok(!sameSite("baidu.com", "nsgt.szns.gov.cn"));
+  assert.ok(!sameSite("evil.example.org", "app.example.org.cn"));
+  assert.ok(!sameSite("other-site.com", "app.example.org.cn"));
   /* 不同内网 IP 不互相误判 */
   assert.ok(!sameSite("192.168.1.10", "192.168.2.10"));
   assert.ok(!sameSite(null, "example.com"));
 });
 
 test("sameHost is stricter than sameSite: sibling SSO subdomains differ", () => {
-  assert.ok(sameHost("nsgt.szns.gov.cn", "szns.gov.cn"));
-  assert.ok(sameHost("szns.gov.cn", "nsgt.szns.gov.cn"));
-  assert.ok(!sameHost("sso.szns.gov.cn", "nsgt.szns.gov.cn"));
+  assert.ok(sameHost("app.example.org.cn", "example.org.cn"));
+  assert.ok(sameHost("example.org.cn", "app.example.org.cn"));
+  assert.ok(!sameHost("sso.example.org.cn", "app.example.org.cn"));
 });
 
 test("hostOf extracts hostname from URL and rejects junk", () => {
-  assert.equal(hostOf("https://nsgt.szns.gov.cn/#/login"), "nsgt.szns.gov.cn");
+  assert.equal(hostOf("https://app.example.com/#/login"), "app.example.com");
   assert.equal(hostOf("not a url"), null);
   assert.equal(hostOf(null), null);
 });

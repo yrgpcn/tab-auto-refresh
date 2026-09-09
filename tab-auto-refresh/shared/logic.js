@@ -53,7 +53,7 @@ export const MULTI_SUFFIXES = new Set([
   "com.mx", "co.za", "com.ar", "com.tr", "com.pl"
 ]);
 
-/* 站点根域（注册域）：nsgt.szns.gov.cn → szns.gov.cn；www.example.com → example.com */
+/* 站点根域（注册域）：a.b.example.com → b.example.com；多级后缀如 news.example.org.cn → example.org.cn */
 export function siteRoot(host) {
   if (!host) return null;
   const parts = String(host).toLowerCase().split(".").filter(Boolean);

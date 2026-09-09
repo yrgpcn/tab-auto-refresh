@@ -117,7 +117,7 @@ async function reloadTab(tabId) {
   await chrome.tabs.reload(tabId, { bypassCache: !!settings.bypassCache });
 }
 
-/* 主机的域链：nsgt.szns.gov.cn → szns.gov.cn → gov.cn；登录票据常种在父域 */
+/* 主机的域链：a.b.example.com → b.example.com → example.com；登录票据常种在父域 */
 function domainChain(host) {
   const parts = host.split(".").filter(Boolean);
   const list = [];
