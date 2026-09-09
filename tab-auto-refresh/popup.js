@@ -249,8 +249,8 @@ async function saveSettings() {
 
 async function init() {
   applyI18n();
-  /* 鎵撳紑寮圭獥鏃剁珛鍗虫竻鐞嗘棤鏁堜换鍔?*/
-  await send({ type: "prune-now" });
+  /* 后台异步清理失效任务，结果经 storage.onChanged 回填，不阻塞首屏渲染 */
+  send({ type: "prune-now" });
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTab = tabs && tabs[0] ? tabs[0] : null;
 

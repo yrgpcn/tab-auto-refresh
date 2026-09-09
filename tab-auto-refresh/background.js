@@ -264,35 +264,45 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   await refreshTaskUrl(tabId);
 });
 
-/* 标签页被关闭时：如果在任务列表中，自动重开 */
-chrome.tabs.onRemoved.addListener(async (tabId) => {
-  const task = (await getTasks())[tabId];
-  if (!task || !task.url) {
-    await stopTask(tabId);
-    return;
-  }
-
-  try {
-    const newTab = await chrome.tabs.create({ url: task.url, active: false });
-    await withTaskLock(async () => {
-      const tasks = await getTasks();
-      if (!tasks[tabId]) return; /* 任务已被其他方式清理 */
-      delete tasks[tabId];
-      tasks[newTab.id] = Object.assign({}, tasks[tabId], { createdAt: Date.now() });
-      await setTasks(tasks);
-      await chrome.alarms.clear(alarmName(tabId));
-      await chrome.alarms.create(alarmName(newTab.id), {
-        periodInMinutes: tasks[newTab.id].intervalSec / 60
-      });
+/* 按任务记录的网址重新打开标签页并重映射任务与定时器；返回是否成功 */
+function reopenTaskTab(oldTabId) {
+  return withTaskLock(async () => {
+    const tasks = await getTasks();
+    const task = tasks[oldTabId];
+    if (!task || !task.url) return false;
+    const newTab = await chrome.tabs
+      .create({ url: task.url, active: false })
+      .catch(() => null);
+    if (!newTab || typeof newTab.id !== "number") return false;
+    delete tasks[oldTabId];
+    tasks[newTab.id] = task;
+    await setTasks(tasks);
+    await chrome.alarms.clear(alarmName(oldTabId));
+    await chrome.alarms.create(alarmName(newTab.id), {
+      periodInMinutes: task.intervalSec / 60
     });
     await updateBadge();
-  } catch (e) {
-    console.warn("Auto-reopen failed:", e);
-    await stopTask(tabId);
-  }
+    return true;
+  });
+}
+
+/* 标签页被关闭：窗口整体关闭（含退出浏览器）时不处理，避免关闭竞态，由启动恢复兜底 */
+chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+  if (removeInfo && removeInfo.isWindowClosing) return;
+  reopenTaskTab(tabId);
 });
 
-/* 清理标签页已不存在的任务（无延迟、无恢复动作，弹窗打开时即可调用） */
+/* 取 origin+pathname 作为网址匹配键（忽略 hash 查询参数差异） */
+function urlKey(u) {
+  try {
+    const x = new URL(u);
+    return x.origin + x.pathname;
+  } catch (e) {
+    return null;
+  }
+}
+
+/* 清理标签页已不存在的任务（弹窗打开时调用） */
 async function cleanupInvalidTasks() {
   const tasks = await getTasks();
   for (const key of Object.keys(tasks)) {
@@ -303,19 +313,18 @@ async function cleanupInvalidTasks() {
   await updateBadge();
 }
 
-/* 浏览器启动/扩展安装时：恢复 cookie → 重载对应标签页 → 清理失效任务 */
+/* 浏览器启动/扩展安装时：恢复 cookie → 任务重新挂接到会话恢复的标签页 → 失效任务兜底重开 */
 async function prune() {
-  /* 等待会话恢复的标签页完成加载：既要避免误判失效，也要保证恢复发生在其首次加载之后 */
+  /* 等待会话恢复的标签页出现，避免误判失效或重复打开 */
   await new Promise((resolve) => setTimeout(resolve, 1500));
-  const tasks = await getTasks();
 
   /* 清理 v1.4.1 及之前“单一对象”格式的旧备份 */
   await chrome.storage.local.remove("cookieBackup");
 
-  /* 按主机归组任务 */
-  const hostTabs = new Map();
-  for (const key of Object.keys(tasks)) {
-    const task = tasks[key];
+  /* 先恢复所有任务站点的 cookie */
+  const initial = await getTasks();
+  const restoredHosts = new Set();
+  for (const task of Object.values(initial)) {
     if (!task.url) continue;
     let host;
     try {
@@ -323,19 +332,57 @@ async function prune() {
     } catch (e) {
       continue;
     }
-    if (!hostTabs.has(host)) hostTabs.set(host, []);
-    hostTabs.get(host).push(Number(key));
+    if (restoredHosts.has(host)) continue;
+    if (await restoreCookies(host)) restoredHosts.add(host);
   }
 
-  /* 会话恢复的页面加载时还没有 cookie，恢复完成后主动重载一次，让登录态立即生效 */
-  for (const [host, tabIds] of hostTabs) {
-    if (!(await restoreCookies(host))) continue;
-    for (const tabId of tabIds) {
-      await chrome.tabs.reload(tabId).catch(() => {});
+  /* 把死 tabId 的任务重新挂接到正在打开的标签页（会话恢复后 ID 会变），挂接不上就重新打开 */
+  await withTaskLock(async () => {
+    const tasks = await getTasks();
+    const openTabs = await chrome.tabs.query({});
+    const used = new Set(openTabs.map((t) => t.id));
+    let dirty = false;
+    for (const key of Object.keys(tasks)) {
+      const tabId = Number(key);
+      const task = tasks[key];
+      if (used.has(tabId)) continue; /* 任务对应的标签页还在 */
+      const keyUrl = urlKey(task.url);
+      const match =
+        openTabs.find((t) => t.url === task.url) ||
+        (keyUrl && openTabs.find((t) => urlKey(t.url) === keyUrl)) ||
+        null;
+      delete tasks[tabId];
+      await chrome.alarms.clear(alarmName(tabId));
+      if (match) {
+        tasks[match.id] = Object.assign({}, task, { url: match.url || task.url });
+        await chrome.alarms.create(alarmName(match.id), {
+          periodInMinutes: task.intervalSec / 60
+        });
+        /* 会话恢复的页面是在 cookie 恢复前加载的，补一次刷新让登录态生效 */
+        let host = null;
+        try {
+          host = new URL(match.url || task.url).hostname;
+        } catch (e) {}
+        if (host && restoredHosts.has(host)) {
+          chrome.tabs.reload(match.id).catch(() => {});
+        }
+      } else if (task.url && /^https?:/i.test(task.url)) {
+        const newTab = await chrome.tabs
+          .create({ url: task.url, active: false })
+          .catch(() => null);
+        if (newTab && typeof newTab.id === "number") {
+          tasks[newTab.id] = task;
+          await chrome.alarms.create(alarmName(newTab.id), {
+            periodInMinutes: task.intervalSec / 60
+          });
+        }
+      }
+      dirty = true;
     }
-  }
+    if (dirty) await setTasks(tasks);
+  });
 
-  await cleanupInvalidTasks();
+  await updateBadge();
 }
 
 chrome.runtime.onStartup.addListener(prune);
