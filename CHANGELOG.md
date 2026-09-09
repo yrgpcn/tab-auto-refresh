@@ -2,6 +2,11 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## [tab-auto-refresh 1.4.5] - 2026-09-09
+
+### Changed
+- 注释、单元测试与文档中的示例统一改用通用 example 域名，移除特定站点与行业字眼
+
 ## [tab-auto-refresh 1.4.4] - 2026-09-09
 
 ### Added
