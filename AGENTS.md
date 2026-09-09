@@ -7,7 +7,7 @@
 - 仓库远端为 `https://github.com/yrgpcn/tab-auto-refresh.git`，GitHub 仓库是 public，默认分支为 `main`；旧名 `chrome-extensions` 会由 GitHub 重定向
 - 本地检出目录仍可能是历史名称 `D:\Github\chrome-extensions`
 - Chrome 扩展集合（monorepo），每个插件一个独立文件夹，当前有 `tab-auto-refresh/`
-- 根目录 `README.md` 是仓库总览；每个插件文件夹内有自己的 README
+- 全仓库统一用根目录 `README.md` 承载插件列表、功能、安装、边界与技术栈；插件文件夹内**不再**放独立 README（已合并）
 - `.github/workflows/release.yml`：tag 驱动的自动发布
 - `.github/workflows/ci.yml`：push/PR 时用 Node 24 跑仓库校验与单元测试
 - `scripts/validate.mjs`：JSON/manifest/语言包/JS 语法仓库级校验
