@@ -1,7 +1,7 @@
 /* 标签页定时刷新 · Manifest V3 后台 service worker（ES module） */
 
 import { PREFIX, PRESETS } from "./shared/config.js";
-import { DEFAULT_INTERVAL_SEC, clampInterval } from "./shared/logic.js";
+import { DEFAULT_INTERVAL_SEC, clampInterval, hostOf, sameHost, sameSite } from "./shared/logic.js";
 
 const DEFAULT_SETTINGS = {
   bypassCache: true,
@@ -101,7 +101,17 @@ async function rememberLastInterval(seconds) {
 
 async function reloadTab(tabId) {
   const settings = await getSettings();
-  /* 刷新前备份 cookie，并把任务里记录的网址更新为最新地址 */
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  const task = (await getTasks())[tabId];
+  const target = task && task.url;
+  const tabHost = hostOf(tab && tab.url);
+  const targetHost = hostOf(target);
+  /* 标签页跳到完全不同的站点（误开外链）：本次刷新导航回监控目标，而非刷新误开页面 */
+  if (tabHost && targetHost && !sameSite(tabHost, targetHost)) {
+    await chrome.tabs.update(tabId, { url: target });
+    return;
+  }
+  /* 同站内（含子域登录跳转）正常备份、跟随同站新址并刷新 */
   await backupCookies(tabId);
   await refreshTaskUrl(tabId);
   await chrome.tabs.reload(tabId, { bypassCache: !!settings.bypassCache });
@@ -164,8 +174,11 @@ function refreshTaskUrl(tabId) {
   return withTaskLock(async () => {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     const tasks = await getTasks();
-    if (tab && tab.url && tasks[tabId] && tasks[tabId].url !== tab.url) {
-      tasks[tabId] = Object.assign({}, tasks[tabId], { url: tab.url });
+    const t = tasks[tabId];
+    if (!tab || !tab.url || !t || !t.url) return;
+    /* 仅在同站时跟随更新目标网址，跨站漂移不覆盖，保留原始监控对象以便自动返回 */
+    if (t.url !== tab.url && sameHost(hostOf(tab.url), hostOf(t.url))) {
+      tasks[tabId] = Object.assign({}, t, { url: tab.url });
       await setTasks(tasks);
     }
   });
