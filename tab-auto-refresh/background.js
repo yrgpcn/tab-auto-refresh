@@ -63,6 +63,8 @@ function startTask(tabId, seconds) {
     const tasks = await getTasks();
     tasks[tabId] = { intervalSec: safe, createdAt: Date.now(), url };
     await setTasks(tasks);
+    /* 开启任务时立即备份一次，避免首次刷新前关闭浏览器导致无备份可恢复 */
+    await backupCookies(tabId);
     await chrome.alarms.create(alarmName(tabId), { periodInMinutes: safe / 60 });
     await chrome.storage.local.set({ pausedAll: false });
     await updateBadge();
