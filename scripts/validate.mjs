@@ -90,6 +90,9 @@ for (const [path, manifest] of jsonFiles) {
     }
   }
   if (!existsSync(localesDir)) continue;
+  const defaultKeySet = jsonFiles.get(defaultMessagesPath)
+    ? new Set(Object.keys(jsonFiles.get(defaultMessagesPath)))
+    : null;
   for (const locale of readdirSync(localesDir)) {
     const messagesPath = join(localesDir, locale, "messages.json");
     if (!existsSync(messagesPath)) {
@@ -101,6 +104,19 @@ for (const [path, manifest] of jsonFiles) {
     for (const [key, value] of Object.entries(messages)) {
       if (!value || typeof value.message !== "string") {
         problems.push(`${messagesPath}: ${key} 缺少 message 字段`);
+      }
+    }
+    /* 非默认语言包必须与默认语言包键集合完全齐平，防止新增文案漏翻译 */
+    if (defaultKeySet && locale !== manifest.default_locale) {
+      for (const key of defaultKeySet) {
+        if (!(key in messages)) {
+          problems.push(`${messagesPath}: 缺少默认语言包中的键 ${key}`);
+        }
+      }
+      for (const key of Object.keys(messages)) {
+        if (!defaultKeySet.has(key)) {
+          problems.push(`${messagesPath}: 多出默认语言包中没有的键 ${key}`);
+        }
       }
     }
   }

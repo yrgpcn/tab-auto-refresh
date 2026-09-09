@@ -1,0 +1,8 @@
+# 本地打包产物（发布 zip 由 Actions 生成，不入库）
+tab-auto-refresh-v*.zip
+*.zip
+
+# 临时目录与本地杂项
+.tmp/
+*.log
+Thumbs.db

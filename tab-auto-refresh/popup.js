@@ -71,7 +71,7 @@ async function syncAlarms() {
 async function refreshState() {
   let data = await chrome.storage.sync.get("settings");
   if (!data.settings) {
-    /* 鍏煎 1.1.0 鍙婁箣鍓嶅瓨鍦?local 閲岀殑璁剧疆 */
+    /* 兼容 1.1.0 及之前存在 local 里的设置 */
     data = await chrome.storage.local.get("settings");
   }
   const local = await chrome.storage.local.get(["tasks", "pausedAll"]);
@@ -130,7 +130,7 @@ function buildTaskItem(tabId, task, tab) {
         await chrome.tabs.update(tabId, { active: true });
         if (typeof tab.windowId === "number") await chrome.windows.update(tab.windowId, { focused: true });
         window.close();
-      } catch (e) { /* 鏍囩椤靛彲鑳藉垰琚叧闂?*/ }
+      } catch (e) { /* 标签页可能刚被关闭 */ }
     });
   } else {
     const invalid = document.createElement("span");
@@ -298,8 +298,8 @@ async function init() {
     await renderAll();
   });
 
-  /* alarm 鍛ㄦ湡瑙﹀彂浼氭洿鏂?scheduledTime 浣嗕笉瑙﹀彂 storage.onChanged锛?
-     姣忕鍚屾涓€娆℃墠鑳借鍊掕鏃跺湪褰掗浂鍚庣户缁粴鍔?*/
+  /* alarm 周期触发会更新 scheduledTime 但不触发 storage.onChanged，
+     每秒同步一次才能让倒计时在归零后继续滚动 */
   setInterval(async () => {
     await syncAlarms();
     renderCountdowns();

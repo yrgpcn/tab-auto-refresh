@@ -46,6 +46,7 @@
     "placeholders": { "error": { "content": "$1" } }
   },
   "errUnknown": { "message": "unknown error" },
+  "errTabGone": { "message": "Cannot access this tab; reload the page and try again" },
   "msgStopped": { "message": "Auto refresh stopped for this tab" },
   "msgSet": {
     "message": "Auto refresh set: every $INTERVAL$",

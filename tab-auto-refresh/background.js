@@ -1,7 +1,7 @@
 /* 标签页定时刷新 · Manifest V3 后台 service worker（ES module） */
 
 import { PREFIX, PRESETS } from "./shared/config.js";
-import { DEFAULT_INTERVAL_SEC, clampInterval, hostOf, sameHost, sameSite } from "./shared/logic.js";
+import { DEFAULT_INTERVAL_SEC, clampInterval, hostOf, sameHost, sameSite, siteRoot } from "./shared/logic.js";
 
 const DEFAULT_SETTINGS = {
   bypassCache: true,
@@ -11,6 +11,11 @@ const DEFAULT_SETTINGS = {
 
 /* cookie 备份按主机分键存储，避免多站点并发备份时互相覆盖 */
 const COOKIE_BACKUP_PREFIX = "cookieBackup:";
+/* 备份保留策略：超过最大条数按时间淘汰；任务全部停完后过期即清 */
+const COOKIE_BACKUP_MAX_KEYS = 20;
+const COOKIE_BACKUP_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/* 单站点备份的 cookie 条数上限，防止极端站点把存储越写越大 */
+const MAX_COOKIES_PER_HOST = 200;
 
 function alarmName(tabId) {
   return PREFIX + tabId;
@@ -22,7 +27,21 @@ async function getTasks() {
 }
 
 async function setTasks(tasks) {
+  syncTaskTabIds(tasks);
   await chrome.storage.local.set({ tasks });
+}
+
+/* 内存中的监控 tabId 快照：全局 tabs 事件先查它，避免每次加载完成都读 storage */
+let taskTabIdSet = null;
+function syncTaskTabIds(tasks) {
+  taskTabIdSet = new Set(Object.keys(tasks).map(Number));
+}
+async function ensureTaskTabIds() {
+  if (!taskTabIdSet) {
+    const tasks = await getTasks();
+    syncTaskTabIds(tasks);
+  }
+  return taskTabIdSet;
 }
 
 /* 偏好设置存 chrome.storage.sync 跨设备同步；旧版本留在 local 的设置自动迁移 */
@@ -62,7 +81,11 @@ function startTask(tabId, seconds) {
   const { seconds: safe } = clampInterval(seconds);
   return withTaskLock(async () => {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
-    const url = tab ? tab.url : null;
+    /* 拿不到标签页或网址时不建任务，否则站点锁定与自动重开都无从依据 */
+    if (!tab || !tab.url) {
+      throw new Error(chrome.i18n.getMessage("errTabGone") || "Tab unavailable");
+    }
+    const url = tab.url;
     const tasks = await getTasks();
     tasks[tabId] = { intervalSec: safe, createdAt: Date.now(), url };
     await setTasks(tasks);
@@ -83,8 +106,31 @@ function stopTask(tabId) {
     delete tasks[tabId];
     await setTasks(tasks);
     await chrome.alarms.clear(alarmName(tabId));
+    await pruneCookieBackups(tasks);
     await updateBadge();
   });
+}
+
+/* 备份清理三条件：站点不再被任何任务使用 / 超过 TTL / 超过站点数上限（按时间留新） */
+async function pruneCookieBackups(remainingTasks) {
+  const roots = new Set();
+  for (const t of Object.values(remainingTasks || {})) {
+    const r = siteRoot(hostOf(t.url));
+    if (r) roots.add(r);
+  }
+  const all = await chrome.storage.local.get(COOKIE_BACKUP_PREFIX + "*");
+  const now = Date.now();
+  const fresh = [];
+  const stale = [];
+  for (const [key, value] of Object.entries(all)) {
+    const root = siteRoot(key.slice(COOKIE_BACKUP_PREFIX.length));
+    const ts = value && typeof value.timestamp === "number" ? value.timestamp : 0;
+    if (!root || !roots.has(root) || now - ts > COOKIE_BACKUP_TTL_MS) stale.push(key);
+    else fresh.push({ key, ts });
+  }
+  fresh.sort((a, b) => b.ts - a.ts);
+  for (const e of fresh.slice(COOKIE_BACKUP_MAX_KEYS)) stale.push(e.key);
+  if (stale.length > 0) await chrome.storage.local.remove(stale);
 }
 
 /* 快捷键没有显式间隔，复用最近一次手动任务的实际间隔 */
@@ -139,6 +185,10 @@ async function backupCookies(tabId) {
       return;
     }
     if (!host) return;
+    /* 只备份与监控目标同根域的站点：外链漂移时不把无关站点的登录态写进备份 */
+    const tasks = await getTasks();
+    const task = tasks[tabId];
+    if (!task || !sameSite(host, hostOf(task.url))) return;
     const seen = new Map();
     for (const d of domainChain(host)) {
       let list = [];
@@ -161,6 +211,7 @@ async function backupCookies(tabId) {
       sameSite: c.sameSite,
       expirationDate: c.expirationDate
     }));
+    if (cookies.length > MAX_COOKIES_PER_HOST) cookies.length = MAX_COOKIES_PER_HOST;
     await chrome.storage.local.set({
       [COOKIE_BACKUP_PREFIX + host]: { cookies, timestamp: Date.now() }
     });
@@ -233,12 +284,14 @@ async function updateBadge() {
 }
 
 function notifyTaskStopped(tabId) {
-  chrome.notifications.create("refresh-stopped-" + tabId, {
-    type: "basic",
-    iconUrl: "icons/icon48.png",
-    title: chrome.i18n.getMessage("notifTitle"),
-    message: chrome.i18n.getMessage("notifStopped")
-  });
+  chrome.notifications
+    .create("refresh-stopped-" + tabId, {
+      type: "basic",
+      iconUrl: "icons/icon48.png",
+      title: chrome.i18n.getMessage("notifTitle"),
+      message: chrome.i18n.getMessage("notifStopped")
+    })
+    .catch(() => {}); /* 系统通知被关闭时不影响任务清理流程 */
 }
 
 /* 定时器触发：刷新对应标签页 */
@@ -271,8 +324,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 /* 任务内页面加载完成即补备份：登录成功后不用等下一个刷新周期 */
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.status !== "complete") return;
+  const ids = await ensureTaskTabIds();
+  if (!ids.has(tabId)) return; /* 非监控标签页：零 storage 读写 */
   const tasks = await getTasks();
-  if (!tasks[tabId]) return;
+  if (!tasks[tabId]) return; /* 快照与存储有竞态时以存储为准 */
   await backupCookies(tabId);
   await refreshTaskUrl(tabId);
 });
@@ -393,6 +448,8 @@ async function prune() {
       dirty = true;
     }
     if (dirty) await setTasks(tasks);
+    /* 启动时统一淘汰：v1.4.5 前遗留的多余备份、过期备份、超量备份 */
+    await pruneCookieBackups(tasks);
   });
 
   await updateBadge();
@@ -430,25 +487,34 @@ chrome.runtime.onInstalled.addListener(buildMenus);
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!tab || typeof tab.id !== "number") return;
   const id = String(info.menuItemId);
-  if (id === "stop") {
-    await stopTask(tab.id);
-  } else if (id.startsWith("start-")) {
-    await startTask(tab.id, Number(id.slice("start-".length)));
+  try {
+    if (id === "stop") {
+      await stopTask(tab.id);
+    } else if (id.startsWith("start-")) {
+      await startTask(tab.id, Number(id.slice("start-".length)));
+    }
+  } catch (e) {
+    /* 菜单路径无弹窗承接错误，失败仅记录 */
+    console.warn("Context menu action failed:", e);
   }
 });
 
 /* 快捷键 Alt+Shift+R：开关当前标签页的定时刷新 */
 chrome.commands.onCommand.addListener(async (command) => {
   if (command !== "toggle-refresh") return;
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs && tabs[0];
-  if (!tab || typeof tab.id !== "number") return;
-  const tasks = await getTasks();
-  if (tasks[tab.id]) {
-    await stopTask(tab.id);
-  } else {
-    const settings = await getSettings();
-    await startTask(tab.id, settings.lastIntervalSec);
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs && tabs[0];
+    if (!tab || typeof tab.id !== "number") return;
+    const tasks = await getTasks();
+    if (tasks[tab.id]) {
+      await stopTask(tab.id);
+    } else {
+      const settings = await getSettings();
+      await startTask(tab.id, settings.lastIntervalSec);
+    }
+  } catch (e) {
+    console.warn("Command toggle-refresh failed:", e);
   }
 });
 

@@ -30,7 +30,7 @@
 
 - 权限：alarms / storage / tabs / contextMenus / notifications
 - `minimum_chrome_version: 120`（30 秒级 alarms 依赖该版本）
-- 任务与本机状态存于 `chrome.storage.local`：`tasks` 为 tabId → `{ intervalSec, createdAt }` 映射；`pausedAll` 为全局暂停标记
+- 任务与本机状态存于 `chrome.storage.local`：`tasks` 为 tabId → `{ intervalSec, createdAt, url }` 映射；`pausedAll` 为全局暂停标记
 - 偏好设置存于 `chrome.storage.sync`：`settings` 为 `{ bypassCache, skipDiscarded, lastIntervalSec }`；读取时若 sync 为空会尝试从 local 迁移旧设置
 - 快捷键启动任务复用 `settings.lastIntervalSec`（最近一次成功任务的实际间隔）；无记录时由默认值回退到 5 分钟
 - 手动开始新任务（弹窗/右键/快捷键）会自动解除 `pausedAll`；暂停期间 alarm 跳过触发，恢复后按原周期继续；角标暂停时显示 `‖`
@@ -42,13 +42,16 @@
 - 弹窗每秒重新拉取 alarm 列表再重绘倒计时：alarm 周期触发不会触发 `storage.onChanged`，只重绘文本会让倒计时停在 00:00
 - 后台保存设置时合并既有 `settings`，避免只更新复选框时丢失 `lastIntervalSec`
 - 弹窗底部有仓库地址页脚（`#repoFooter`，popup.html 内静态 `<a target="_blank">`，URL 明文不参与 i18n）
+- cookie 备份（`cookieBackup:<host>`）只写入与监控目标同根域的站点；停止任务与启动恢复时统一淘汰：站点不再被任何任务使用、超过 30 天 TTL、超过 20 站上限（按时间留新）各计一条；单站备份封顶 200 条 cookie
+- `startTask` 拿不到标签页或网址时抛错，不再创建无网址的幽灵任务（弹窗显示 `errTabGone`；右键菜单/快捷键路径仅 console.warn）
+- `tabs.onUpdated` 先经过内存中的任务 tabId 快照过滤，非监控标签页不触发任何 storage 读取；快照在 `setTasks` 时更新，冷启动首次事件回读 storage
 
 ## 当前仓库状态
 
 - GitHub 仓库 `yrgpcn/tab-auto-refresh` 已设置为 public
 
 - `tab-auto-refresh` 最新**已发布**版本是 `1.4.5`，tag 为 `tab-auto-refresh/v1.4.5`；发布面只保留最新 Release 与 tag，旧版本发布随新版本清理
-- `main` 上有未发布的改动（弹窗仓库地址页脚），下次发版时一并带上
+- `main` 上有未发布的 `1.5.0` 改动（弹窗仓库地址页脚 + 代码校对修复与 cookie 备份清理、资源优化），发版前勿打 tag
 - 该版本起 Release zip 顶层包含 `tab-auto-refresh/` 文件夹
 
 ## 打包规则
@@ -59,7 +62,7 @@
 ## 验证清单
 
 1. `node scripts/validate.mjs`：JSON/manifest/语言包/JS 语法一键校验（等价旧手工步骤 1-2）
-2. `node --test "tests/**/*.test.mjs"`：纯逻辑单元测试（引号必需，避免 shell 提前展开；不要用目录形式，Windows 下不可靠）
+2. `node --test "tests/**/*.test.mjs"`：纯逻辑单元测试（引号必需，避免 shell 提前展开；不要用目录形式，Windows 下不可靠。Windows 上 Node 22 不支持该 glob，本地改用显式路径 `node --test tests/tab-auto-refresh/logic.test.mjs`）
 3. UI 改动后可用 `scripts/screenshot-popup.mjs` 重新生成 `docs/tab-auto-refresh/popup.png`
 4. `chrome://extensions` 开发者模式加载插件文件夹，验证：设置/停止、倒计时归零后继续、右键菜单（页面+标签页）、立即刷新、角标计数、暂停/恢复全部、快捷键记住上次间隔、自动清理通知
 

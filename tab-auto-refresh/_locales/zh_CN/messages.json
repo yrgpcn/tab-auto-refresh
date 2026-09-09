@@ -45,6 +45,7 @@
     "placeholders": { "error": { "content": "$1" } }
   },
   "errUnknown": { "message": "未知错误" },
+  "errTabGone": { "message": "无法获取该标签页，请刷新页面后重试" },
   "msgStopped": { "message": "已停止该标签页的定时刷新" },
   "msgSet": {
     "message": "已设置每 $INTERVAL$ 自动刷新一次",
