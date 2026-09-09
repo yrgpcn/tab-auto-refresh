@@ -245,6 +245,8 @@ async function saveSettings() {
 
 async function init() {
   applyI18n();
+  /* 打开弹窗时立即清理无效任务 */
+  await send({ type: "prune-now" });
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTab = tabs && tabs[0] ? tabs[0] : null;
 

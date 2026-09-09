@@ -150,6 +150,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 /* 启动/安装时清理已经失效的任务 */
 async function prune() {
+  /* 等待标签页恢复完成，避免误判 */
+  await new Promise((resolve) => setTimeout(resolve, 1500));
   const tasks = await getTasks();
   for (const key of Object.keys(tasks)) {
     const tabId = Number(key);
@@ -217,7 +219,10 @@ chrome.commands.onCommand.addListener(async (command) => {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
-      if (msg.type === "start") {
+      if (msg.type === "prune-now") {
+        await prune();
+        sendResponse({ ok: true });
+      } else if (msg.type === "start") {
         const sec = await startTask(msg.tabId, msg.seconds);
         sendResponse({ ok: true, intervalSec: sec });
       } else if (msg.type === "stop") {
