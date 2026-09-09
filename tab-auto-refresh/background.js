@@ -58,8 +58,10 @@ function withTaskLock(fn) {
 function startTask(tabId, seconds) {
   const { seconds: safe } = clampInterval(seconds);
   return withTaskLock(async () => {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    const url = tab ? tab.url : null;
     const tasks = await getTasks();
-    tasks[tabId] = { intervalSec: safe, createdAt: Date.now() };
+    tasks[tabId] = { intervalSec: safe, createdAt: Date.now(), url };
     await setTasks(tasks);
     await chrome.alarms.create(alarmName(tabId), { periodInMinutes: safe / 60 });
     await chrome.storage.local.set({ pausedAll: false });
@@ -94,7 +96,65 @@ async function rememberLastInterval(seconds) {
 
 async function reloadTab(tabId) {
   const settings = await getSettings();
+  /* 刷新前备份 cookie */
+  await backupCookies(tabId);
   await chrome.tabs.reload(tabId, { bypassCache: !!settings.bypassCache });
+}
+
+/* 备份指定标签页域名的 cookie */
+async function backupCookies(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab || !tab.url) return;
+    const url = new URL(tab.url);
+    const domain = url.hostname;
+    const cookies = await chrome.cookies.getAll({ domain });
+    const backup = await chrome.storage.local.get("cookieBackup");
+    const cookieBackup = backup.cookieBackup || {};
+    cookieBackup[domain] = {
+      cookies: cookies.map(c => ({
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path,
+        secure: c.secure,
+        httpOnly: c.httpOnly,
+        sameSite: c.sameSite,
+        expirationDate: c.expirationDate
+      })),
+      timestamp: Date.now()
+    };
+    await chrome.storage.local.set({ cookieBackup });
+  } catch (e) {
+    console.warn("Cookie backup failed:", e);
+  }
+}
+
+/* 恢复指定域名的 cookie */
+async function restoreCookies(domain) {
+  try {
+    const backup = await chrome.storage.local.get("cookieBackup");
+    const cookieBackup = backup.cookieBackup || {};
+    const data = cookieBackup[domain];
+    if (!data || !data.cookies) return false;
+    for (const c of data.cookies) {
+      await chrome.cookies.set({
+        url: `http${c.secure ? "s" : ""}://${c.domain.replace(/^\./, "")}${c.path}`,
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path,
+        secure: c.secure,
+        httpOnly: c.httpOnly,
+        sameSite: c.sameSite,
+        expirationDate: c.expirationDate
+      });
+    }
+    return true;
+  } catch (e) {
+    console.warn("Cookie restore failed:", e);
+    return false;
+  }
 }
 
 /* 工具栏角标 = 监控中的标签页数量；全局暂停时显示暂停符号 */
@@ -143,16 +203,59 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
-/* 标签页被关闭时同步清理任务 */
-chrome.tabs.onRemoved.addListener((tabId) => {
-  stopTask(tabId);
+/* 标签页被关闭时：如果在任务列表中，自动重开 */
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const tasks = await getTasks();
+  const task = tasks[tabId];
+  if (!task || !task.url) {
+    await stopTask(tabId);
+    return;
+  }
+  
+  /* 自动重开标签页 */
+  try {
+    const newTab = await chrome.tabs.create({ url: task.url, active: false });
+    /* 更新任务列表中的 tabId */
+    delete tasks[tabId];
+    tasks[newTab.id] = { ...task, createdAt: Date.now() };
+    await setTasks(tasks);
+    /* 重建 alarm */
+    await chrome.alarms.clear(alarmName(tabId));
+    await chrome.alarms.create(alarmName(newTab.id), { periodInMinutes: task.intervalSec / 60 });
+    await updateBadge();
+    console.log(`Auto-reopened tab ${tabId} as ${newTab.id}: ${task.url}`);
+  } catch (e) {
+    console.warn("Auto-reopen failed:", e);
+    await stopTask(tabId);
+  }
 });
 
-/* 启动/安装时清理已经失效的任务 */
+/* 启动/安装时清理已经失效的任务并恢复 cookie */
 async function prune() {
   /* 等待标签页恢复完成，避免误判 */
   await new Promise((resolve) => setTimeout(resolve, 1500));
   const tasks = await getTasks();
+  
+  /* 收集所有需要恢复的域名 */
+  const domains = new Set();
+  for (const key of Object.keys(tasks)) {
+    const task = tasks[key];
+    if (task.url) {
+      try {
+        const url = new URL(task.url);
+        domains.add(url.hostname);
+      } catch (e) {
+        /* 忽略无效 URL */
+      }
+    }
+  }
+  
+  /* 恢复 cookie */
+  for (const domain of domains) {
+    await restoreCookies(domain);
+  }
+  
+  /* 清理无效任务 */
   for (const key of Object.keys(tasks)) {
     const tabId = Number(key);
     const existing = await chrome.tabs.get(tabId).catch(() => null);
