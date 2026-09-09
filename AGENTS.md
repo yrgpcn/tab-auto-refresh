@@ -6,8 +6,8 @@
 
 - 仓库远端为 `https://github.com/yrgpcn/tab-auto-refresh.git`，GitHub 仓库是 public，默认分支为 `main`；旧名 `chrome-extensions` 会由 GitHub 重定向
 - 本地检出目录仍可能是历史名称 `D:\Github\chrome-extensions`
-- Chrome 扩展集合（monorepo），每个插件一个独立文件夹，当前有 `tab-auto-refresh/`
-- 全仓库统一用根目录 `README.md` 承载插件列表、功能、安装、边界与技术栈；插件文件夹内**不再**放独立 README（已合并）
+- 本仓库是 `tab-auto-refresh` 插件的专属仓库（2026-09-09 起不再作为多插件集合仓库）；插件源码在 `tab-auto-refresh/` 文件夹，测试与工具在仓库根
+- 全仓库统一用根目录 `README.md` 承载插件功能、安装、边界与技术栈；插件文件夹内**不放**独立 README（已合并）
 - `.github/workflows/release.yml`：tag 驱动的自动发布
 - `.github/workflows/ci.yml`：push/PR 时用 Node 24 跑仓库校验与单元测试
 - `scripts/validate.mjs`：JSON/manifest/语言包/JS 语法仓库级校验
@@ -24,7 +24,7 @@
 - UI 默认中文，同时维护英文语言包；提交信息使用英文 Conventional Commits（feat: / fix: / docs: / refactor: / chore:）
 - 版本号在插件 `manifest.json` 中维护
 - 发布流程：改 `manifest.json` 版本号并更新 changelog → 提交到 `main` → 打同名 tag（如 `tab-auto-refresh/v1.3.0`）→ 推送 `main` 和 tag，Actions 自动打包并创建 GitHub Release
-- tag 必须带插件前缀（多插件仓库，避免标签冲突）
+- tag 保留 `tab-auto-refresh/` 前缀（与 release.yml 的匹配规则和既有历史一致，勿改）
 
 ## tab-auto-refresh 要点
 
@@ -46,7 +46,7 @@
 
 - GitHub 仓库 `yrgpcn/tab-auto-refresh` 已设置为 public
 
-- `tab-auto-refresh` 最新版本是 `1.3.0`，tag 为 `tab-auto-refresh/v1.3.0`
+- `tab-auto-refresh` 最新版本是 `1.4.5`，tag 为 `tab-auto-refresh/v1.4.5`；发布面只保留最新 Release 与 tag，旧版本发布随新版本清理
 - 该版本起 Release zip 顶层包含 `tab-auto-refresh/` 文件夹
 
 ## 打包规则

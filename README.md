@@ -1,18 +1,13 @@
 # Tab Auto Refresh
 
-轻量的 Chrome 标签页定时刷新扩展。仓库采用插件独立文件夹布局，便于后续加入其他扩展。
+轻量的 Chrome 标签页定时刷新扩展，本仓库即该插件的专属仓库：为任意标签页设置自动刷新间隔，支持全局暂停、快捷键与中英文界面。
 
 [![CI](https://github.com/yrgpcn/tab-auto-refresh/actions/workflows/ci.yml/badge.svg)](https://github.com/yrgpcn/tab-auto-refresh/actions/workflows/ci.yml)
 
-## 插件列表
-
-### tab-auto-refresh
-
-标签页定时刷新工具：为任意标签页设置自动刷新间隔，支持全局暂停、快捷键与中英文界面。
-
 ![弹窗截图](./docs/tab-auto-refresh/popup.png)
 
-**功能特性**
+## 功能特性
+
 - 预设间隔：30 秒 / 1 分钟 / 2 分钟 / 5 分钟 / 10 分钟 / 30 分钟 / 1 小时
 - 自定义间隔：支持输入任意秒数（最小 30 秒）
 - 右键菜单：在网页或标签页上右键快速设置刷新间隔
@@ -47,6 +42,14 @@
 - Manifest V3（Chrome 扩展最新规范）
 - Background Service Worker（后台定时任务）
 - Chrome Extensions API（Alarms / Storage / Context Menus / Tabs / Cookies / Notifications）
+
+## 项目结构
+
+- `tab-auto-refresh/`：插件源码（manifest、后台、弹窗、共享逻辑、语言包、图标）
+- `tests/`：纯逻辑单元测试
+- `scripts/`：仓库校验与弹窗截图脚本
+- `docs/`：README 用的截图等文档资源
+- `.github/workflows/`：CI 与 tag 驱动的自动发布
 
 ## 开发与测试
 
