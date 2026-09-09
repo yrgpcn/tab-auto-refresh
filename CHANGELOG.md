@@ -2,6 +2,14 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## [tab-auto-refresh 1.4.2] - 2026-09-09
+
+### Fixed
+- Cookie 备份按站点独立存储，多个任务并发备份不再互相覆盖
+- 备份覆盖父域 cookie（如 `.gov.cn` 级 SSO 登录票据），修复部分政务网站重启后无法恢复登录
+- 恢复 cookie 后立即重载受监控的标签页，登录态即刻生效，不再等到下个刷新周期
+- 自动重开使用的网址会在页面加载后更新，避免重新打开时停留在登录页
+
 ## [tab-auto-refresh 1.4.1] - 2026-09-09
 
 ### Fixed
