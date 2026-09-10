@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /* 用本机 Chrome 渲染 popup 截图：mock chrome API 后加载 popup.html。
+   本机专用工具：依赖本机 Chrome 路径与 NODE_PATH，CI 不运行。
    Playwright 来自 Codex 捆绑依赖，运行示例：
    $env:NODE_PATH="C:\Users\yrgpc\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\node_modules"
    node scripts/screenshot-popup.mjs
@@ -47,7 +48,7 @@ page.on("console", (entry) => {
 
 await page.addInitScript((msgs) => {
   const now = Date.now();
-  const settings = { bypassCache: true, skipDiscarded: false };
+  const settings = { bypassCache: true, skipDiscarded: false, cookieBackup: true };
   const tasks = {
     1: { intervalSec: 300, createdAt: now - 61_000 },
     2: { intervalSec: 60, createdAt: now - 121_000 },

@@ -60,7 +60,9 @@
     "message": "$COUNT$ item(s)",
     "placeholders": { "count": { "content": "$1" } }
   },
-  "restrictHint": { "message": "Browser internal pages (chrome:// etc.) may not support auto refresh" },
+  "restrictHint": { "message": "Browser internal pages (chrome:// etc.) cannot be auto-refreshed" },
+  "errRestricted": { "message": "Browser internal pages (chrome:// etc.) cannot be auto-refreshed" },
+  "cookieBackupLabel": { "message": "Restore logins after restart: backs up site cookies locally (stored in plaintext)" },
   "intervalLabel": { "message": "Interval" },
   "customPlaceholder": { "message": "Custom seconds" },
   "bypassLabel": { "message": "Bypass cache when refreshing (like Ctrl+F5)" },

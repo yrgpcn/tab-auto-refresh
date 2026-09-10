@@ -78,3 +78,34 @@ export function sameSite(a, b) {
   const rb = siteRoot(b);
   return !!ra && !!rb && ra === rb;
 }
+
+/* 浏览器内部页面：不能刷新也种不了 cookie，弹窗用于提示，后台用于拒绝建任务 */
+export const RESTRICTED_URL = /^(chrome|edge|devtools|about|chrome-extension):/i;
+
+/* 主机的域链：a.b.example.com → b.example.com → example.com；登录票据常种在父域 */
+export function domainChain(host) {
+  const parts = host.split(".").filter(Boolean);
+  const list = [];
+  for (let i = 0; i < parts.length - 1; i++) {
+    list.push(parts.slice(i).join("."));
+  }
+  return list;
+}
+
+/* 取 origin+pathname 作为网址匹配键（忽略 hash 查询参数差异） */
+export function urlKey(u) {
+  try {
+    const x = new URL(u);
+    return x.origin + x.pathname;
+  } catch (e) {
+    return null;
+  }
+}
+
+/* 网址与目标一致（精确或 origin+pathname 相等）的标签页判定 */
+export function tabShowsUrl(tab, url) {
+  if (!tab || !tab.url || !url) return false;
+  if (tab.url === url) return true;
+  const k = urlKey(url);
+  return !!k && urlKey(tab.url) === k;
+}

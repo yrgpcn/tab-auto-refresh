@@ -1,17 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { PREFIX, PRESETS } from "../../tab-auto-refresh/shared/config.js";
+import { DEFAULT_SETTINGS, PREFIX, PRESETS } from "../../tab-auto-refresh/shared/config.js";
 import {
   DEFAULT_INTERVAL_SEC,
   MIN_INTERVAL_SEC,
+  RESTRICTED_URL,
   clampInterval,
+  domainChain,
   formatCountdown,
   formatInterval,
   hostOf,
   sameHost,
   sameSite,
   siteRoot,
+  tabShowsUrl,
+  urlKey,
 } from "../../tab-auto-refresh/shared/logic.js";
 
 test("clampInterval falls back to the default for invalid input", () => {
@@ -93,4 +97,36 @@ test("hostOf extracts hostname from URL and rejects junk", () => {
   assert.equal(hostOf("https://app.example.com/#/login"), "app.example.com");
   assert.equal(hostOf("not a url"), null);
   assert.equal(hostOf(null), null);
+});
+
+test("domainChain walks the parent domains of a host", () => {
+  assert.deepEqual(domainChain("a.b.example.com"), ["a.b.example.com", "b.example.com", "example.com"]);
+  assert.deepEqual(domainChain("example.com"), ["example.com"]);
+});
+
+test("urlKey keeps origin+pathname and drops query and hash", () => {
+  assert.equal(urlKey("https://example.com/page?a=1#frag"), "https://example.com/page");
+  assert.equal(urlKey("not a url"), null);
+});
+
+test("tabShowsUrl matches exact url or origin+pathname, rejects junk", () => {
+  const tab = { url: "https://example.com/page?x=1" };
+  assert.ok(tabShowsUrl(tab, "https://example.com/page"));
+  assert.ok(tabShowsUrl(tab, "https://example.com/page?x=1"));
+  assert.ok(!tabShowsUrl(tab, "https://example.com/other"));
+  assert.ok(!tabShowsUrl(tab, "https://another.com/page"));
+  assert.ok(!tabShowsUrl(null, "https://example.com/page"));
+  assert.ok(!tabShowsUrl(tab, null));
+});
+
+test("RESTRICTED_URL flags browser internal pages only", () => {
+  for (const url of ["chrome://newtab", "edge://settings", "devtools://devtools/bundled/inspector.html", "about:blank", "chrome-extension://abc/popup.html"]) {
+    assert.ok(RESTRICTED_URL.test(url), url);
+  }
+  assert.ok(!RESTRICTED_URL.test("https://example.com"));
+  assert.ok(!RESTRICTED_URL.test("http://localhost:3000/"));
+});
+
+test("cookie backup is opt-in: off by default", () => {
+  assert.equal(DEFAULT_SETTINGS.cookieBackup, false);
 });

@@ -2,6 +2,26 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## [tab-auto-refresh 1.6.0] - 2026-09-10
+
+### Added
+- 「重启后恢复登录」（cookie 备份）改为默认关闭的开关，开启入口在弹窗；README 新增安全说明
+- 浏览器内部页面（chrome:// 等）直接拒绝创建定时刷新任务，弹窗提示同步更新
+- 发布工作流新增旧 Release 与 tag 清理步骤，发布面只保留最新版本
+
+### Changed
+- 启动恢复按注册域匹配并恢复所有备份主机，兄弟子域（如 SSO 登录子域）的 cookie 备份不再被遗漏；恢复成功后按根域决定是否补刷新
+- `domainChain` / `urlKey` / `tabShowsUrl` / `RESTRICTED_URL` 下沉 `shared/logic.js`，并补充单元测试；移除无用的 `moz-extension` 匹配
+- 弹窗 `storage.onChanged` 仅在任务 / 暂停 / 设置变化时重绘，cookie 备份写入不再触发全量刷新
+- 偏好默认值统一到 `shared/config.js` 的 `DEFAULT_SETTINGS`，后台与弹窗共用
+- 弹窗界面 `lang` 属性跟随浏览器语言
+
+### Fixed
+- cookie 备份写入失败改为仅告警一次，避免每次刷新重复刷日志
+
+### 注意
+- cookie 备份开关默认关闭：升级后原有备份会在下次清理时移除，需要登录保持的用户请在弹窗中手动开启
+
 ## [tab-auto-refresh 1.5.0] - 2026-09-10
 
 ### Added

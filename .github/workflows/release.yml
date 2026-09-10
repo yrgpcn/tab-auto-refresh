@@ -51,3 +51,15 @@ jobs:
           完整变更：https://github.com/${GITHUB_REPOSITORY}/commits/tag/${GITHUB_REF_NAME}
           EOF
           gh release create "${GITHUB_REF_NAME}" --title "标签页定时刷新 ${VERSION}" --notes-file release-notes.md "tab-auto-refresh-${VERSION}.zip"
+
+      - name: Prune old releases and tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAGS="$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/tab-auto-refresh%2F" --jq '.[].ref' | sed 's|refs/tags/||')"
+          for tag in $TAGS; do
+            if [ "$tag" != "$GITHUB_REF_NAME" ]; then
+              gh release delete "$tag" --yes --cleanup-tag || true
+              git push origin --delete "$tag" || true
+            fi
+          done

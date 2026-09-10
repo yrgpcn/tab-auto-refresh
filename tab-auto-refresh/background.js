@@ -1,13 +1,16 @@
 /* 标签页定时刷新 · Manifest V3 后台 service worker（ES module） */
 
-import { PREFIX, PRESETS } from "./shared/config.js";
-import { DEFAULT_INTERVAL_SEC, clampInterval, hostOf, sameHost, sameSite, siteRoot } from "./shared/logic.js";
-
-const DEFAULT_SETTINGS = {
-  bypassCache: true,
-  skipDiscarded: false,
-  lastIntervalSec: DEFAULT_INTERVAL_SEC
-};
+import { PREFIX, PRESETS, DEFAULT_SETTINGS } from "./shared/config.js";
+import {
+  RESTRICTED_URL,
+  clampInterval,
+  domainChain,
+  hostOf,
+  sameHost,
+  sameSite,
+  siteRoot,
+  tabShowsUrl,
+} from "./shared/logic.js";
 
 /* cookie 备份按主机分键存储，避免多站点并发备份时互相覆盖 */
 const COOKIE_BACKUP_PREFIX = "cookieBackup:";
@@ -16,6 +19,8 @@ const COOKIE_BACKUP_MAX_KEYS = 20;
 const COOKIE_BACKUP_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /* 单站点备份的 cookie 条数上限，防止极端站点把存储越写越大 */
 const MAX_COOKIES_PER_HOST = 200;
+/* 备份失败（如触顶 storage 配额）只告警一次，避免每次刷新都刷日志 */
+let cookieBackupWarned = false;
 
 function alarmName(tabId) {
   return PREFIX + tabId;
@@ -85,6 +90,9 @@ function startTask(tabId, seconds) {
     if (!tab || !tab.url) {
       throw new Error(chrome.i18n.getMessage("errTabGone") || "Tab unavailable");
     }
+    if (RESTRICTED_URL.test(tab.url)) {
+      throw new Error(chrome.i18n.getMessage("errRestricted") || "Browser internal pages cannot be auto-refreshed");
+    }
     const url = tab.url;
     const tasks = await getTasks();
     tasks[tabId] = { intervalSec: safe, createdAt: Date.now(), url };
@@ -111,8 +119,15 @@ function stopTask(tabId) {
   });
 }
 
-/* 备份清理三条件：站点不再被任何任务使用 / 超过 TTL / 超过站点数上限（按时间留新） */
+/* 备份清理三条件：站点不再被任何任务使用 / 超过 TTL / 超过站点数上限（按时间留新）；
+   备份功能关闭时不留死数据，清空全部备份 */
 async function pruneCookieBackups(remainingTasks) {
+  if (!(await getSettings()).cookieBackup) {
+    const all = await chrome.storage.local.get(null);
+    const keys = Object.keys(all).filter((k) => k.startsWith(COOKIE_BACKUP_PREFIX));
+    if (keys.length > 0) await chrome.storage.local.remove(keys);
+    return;
+  }
   const roots = new Set();
   for (const t of Object.values(remainingTasks || {})) {
     const r = siteRoot(hostOf(t.url));
@@ -165,19 +180,10 @@ async function reloadTab(tabId) {
   await chrome.tabs.reload(tabId, { bypassCache: !!settings.bypassCache });
 }
 
-/* 主机的域链：a.b.example.com → b.example.com → example.com；登录票据常种在父域 */
-function domainChain(host) {
-  const parts = host.split(".").filter(Boolean);
-  const list = [];
-  for (let i = 0; i < parts.length - 1; i++) {
-    list.push(parts.slice(i).join("."));
-  }
-  return list;
-}
-
-/* 备份该主机及全部父域的 cookie；按主机独立存储 */
+/* 备份该主机及全部父域的 cookie；按主机独立存储；仅在与监控目标同根域且开关开启时执行 */
 async function backupCookies(tabId) {
   try {
+    if (!(await getSettings()).cookieBackup) return;
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (!tab || !tab.url) return;
     let host;
@@ -219,7 +225,10 @@ async function backupCookies(tabId) {
       [COOKIE_BACKUP_PREFIX + host]: { cookies, timestamp: Date.now(), schemaVersion: 2 }
     });
   } catch (e) {
-    console.warn("Cookie backup failed:", e);
+    if (!cookieBackupWarned) {
+      cookieBackupWarned = true;
+      console.warn("Cookie backup failed (further failures are silent):", e);
+    }
   }
 }
 
@@ -372,16 +381,6 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   reopenTaskTab(tabId);
 });
 
-/* 取 origin+pathname 作为网址匹配键（忽略 hash 查询参数差异） */
-function urlKey(u) {
-  try {
-    const x = new URL(u);
-    return x.origin + x.pathname;
-  } catch (e) {
-    return null;
-  }
-}
-
 /* 清理标签页已不存在的任务（弹窗打开时调用） */
 async function cleanupInvalidTasks() {
   const tasks = await getTasks();
@@ -404,28 +403,27 @@ async function prune(adoptLegacyUrls = false) {
   /* 清理 v1.4.1 及之前“单一对象”格式的旧备份 */
   await chrome.storage.local.remove("cookieBackup");
 
-  /* 先恢复所有任务站点的 cookie */
-  const initial = await getTasks();
-  const restoredHosts = new Set();
-  for (const task of Object.values(initial)) {
-    if (!task.url) continue;
-    let host;
-    try {
-      host = new URL(task.url).hostname;
-    } catch (e) {
-      continue;
-    }
-    if (restoredHosts.has(host)) continue;
-    if (await restoreCookies(host)) restoredHosts.add(host);
-  }
+  const settings = await getSettings();
 
-  /* 网址与任务一致（精确或 origin+pathname 相等）的标签页判定 */
-  const tabShowsUrl = (tab, url) => {
-    if (!tab || !tab.url || !url) return false;
-    if (tab.url === url) return true;
-    const k = urlKey(url);
-    return !!k && urlKey(tab.url) === k;
-  };
+  /* 按注册域恢复所有备份主机（含 SSO 登录所在的兄弟子域），不再只按任务网址的精确主机；
+     开关关闭时跳过，pruneCookieBackups 会在下方锁内清掉遗留备份 */
+  const initial = await getTasks();
+  const taskRoots = new Set();
+  for (const task of Object.values(initial)) {
+    const r = siteRoot(hostOf(task.url));
+    if (r) taskRoots.add(r);
+  }
+  const restoredRoots = new Set();
+  if (settings.cookieBackup) {
+    const all = await chrome.storage.local.get(null);
+    for (const key of Object.keys(all)) {
+      if (!key.startsWith(COOKIE_BACKUP_PREFIX)) continue;
+      const host = key.slice(COOKIE_BACKUP_PREFIX.length);
+      const root = siteRoot(host);
+      if (!root || !taskRoots.has(root)) continue;
+      if (await restoreCookies(host)) restoredRoots.add(root);
+    }
+  }
 
   /* 把死 tabId 的任务重新挂接到正在打开的标签页（会话恢复后 ID 会变），挂接不上就重新打开 */
   await withTaskLock(async () => {
@@ -470,11 +468,7 @@ async function prune(adoptLegacyUrls = false) {
           periodInMinutes: task.intervalSec / 60
         });
         /* 会话恢复的页面是在 cookie 恢复前加载的，补一次刷新让登录态生效 */
-        let host = null;
-        try {
-          host = new URL(match.url || task.url).hostname;
-        } catch (e) {}
-        if (host && restoredHosts.has(host)) {
+        if (restoredRoots.has(siteRoot(hostOf(match.url || task.url)))) {
           chrome.tabs.reload(match.id).catch(() => {});
         }
       } else if (task.url && /^https?:/i.test(task.url)) {

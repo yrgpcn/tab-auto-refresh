@@ -5,7 +5,7 @@
 ## 仓库结构
 
 - 仓库远端为 `https://github.com/yrgpcn/tab-auto-refresh.git`，GitHub 仓库是 public，默认分支为 `main`；旧名 `chrome-extensions` 会由 GitHub 重定向
-- 本地检出目录仍可能是历史名称 `D:\Github\chrome-extensions`
+- 本地检出目录为 `D:\Github\tab-auto-refresh`（旧仓库名 `chrome-extensions` 由 GitHub 重定向）
 - 本仓库是 `tab-auto-refresh` 插件的专属仓库（2026-09-09 起不再作为多插件集合仓库）；插件源码在 `tab-auto-refresh/` 文件夹，测试与工具在仓库根
 - 全仓库统一用根目录 `README.md` 承载插件功能、安装、边界与技术栈；插件文件夹内**不放**独立 README（已合并）
 - `.github/workflows/release.yml`：tag 驱动的自动发布；先跑仓库校验与单元测试，再比对 tag 版本与 manifest 版本，任一失败即不发布
@@ -28,10 +28,10 @@
 
 ## tab-auto-refresh 要点
 
-- 权限：alarms / storage / tabs / contextMenus / notifications
+- 权限：alarms / storage / tabs / contextMenus / notifications / cookies
 - `minimum_chrome_version: 120`（30 秒级 alarms 依赖该版本）
 - 任务与本机状态存于 `chrome.storage.local`：`tasks` 为 tabId → `{ intervalSec, createdAt, url }` 映射；`pausedAll` 为全局暂停标记
-- 偏好设置存于 `chrome.storage.sync`：`settings` 为 `{ bypassCache, skipDiscarded, lastIntervalSec }`；读取时若 sync 为空会尝试从 local 迁移旧设置
+- 偏好设置存于 `chrome.storage.sync`：`settings` 为 `{ bypassCache, skipDiscarded, cookieBackup, lastIntervalSec }`；默认值统一在 `shared/config.js` 的 `DEFAULT_SETTINGS`（弹窗与后台共用）；读取时若 sync 为空会尝试从 local 迁移旧设置
 - 快捷键启动任务复用 `settings.lastIntervalSec`（最近一次成功任务的实际间隔）；无记录时由默认值回退到 5 分钟
 - 手动开始新任务（弹窗/右键/快捷键）会自动解除 `pausedAll`；暂停期间 alarm 跳过触发，恢复后按原周期继续；角标暂停时显示 `‖`
 - alarm 命名 `refresh-<tabId>`；`PREFIX` / `PRESETS` 定义在 `shared/config.js`，后台与弹窗共用（service worker 是 ES module）
@@ -42,7 +42,10 @@
 - 弹窗每秒重新拉取 alarm 列表再重绘倒计时：alarm 周期触发不会触发 `storage.onChanged`，只重绘文本会让倒计时停在 00:00
 - 后台保存设置时合并既有 `settings`，避免只更新复选框时丢失 `lastIntervalSec`
 - 弹窗底部有仓库地址页脚（`#repoFooter`，popup.html 内静态 `<a target="_blank">`，URL 明文不参与 i18n）
-- cookie 备份（`cookieBackup:<host>`）只写入与监控目标同根域的站点；备份对象含 `schemaVersion: 2` 与每条 cookie 的 `hostOnly`；还原时 `hostOnly === true` 省略 `domain`（防止 `__Host-` 票据写入失败/作用域扩大），`=== false` 传 `domain`，字段缺失的 v1 旧备份统一传 `domain`（旧行为）
+- cookie 备份（`cookieBackup:<host>`）由 `settings.cookieBackup` 开关控制（默认**关闭**，明文存储的安全说明在 README）：关闭时 `backupCookies` 直接跳过、启动恢复跳过、`pruneCookieBackups` 清空全部备份；开启后只写入与监控目标同根域的站点；备份对象含 `schemaVersion: 2` 与每条 cookie 的 `hostOnly`；还原时 `hostOnly === true` 省略 `domain`（防止 `__Host-` 票据写入失败/作用域扩大），`=== false` 传 `domain`，字段缺失的 v1 旧备份统一传 `domain`（旧行为）
+- 启动恢复按注册域匹配：`cookieBackup:*` 键的 `siteRoot` 落在任一任务根域集合内即恢复，覆盖 SSO 登录所在的兄弟子域（此前只按 task.url 精确主机恢复，兄弟子域备份是死数据）；恢复成功的根域记录在 `restoredRoots`，用于决定认领的标签页是否补刷新
+- 受限页面（`chrome://` 等）由 `shared/logic.js` 的 `RESTRICTED_URL` 判定：弹窗显示提示，`startTask` 直接抛 `errRestricted` 拒绝建任务
+- `domainChain` / `urlKey` / `tabShowsUrl` 是纯函数，与 `RESTRICTED_URL` 同在 `shared/logic.js`，被单元测试覆盖
 - 备份淘汰三条件：站点不再被任何任务使用、超过 30 天 TTL、超过 20 站上限（按时间留新）；停止任务与启动恢复时统一执行。注意 `chrome.storage.local.get` 不支持通配符，清理必须 `get(null)` 后按前缀过滤
 - 启动恢复 `prune()` 采用"标签页认领"：任务 tabId 仍被占用不代表挂接正确（重启后 ID 会重新分配），需该标签页 URL 与任务精确相等或 `urlKey` 相等才保留认领；未认领任务做重映射时跳过已被其他任务认领的页面，同一网址开在多个标签页时每页至多挂一个任务，认领不到则重开
 - `prune(adoptLegacyUrls)` 区分触发来源：扩展安装/更新传 `true`（浏览器没重启，tabId 仍有效，可为 v1.4.3 前无网址的旧任务补记当前页面网址）；浏览器重启传 `false`（ID 已重新分配，旧任务无从辨认目标，淘汰并 console.warn）。注册必须写成 `() => prune(true/false)`，直接 `addListener(prune)` 会让 `onInstalled` 的事件详情对象把标志位判成真
@@ -53,9 +56,17 @@
 
 - GitHub 仓库 `yrgpcn/tab-auto-refresh` 已设置为 public
 
-- `tab-auto-refresh` 最新**已发布**版本是 `1.5.0`，tag 为 `tab-auto-refresh/v1.5.0`；发布面只保留最新 Release 与 tag，旧版本发布随新版本清理
-- `1.5.0` 包含弹窗仓库地址页脚 + 代码校对修复、cookie 备份生命周期治理与资源优化，以及二次修复：storage 通配符、tabId 复用挂接、hostOnly 还原、发布版本防呆
+- `tab-auto-refresh` 最新**已发布**版本是 `1.6.0`，tag 为 `tab-auto-refresh/v1.6.0`；发布面只保留最新 Release 与 tag，旧版本发布随新版本清理（release.yml 的 Prune 步骤自动执行）
+- `1.6.0` 包含：cookie 备份改 opt-in 开关（默认关）、启动恢复按注册域匹配全部备份主机（修复兄弟子域 SSO 票据恢复）、受限页面拒绝建任务、纯逻辑下沉 shared 并补测试、发布工作流自动清理旧 Release/tag
 - 该版本起 Release zip 顶层包含 `tab-auto-refresh/` 文件夹
+
+## 下一步计划（2026-09-11）
+
+背景：1.4.5 实测出现“服务器端空闲超时掉登录”——cookie 备份只能恢复票据，救不回服务端已注销的会话。按判定机制分三类：按用户交互心跳计时（可注入合成活动解决）、按最后请求计时（浏览器开着即被刷新覆盖，关机窗口无解）、绝对时长上限（无解）。
+
+- **合成活动注入**（opt-in，默认关）：任务启动时经 `chrome.scripting.registerContentScripts` 动态注册 keep-alive 内容脚本到监控站点 origin，页面内每约 60 秒派发 `mousemove` / `keydown` 等事件冒充用户在场；任务停止时注销。manifest 需新增 `scripting` 权限。已知边界：校验 `event.isTrusted` 的站点无效；`document.hidden` 时暂停心跳的站点无效（不做主世界改写 visible 的 hack）
+- **掉线检测 + 通知**：备份时发现会话 cookie 从有到无即停止覆盖备份并弹系统通知，防备份污染并提醒重登
+- **使用边界说明**（README）：绝对时长上限、浏览器关闭 / 系统睡眠窗口救不了；保活机器需保持浏览器开启且不睡眠
 
 ## 打包规则
 

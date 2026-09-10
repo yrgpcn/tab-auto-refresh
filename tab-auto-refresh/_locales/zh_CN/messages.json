@@ -59,7 +59,9 @@
     "message": "$COUNT$ 项",
     "placeholders": { "count": { "content": "$1" } }
   },
-  "restrictHint": { "message": "浏览器内部页面（chrome:// 等）可能无法被自动刷新" },
+  "restrictHint": { "message": "浏览器内部页面（chrome:// 等）无法开启定时刷新" },
+  "errRestricted": { "message": "浏览器内部页面（chrome:// 等）无法开启定时刷新" },
+  "cookieBackupLabel": { "message": "重启后恢复登录：本机备份站点 cookie（明文存储，请知悉风险）" },
   "skipDiscardedLabel": { "message": "跳过已丢弃（休眠）的标签页" },
   "pauseAll": { "message": "暂停全部" },
   "resumeAll": { "message": "恢复全部" },

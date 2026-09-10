@@ -1,6 +1,7 @@
-import { PREFIX, PRESETS } from "./shared/config.js";
+import { PREFIX, PRESETS, DEFAULT_SETTINGS } from "./shared/config.js";
 import {
   DEFAULT_INTERVAL_SEC,
+  RESTRICTED_URL,
   clampInterval,
   formatCountdown,
   formatInterval
@@ -8,11 +9,9 @@ import {
 
 const $ = (id) => document.getElementById(id);
 
-const RESTRICTED = /^(chrome|edge|devtools|about|chrome-extension|moz-extension):/i;
-
 let currentTab = null;
 let tasks = {};
-let settings = { bypassCache: true, skipDiscarded: false };
+let settings = Object.assign({}, DEFAULT_SETTINGS);
 let pausedAll = false;
 let alarmsMap = {};
 let msgTimer = null;
@@ -50,6 +49,7 @@ function setMsg(text) {
 
 function applyI18n() {
   document.title = msg("extName");
+  document.documentElement.lang = chrome.i18n.getUILanguage();
   for (const el of document.querySelectorAll("[data-i18n]")) {
     el.textContent = msg(el.dataset.i18n);
   }
@@ -76,10 +76,7 @@ async function refreshState() {
   }
   const local = await chrome.storage.local.get(["tasks", "pausedAll"]);
   tasks = local.tasks || {};
-  settings = Object.assign(
-    { bypassCache: true, skipDiscarded: false, lastIntervalSec: DEFAULT_INTERVAL_SEC },
-    data.settings || {}
-  );
+  settings = Object.assign({}, DEFAULT_SETTINGS, data.settings || {});
   pausedAll = !!local.pausedAll;
   await syncAlarms();
 }
@@ -101,7 +98,7 @@ function renderCurrentTab() {
   }
   $("tabTitle").textContent = currentTab ? currentTab.title || msg("untitledTab") : "";
   $("tabUrl").textContent = currentTab && currentTab.url ? currentTab.url : "";
-  $("restrictHint").hidden = !(currentTab && RESTRICTED.test(currentTab.url || ""));
+  $("restrictHint").hidden = !(currentTab && RESTRICTED_URL.test(currentTab.url || ""));
 
   const running = !!(currentTab && tasks[currentTab.id]);
   const btn = $("toggleBtn");
@@ -242,7 +239,8 @@ async function saveSettings() {
     type: "save-settings",
     settings: {
       bypassCache: $("bypassCheck").checked,
-      skipDiscarded: $("skipDiscardedCheck").checked
+      skipDiscarded: $("skipDiscardedCheck").checked,
+      cookieBackup: $("cookieBackupCheck").checked
     }
   });
 }
@@ -258,6 +256,7 @@ async function init() {
   initPresetSelect();
   $("bypassCheck").checked = settings.bypassCache !== false;
   $("skipDiscardedCheck").checked = !!settings.skipDiscarded;
+  $("cookieBackupCheck").checked = !!settings.cookieBackup;
   await renderAll();
 
   $("toggleBtn").addEventListener("click", async () => {
@@ -291,6 +290,7 @@ async function init() {
 
   $("bypassCheck").addEventListener("change", saveSettings);
   $("skipDiscardedCheck").addEventListener("change", saveSettings);
+  $("cookieBackupCheck").addEventListener("change", saveSettings);
 
   $("pauseAllBtn").addEventListener("click", async () => {
     await send({ type: "toggle-pause-all" });
@@ -305,7 +305,9 @@ async function init() {
     renderCountdowns();
   }, 1000);
 
-  chrome.storage.onChanged.addListener(async () => {
+  /* 只在任务 / 暂停 / 设置变化时重绘；cookie 备份等高频键的写入不触发全量刷新 */
+  chrome.storage.onChanged.addListener(async (changes) => {
+    if (!changes.tasks && !changes.pausedAll && !changes.settings) return;
     await refreshState();
     await renderAll();
   });
