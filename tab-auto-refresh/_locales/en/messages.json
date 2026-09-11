@@ -6,6 +6,10 @@
   "menuStop": { "message": "Stop auto refresh" },
   "notifTitle": { "message": "Tab Auto Refresh" },
   "notifStopped": { "message": "An auto refresh task was cancelled (the tab was closed or the page is restricted)" },
+  "notifSessionLost": {
+    "message": "The login session for $SITE$ has expired. Backup for this site is paused to avoid overwriting good state; please sign in again",
+    "placeholders": { "site": { "content": "$1" } }
+  },
   "preset30s": { "message": "Every 30 seconds" },
   "preset1m": { "message": "Every 1 minute" },
   "preset2m": { "message": "Every 2 minutes" },
@@ -63,6 +67,7 @@
   "restrictHint": { "message": "Browser internal pages (chrome:// etc.) cannot be auto-refreshed" },
   "errRestricted": { "message": "Browser internal pages (chrome:// etc.) cannot be auto-refreshed" },
   "cookieBackupLabel": { "message": "Restore logins after restart: backs up site cookies locally (stored in plaintext)" },
+  "keepAliveLabel": { "message": "Keep awake: injects simulated activity into monitored pages to delay server-side login expiry" },
   "intervalLabel": { "message": "Interval" },
   "customPlaceholder": { "message": "Custom seconds" },
   "bypassLabel": { "message": "Bypass cache when refreshing (like Ctrl+F5)" },

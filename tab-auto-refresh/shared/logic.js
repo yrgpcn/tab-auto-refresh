@@ -3,7 +3,7 @@
 export const MIN_INTERVAL_SEC = 30;
 export const DEFAULT_INTERVAL_SEC = 300;
 
-/* 兜底刷新间隔：无效输入回退默认值，过小的值提升到最小值 */
+/* 兜底刷新间隔：无效输入与过小值都按最小间隔处理（30 秒起步） */
 export function clampInterval(seconds, min = MIN_INTERVAL_SEC) {
   const n = Math.floor(Number(seconds));
   if (!Number.isFinite(n) || n <= 0) {
@@ -90,6 +90,44 @@ export function domainChain(host) {
     list.push(parts.slice(i).join("."));
   }
   return list;
+}
+
+/* 会话 cookie：无过期时间、随浏览器关闭而清除；登录票据通常是这类 */
+export function isSessionCookie(c) {
+  return !!c && !c.expirationDate;
+}
+
+/* cookie 列表（备份或实时采样）中是否含会话 cookie */
+export function hasSessionCookie(cookies) {
+  return Array.isArray(cookies) && cookies.some(isSessionCookie);
+}
+
+/* 掉线确认窗口：单次“会话票据从有到无”可能只是站点换票节奏
+   （会话票换成持久票、采样时机差），连续 N 次缺失才判定掉线，防误报冻结备份 */
+export const SESSION_LOST_CONFIRM_SAMPLES = 2;
+/* 掉线通知最小间隔：持续掉线期间不必每个刷新周期都弹 */
+export const SESSION_LOST_NOTIFY_MS = 6 * 60 * 60 * 1000;
+
+/* 单次采样判定：上次备份里还有会话 cookie，本次采样却一个都没有 */
+export function sessionLostDetected(prevCookies, nextCookies) {
+  return hasSessionCookie(prevCookies) && !hasSessionCookie(nextCookies);
+}
+
+/**
+ * 掉线确认状态机（纯函数）：把“疑似 → 确认 → 恢复”的决策从备份流程里拆出来便于测试。
+ * @param {object|null} prevEntry 上一份备份记录
+ * @param {number} streak 连续缺失采样计数（含本次；0 = 本次采样正常）
+ * @param {number} now 当前毫秒时间戳
+ * @returns {{lost?: boolean, notify?: boolean, entry?: object}} lost=冻结备份；
+ *   notify=本次要弹通知（按 SESSION_LOST_NOTIFY_MS 节流）；entry=需并入备份记录的字段
+ */
+export function nextBackupState(prevEntry, streak, now) {
+  if (!streak) return { lost: false };
+  if (streak >= SESSION_LOST_CONFIRM_SAMPLES) {
+    const throttled = prevEntry && prevEntry.sessionLostAt && now - prevEntry.sessionLostAt < SESSION_LOST_NOTIFY_MS;
+    return { lost: true, notify: !throttled, entry: { sessionLostAt: now } };
+  }
+  return { lost: false, entry: { sessionLostStreak: streak } };
 }
 
 /* 取 origin+pathname 作为网址匹配键（忽略 hash 查询参数差异） */

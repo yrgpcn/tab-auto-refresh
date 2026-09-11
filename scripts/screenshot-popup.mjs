@@ -48,7 +48,7 @@ page.on("console", (entry) => {
 
 await page.addInitScript((msgs) => {
   const now = Date.now();
-  const settings = { bypassCache: true, skipDiscarded: false, cookieBackup: true };
+  const settings = { bypassCache: true, skipDiscarded: false, cookieBackup: true, keepAlive: true };
   const tasks = {
     1: { intervalSec: 300, createdAt: now - 61_000 },
     2: { intervalSec: 60, createdAt: now - 121_000 },
@@ -70,6 +70,7 @@ await page.addInitScript((msgs) => {
   const alarm = (name, inMs) => ({ name, scheduledTime: now + inMs });
   window.chrome = {
     i18n: {
+      getUILanguage: () => "zh-CN",
       getMessage(key, subs) {
         const entry = msgs[key];
         if (!entry) return key;

@@ -6,8 +6,10 @@ import {
   clampInterval,
   domainChain,
   hostOf,
+  nextBackupState,
   sameHost,
   sameSite,
+  sessionLostDetected,
   siteRoot,
   tabShowsUrl,
 } from "./shared/logic.js";
@@ -100,6 +102,7 @@ function startTask(tabId, seconds) {
     /* 开启任务时立即备份一次，避免首次刷新前关闭浏览器导致无备份可恢复 */
     await backupCookies(tabId);
     await chrome.alarms.create(alarmName(tabId), { periodInMinutes: safe / 60 });
+    await scheduleKeepAlive(tabId);
     await chrome.storage.local.set({ pausedAll: false });
     await updateBadge();
     await rememberLastInterval(safe);
@@ -111,6 +114,7 @@ function stopTask(tabId) {
   return withTaskLock(async () => {
     const tasks = await getTasks();
     if (!tasks[tabId]) return;
+    stopKeepAlive(tabId);
     delete tasks[tabId];
     await setTasks(tasks);
     await chrome.alarms.clear(alarmName(tabId));
@@ -149,6 +153,42 @@ async function pruneCookieBackups(remainingTasks) {
   for (const e of fresh.slice(COOKIE_BACKUP_MAX_KEYS)) stale.push(e.key);
   if (stale.length > 0) await chrome.storage.local.remove(stale);
 }
+
+/* ---- 后台保活：默认开启的合成活动注入（对抗"按用户交互计时"的服务器端会话过期）
+   注入是标签页级：startTask 即时注入 + tabs.onUpdated 对任务页每次加载完成补注入。
+   不用 registerContentScripts：matches 是站点级会溢出到同站无关标签页，
+   且站点注册 id 与任务 id 语义分裂，重启后停止任务清不掉注册。 ---- */
+const KEEPALIVE_SCRIPT = "content/keepalive.js";
+
+/* 向任务标签页注入心跳脚本；脚本守卫可重启，重复注入等价于重启心跳 */
+async function keepAliveInject(tabId) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: [KEEPALIVE_SCRIPT] });
+  } catch (e) {
+    /* 受限页面 / 渲染上下文未就绪 / API 异常：静默降级，绝不阻塞任务主流程 */
+  }
+}
+
+/* 任务启动：立即注入当前已打开的页面；后续页面加载由 onUpdated 承接 */
+async function scheduleKeepAlive(tabId) {
+  if (!(await getSettings()).keepAlive) return;
+  await keepAliveInject(tabId);
+}
+
+/* 任务停止：通知页面内脚本自停（标签页级注入没有注册表需要清理） */
+function stopKeepAlive(tabId) {
+  chrome.tabs.sendMessage(tabId, { type: "keepalive-off" }).catch(() => {});
+}
+
+/* 设置变化（含跨设备同步）、浏览器启动恢复后，按开关对存量任务页收敛心跳状态 */
+async function reconcileKeepAlive() {
+  const [settings, tasks] = await Promise.all([getSettings(), getTasks()]);
+  for (const tabId of Object.keys(tasks).map(Number)) {
+    if (settings.keepAlive) await keepAliveInject(tabId);
+    else stopKeepAlive(tabId);
+  }
+}
+
 
 /* 快捷键没有显式间隔，复用最近一次手动任务的实际间隔 */
 async function rememberLastInterval(seconds) {
@@ -221,8 +261,32 @@ async function backupCookies(tabId) {
       hostOnly: c.hostOnly
     }));
     if (cookies.length > MAX_COOKIES_PER_HOST) cookies.length = MAX_COOKIES_PER_HOST;
+    const key = COOKIE_BACKUP_PREFIX + host;
+    const now = Date.now();
+    /* 掉线检测（确认窗口）：上次备份里有会话票据、本次采样却没有，先记一次疑似；
+       连续 SESSION_LOST_CONFIRM_SAMPLES 次缺失才判定服务器端注销——单次缺失可能只是
+       站点换票节奏（会话票换成持久票等），直接冻结会把备份误锁在旧状态。
+       确认后冻结备份保住最后一次在线状态并通知（按 sessionLostAt 节流）；
+       重新登录后采样恢复含会话票据，计数清零、恢复正常覆盖 */
+    const prevEntry = (await chrome.storage.local.get(key))[key];
+    const suspect = !!prevEntry && sessionLostDetected(prevEntry.cookies, cookies);
+    const streak = suspect ? (prevEntry.sessionLostStreak || 0) + 1 : 0;
+    const st = nextBackupState(prevEntry, streak, now);
+    if (st.lost) {
+      if (st.notify) {
+        await chrome.storage.local.set({ [key]: Object.assign({}, prevEntry, st.entry) });
+        notifySessionLost(host);
+      }
+      return;
+    }
+    if (streak > 0) {
+      await chrome.storage.local.set({
+        [key]: { cookies, timestamp: now, schemaVersion: 2, sessionLostStreak: streak }
+      });
+      return;
+    }
     await chrome.storage.local.set({
-      [COOKIE_BACKUP_PREFIX + host]: { cookies, timestamp: Date.now(), schemaVersion: 2 }
+      [key]: { cookies, timestamp: now, schemaVersion: 2 }
     });
   } catch (e) {
     if (!cookieBackupWarned) {
@@ -315,6 +379,18 @@ function notifyTaskStopped(tabId) {
     .catch(() => {}); /* 系统通知被关闭时不影响任务清理流程 */
 }
 
+/* 服务器端会话失效提醒：cookie 备份只能恢复票据，救不回已注销的会话 */
+function notifySessionLost(host) {
+  chrome.notifications
+    .create("session-lost-" + host, {
+      type: "basic",
+      iconUrl: "icons/icon48.png",
+      title: chrome.i18n.getMessage("notifTitle"),
+      message: chrome.i18n.getMessage("notifSessionLost", [host])
+    })
+    .catch(() => {});
+}
+
 /* 定时器触发：刷新对应标签页 */
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (!alarm.name.startsWith(PREFIX)) return;
@@ -351,6 +427,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (!tasks[tabId]) return; /* 快照与存储有竞态时以存储为准 */
   await backupCookies(tabId);
   await refreshTaskUrl(tabId);
+  /* 保活注入点：每次加载完成补注入，覆盖刷新、页面内导航与会话恢复后的首载 */
+  if ((await getSettings()).keepAlive) await keepAliveInject(tabId);
 });
 
 /* 按任务记录的网址重新打开标签页并重映射任务与定时器；返回是否成功 */
@@ -366,6 +444,7 @@ function reopenTaskTab(oldTabId) {
     delete tasks[oldTabId];
     tasks[newTab.id] = task;
     await setTasks(tasks);
+    stopKeepAlive(oldTabId);
     await chrome.alarms.clear(alarmName(oldTabId));
     await chrome.alarms.create(alarmName(newTab.id), {
       periodInMinutes: task.intervalSec / 60
@@ -497,8 +576,8 @@ async function prune(adoptLegacyUrls = false) {
 
 /* 显式传参而非直接 addListener(prune)：onInstalled 会把事件详情对象作为首个实参传入，
    会被 adoptLegacyUrls 误判为真值 */
-chrome.runtime.onStartup.addListener(() => prune(false));
-chrome.runtime.onInstalled.addListener(() => prune(true));
+chrome.runtime.onStartup.addListener(async () => { await prune(false); await reconcileKeepAlive(); });
+chrome.runtime.onInstalled.addListener(async () => { await prune(true); await reconcileKeepAlive(); });
 
 /* 标签页与网页上的右键菜单 */
 function buildMenus() {
@@ -558,6 +637,11 @@ chrome.commands.onCommand.addListener(async (command) => {
   } catch (e) {
     console.warn("Command toggle-refresh failed:", e);
   }
+});
+
+/* 设置变化（含跨设备同步）后收敛保活注册表，弹窗保存与开关切换都经此路径 */
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "sync" && changes.settings) reconcileKeepAlive();
 });
 
 /* 与弹窗通信 */

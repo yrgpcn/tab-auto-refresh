@@ -6,6 +6,10 @@
   "menuStop": { "message": "停止定时刷新" },
   "notifTitle": { "message": "标签页定时刷新" },
   "notifStopped": { "message": "一个定时刷新任务已自动取消（标签页已关闭或页面受限）" },
+  "notifSessionLost": {
+    "message": "检测到 $SITE$ 的登录会话已失效，已暂停覆盖该站点备份以防污染，请在页面中重新登录",
+    "placeholders": { "site": { "content": "$1" } }
+  },
   "preset30s": { "message": "每 30 秒" },
   "preset1m": { "message": "每 1 分钟" },
   "preset2m": { "message": "每 2 分钟" },
@@ -62,6 +66,7 @@
   "restrictHint": { "message": "浏览器内部页面（chrome:// 等）无法开启定时刷新" },
   "errRestricted": { "message": "浏览器内部页面（chrome:// 等）无法开启定时刷新" },
   "cookieBackupLabel": { "message": "重启后恢复登录：本机备份站点 cookie（明文存储，请知悉风险）" },
+  "keepAliveLabel": { "message": "后台保活：定期向监控页面注入模拟活动，延缓服务器端登录过期" },
   "skipDiscardedLabel": { "message": "跳过已丢弃（休眠）的标签页" },
   "pauseAll": { "message": "暂停全部" },
   "resumeAll": { "message": "恢复全部" },

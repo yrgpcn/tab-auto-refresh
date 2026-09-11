@@ -240,7 +240,8 @@ async function saveSettings() {
     settings: {
       bypassCache: $("bypassCheck").checked,
       skipDiscarded: $("skipDiscardedCheck").checked,
-      cookieBackup: $("cookieBackupCheck").checked
+      cookieBackup: $("cookieBackupCheck").checked,
+      keepAlive: $("keepAliveCheck").checked
     }
   });
 }
@@ -257,6 +258,7 @@ async function init() {
   $("bypassCheck").checked = settings.bypassCache !== false;
   $("skipDiscardedCheck").checked = !!settings.skipDiscarded;
   $("cookieBackupCheck").checked = !!settings.cookieBackup;
+  $("keepAliveCheck").checked = !!settings.keepAlive;
   await renderAll();
 
   $("toggleBtn").addEventListener("click", async () => {
@@ -291,6 +293,7 @@ async function init() {
   $("bypassCheck").addEventListener("change", saveSettings);
   $("skipDiscardedCheck").addEventListener("change", saveSettings);
   $("cookieBackupCheck").addEventListener("change", saveSettings);
+  $("keepAliveCheck").addEventListener("change", saveSettings);
 
   $("pauseAllBtn").addEventListener("click", async () => {
     await send({ type: "toggle-pause-all" });

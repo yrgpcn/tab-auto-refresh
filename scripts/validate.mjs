@@ -122,6 +122,65 @@ for (const [path, manifest] of jsonFiles) {
   }
 }
 
+/* 引用完整性：manifest 与 JS 里引用到的运行时文件必须真实存在于插件目录。
+   CI 从 tag 检出构建，若源码引用了未提交的文件，这里会失败拦住发布。 */
+function resolveRef(pluginDir, ref) {
+  const clean = ref.replace(/^\.\//, "").replace(/\\/g, "/");
+  return join(pluginDir, clean);
+}
+
+for (const [path, manifest] of jsonFiles) {
+  if (!path.endsWith(join("manifest.json")) || !manifest) continue;
+  const pluginDir = dirname(path);
+  const refs = new Set();
+  if (manifest.background && manifest.background.service_worker) refs.add(manifest.background.service_worker);
+  if (manifest.action && manifest.action.default_popup) refs.add(manifest.action.default_popup);
+  for (const icons of [manifest.icons, manifest.action && manifest.action.default_icon]) {
+    if (icons && typeof icons === "object") for (const v of Object.values(icons)) refs.add(String(v));
+  }
+  for (const cs of manifest.content_scripts || []) {
+    for (const f of [...(cs.js || []), ...(cs.css || [])]) refs.add(f);
+  }
+  for (const key of ["popup", "options_page", "side_panel", "devtools_page"]) {
+    if (typeof manifest[key] === "string") refs.add(manifest[key]);
+  }
+  for (const ref of refs) {
+    if (!existsSync(resolveRef(pluginDir, ref))) {
+      problems.push(`${path}: manifest 引用了不存在的文件 ${ref}`);
+    }
+  }
+  /* JS 源码里的相对 import 与 "shared/xxx.js" "content/xxx.js" 形式的路径常量 */
+  const importRe = /from\s+["'](\.[\w./-]+)["']/g;
+  const pathRe = /["']((?:shared|content)\/[\w./-]+\.(?:js|css))["']/g;
+  walk(pluginDir, (file) => {
+    if (!/\.(js|mjs)$/.test(file)) return;
+    const src = readFileSync(file, "utf8");
+    const base = dirname(file);
+    for (const re of [importRe, pathRe]) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(src))) {
+        const target = m[1].startsWith(".")
+          ? join(base, m[1])
+          : resolveRef(pluginDir, m[1]);
+        if (!existsSync(target)) {
+          problems.push(`${file}: 引用了不存在的文件 ${m[1]}`);
+        }
+      }
+    }
+  });
+  /* git 可用时，插件目录里不允许出现未跟踪文件：
+     git archive 只打包已跟踪内容，未跟踪的运行时文件会静默缺件 */
+  if (existsSync(join(repoRoot, ".git"))) {
+    const res = spawnSync("git", ["-C", repoRoot, "ls-files", "--others", "--exclude-standard", "--", pluginDir], { encoding: "utf8" });
+    if (res.status === 0) {
+      for (const untracked of res.stdout.split(/\r?\n/).filter(Boolean)) {
+        problems.push(`${untracked}: 未纳入 git 跟踪，发布包会缺失该文件`);
+      }
+    }
+  }
+}
+
 if (problems.length > 0) {
   console.error(`校验失败（${problems.length} 个问题）：`);
   for (const problem of problems) console.error(` - ${problem}`);

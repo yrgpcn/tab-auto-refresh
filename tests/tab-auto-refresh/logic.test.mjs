@@ -11,8 +11,11 @@ import {
   formatCountdown,
   formatInterval,
   hostOf,
+  nextBackupState,
+  hasSessionCookie,
   sameHost,
   sameSite,
+  sessionLostDetected,
   siteRoot,
   tabShowsUrl,
   urlKey,
@@ -125,6 +128,56 @@ test("RESTRICTED_URL flags browser internal pages only", () => {
   }
   assert.ok(!RESTRICTED_URL.test("https://example.com"));
   assert.ok(!RESTRICTED_URL.test("http://localhost:3000/"));
+});
+
+test("hasSessionCookie detects cookies without expirationDate", () => {
+  assert.equal(hasSessionCookie([]), false);
+  assert.equal(hasSessionCookie(null), false);
+  assert.equal(hasSessionCookie([{ name: "a", expirationDate: 123 }]), false);
+  assert.equal(hasSessionCookie([{ name: "a", expirationDate: 123 }, { name: "b" }]), true);
+  assert.equal(hasSessionCookie([{ name: "b", expirationDate: 0 }]), true);
+});
+
+test("sessionLostDetected fires only when session cookies go from present to absent", () => {
+  const withSession = [{ name: "sid" }];
+  const persistentOnly = [{ name: "pref", expirationDate: 9e9 }];
+  /* 有 → 无：判定掉线 */
+  assert.equal(sessionLostDetected(withSession, persistentOnly), true);
+  assert.equal(sessionLostDetected(withSession, []), true);
+  /* 无 → 无：本来就没有可丢的会话（或从未登录），不误报 */
+  assert.equal(sessionLostDetected(persistentOnly, []), false);
+  assert.equal(sessionLostDetected([], []), false);
+  /* 有 → 有：会话仍在，正常 */
+  assert.equal(sessionLostDetected(withSession, withSession), false);
+  /* 首份备份（prev 为空）不判定 */
+  assert.equal(sessionLostDetected(undefined, persistentOnly), false);
+  assert.equal(sessionLostDetected(null, null), false);
+});
+
+test("keep-alive is on by default (only acts on tabs with an active task)", () => {
+  assert.equal(DEFAULT_SETTINGS.keepAlive, true);
+});
+
+test("nextBackupState requires a confirmation window before freezing backups", () => {
+  const now = 1_800_000_000_000;
+  /* 采样正常：不冻结、无附加字段（覆盖备份时自然清掉 streak / sessionLostAt） */
+  assert.deepEqual(nextBackupState(null, 0, now), { lost: false });
+  assert.deepEqual(nextBackupState({ sessionLostAt: now }, 0, now), { lost: false });
+  /* 第 1 次疑似：只记计数，不冻结不通知 */
+  const suspect = nextBackupState({ cookies: [] }, 1, now);
+  assert.equal(suspect.lost, false);
+  assert.deepEqual(suspect.entry, { sessionLostStreak: 1 });
+  /* 第 2 次（确认阈值）：冻结并要求通知 */
+  const confirmed = nextBackupState({ sessionLostStreak: 1 }, 2, now);
+  assert.equal(confirmed.lost, true);
+  assert.equal(confirmed.notify, true);
+  assert.deepEqual(confirmed.entry, { sessionLostAt: now });
+  /* 持续掉线：6 小时内的通知节流，超期恢复提醒 */
+  const throttled = nextBackupState({ sessionLostAt: now - 60_000 }, 3, now);
+  assert.equal(throttled.lost, true);
+  assert.equal(throttled.notify, false);
+  const overdue = nextBackupState({ sessionLostAt: now - 7 * 60 * 60 * 1000 }, 4, now);
+  assert.equal(overdue.notify, true);
 });
 
 test("cookie backup is opt-in: off by default", () => {

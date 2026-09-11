@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extName__",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "minimum_chrome_version": "120",
   "default_locale": "zh_CN",
   "description": "__MSG_extDesc__",
-  "permissions": ["alarms", "storage", "tabs", "contextMenus", "notifications", "cookies"],
+  "permissions": ["alarms", "storage", "tabs", "contextMenus", "notifications", "cookies", "scripting"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",

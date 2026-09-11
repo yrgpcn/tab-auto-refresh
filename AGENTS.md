@@ -28,10 +28,10 @@
 
 ## tab-auto-refresh 要点
 
-- 权限：alarms / storage / tabs / contextMenus / notifications / cookies
+- 权限：alarms / storage / tabs / contextMenus / notifications / cookies / scripting
 - `minimum_chrome_version: 120`（30 秒级 alarms 依赖该版本）
 - 任务与本机状态存于 `chrome.storage.local`：`tasks` 为 tabId → `{ intervalSec, createdAt, url }` 映射；`pausedAll` 为全局暂停标记
-- 偏好设置存于 `chrome.storage.sync`：`settings` 为 `{ bypassCache, skipDiscarded, cookieBackup, lastIntervalSec }`；默认值统一在 `shared/config.js` 的 `DEFAULT_SETTINGS`（弹窗与后台共用）；读取时若 sync 为空会尝试从 local 迁移旧设置
+- 偏好设置存于 `chrome.storage.sync`：`settings` 为 `{ bypassCache, skipDiscarded, cookieBackup, keepAlive, lastIntervalSec }`；默认值统一在 `shared/config.js` 的 `DEFAULT_SETTINGS`（弹窗与后台共用）；读取时若 sync 为空会尝试从 local 迁移旧设置
 - 快捷键启动任务复用 `settings.lastIntervalSec`（最近一次成功任务的实际间隔）；无记录时由默认值回退到 5 分钟
 - 手动开始新任务（弹窗/右键/快捷键）会自动解除 `pausedAll`；暂停期间 alarm 跳过触发，恢复后按原周期继续；角标暂停时显示 `‖`
 - alarm 命名 `refresh-<tabId>`；`PREFIX` / `PRESETS` 定义在 `shared/config.js`，后台与弹窗共用（service worker 是 ES module）
@@ -59,14 +59,15 @@
 - `tab-auto-refresh` 最新**已发布**版本是 `1.6.0`，tag 为 `tab-auto-refresh/v1.6.0`；发布面只保留最新 Release 与 tag，旧版本发布随新版本清理（release.yml 的 Prune 步骤自动执行）
 - `1.6.0` 包含：cookie 备份改 opt-in 开关（默认关）、启动恢复按注册域匹配全部备份主机（修复兄弟子域 SSO 票据恢复）、受限页面拒绝建任务、纯逻辑下沉 shared 并补测试、发布工作流自动清理旧 Release/tag
 - 该版本起 Release zip 顶层包含 `tab-auto-refresh/` 文件夹
+- **1.7.0 已完成开发（manifest 版本号已置 1.7.0，尚未打 tag 发布）**：后台保活（keep-alive，`settings.keepAlive` 默认开）+ 会话失效检测通知，实现要点见下节
 
-## 下一步计划（2026-09-11）
+## 1.7.0 实现要点（2026-09-11 完成开发）
 
 背景：1.4.5 实测出现“服务器端空闲超时掉登录”——cookie 备份只能恢复票据，救不回服务端已注销的会话。按判定机制分三类：按用户交互心跳计时（可注入合成活动解决）、按最后请求计时（浏览器开着即被刷新覆盖，关机窗口无解）、绝对时长上限（无解）。
 
-- **合成活动注入**（opt-in，默认关）：任务启动时经 `chrome.scripting.registerContentScripts` 动态注册 keep-alive 内容脚本到监控站点 origin，页面内每约 60 秒派发 `mousemove` / `keydown` 等事件冒充用户在场；任务停止时注销。manifest 需新增 `scripting` 权限。已知边界：校验 `event.isTrusted` 的站点无效；`document.hidden` 时暂停心跳的站点无效（不做主世界改写 visible 的 hack）
-- **掉线检测 + 通知**：备份时发现会话 cookie 从有到无即停止覆盖备份并弹系统通知，防备份污染并提醒重登
-- **使用边界说明**（README）：绝对时长上限、浏览器关闭 / 系统睡眠窗口救不了；保活机器需保持浏览器开启且不睡眠
+- **合成活动注入**（`settings.keepAlive`，默认开）：**标签页级**注入，不用 `registerContentScripts`（其 matches 是站点级，会溢出到同站无关标签页，且站点注册 id 与任务 id 语义分裂导致重启后清不掉）。注入点：startTask 即时 `executeScript`（仅补首屏）+ `tabs.onUpdated` complete 分支对任务页每次加载补注入（覆盖刷新、导航、会话恢复）；停止任务经 `keepalive-off` 消息让页面内脚本自停；`reconcileKeepAlive` 在 onStartup/onInstalled（prune 之后）与 sync.settings 变更时对存量任务页收敛开关状态。内容脚本 `content/keepalive.js` 每 45~75 秒派发 `mousemove` / `keydown`，守卫是可重启语义（`window.__tarKeepAlive` 存上一实例停止函数，重复注入=重启心跳，`keepalive-off` 清标记），同页 stop→start 不重载页面也能恢复。所有保活调用静默降级，不阻塞任务启停。已知边界：校验 `event.isTrusted` 的站点无效；`document.hidden` 时暂停心跳的站点无效（不做主世界改写 visible 的 hack）
+- **掉线检测 + 通知**：`shared/logic.js` 纯函数 `hasSessionCookie` / `sessionLostDetected` / `nextBackupState`（确认窗口状态机，均有单测）；`backupCookies` 写前对比上一份备份，会话票据从有到无**先记疑似**（`sessionLostStreak`），连续 `SESSION_LOST_CONFIRM_SAMPLES`（2）次缺失才判定服务器端注销——防站点换票节奏误报冻结备份；确认后跳过覆盖（保住最后一次在线备份）、打 `sessionLostAt` 并经 `notifySessionLost` 弹通知（按主机 6 小时节流）；重新登录后采样恢复含会话 cookie 即清零计数、正常覆盖、标记清除
+- **使用边界说明**（已写入 README）：保活只对"按用户交互计时"的服务器端过期有效；"按最后请求计时"的只要浏览器开着即被周期刷新覆盖、关机窗口无解；"绝对时长上限"无解。前提是机器开机不休眠、浏览器保持开启；关机期间的空档只能靠 cookie 备份在重启后恢复，两功能互补
 
 ## 打包规则
 
@@ -76,7 +77,7 @@
 ## 验证清单
 
 1. `node scripts/validate.mjs`：JSON/manifest/语言包/JS 语法一键校验（等价旧手工步骤 1-2）
-2. `node --test "tests/**/*.test.mjs"`：纯逻辑单元测试（引号必需，避免 shell 提前展开；不要用目录形式，Windows 下不可靠。Windows 上 Node 22 不支持该 glob，本地改用显式路径 `node --test tests/tab-auto-refresh/logic.test.mjs`）
+2. `node --test "tests/**/*.test.mjs"`：纯逻辑单元测试（引号必需，避免 shell 提前展开。glob 形式在 Node 24 可用；Node 22 早期如 22.14 不支持、报找不到文件，本机旧版本环境下改用显式路径 `node --test tests/tab-auto-refresh/logic.test.mjs`）
 3. UI 改动后可用 `scripts/screenshot-popup.mjs` 重新生成 `docs/tab-auto-refresh/popup.png`
 4. `chrome://extensions` 开发者模式加载插件文件夹，验证：设置/停止、倒计时归零后继续、右键菜单（页面+标签页）、立即刷新、角标计数、暂停/恢复全部、快捷键记住上次间隔、自动清理通知
 
