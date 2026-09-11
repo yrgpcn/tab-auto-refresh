@@ -28,7 +28,7 @@
 
 ## tab-auto-refresh 要点
 
-- 权限：alarms / storage / tabs / contextMenus / notifications / cookies / scripting / idle；站点 host 权限为 `optional_host_permissions`（弹窗开始任务的手势里按 origin 申请，右键/快捷键路径缺权限时保活与关键词静默降级）
+- 权限：alarms / storage / tabs / contextMenus / notifications / cookies / scripting / idle；站点 host 权限常驻 `host_permissions: [<all_urls>]`——**不要再改按需申请**（决策与依据见 1.7.0 节权限面记录）
 - `minimum_chrome_version: 120`（30 秒级 alarms 依赖该版本）
 - 任务与本机状态存于 `chrome.storage.local`：`tasks` 为 tabId → `{ intervalSec, createdAt, url, keyword? }` 映射；`pausedAll` 为全局暂停标记；`sessionProbe` 为掉线行为通道状态（根域 → `{sus, lost, lastNotifiedAt}`）；`cookieBackupWarnedOnce` 持久化"备份失败只告警一次"
 - 偏好设置存于 `chrome.storage.sync`：`settings` 为 `{ bypassCache, skipDiscarded, cookieBackup, keepAlive, httpHeartbeat, lastIntervalSec }`；默认值统一在 `shared/config.js` 的 `DEFAULT_SETTINGS`（弹窗与后台共用）；读取时若 sync 为空会尝试从 local 迁移旧设置
@@ -70,7 +70,7 @@
 - **掉线探测双通道 + 通知**：状态通道——`decideBackupWrite` 纯函数驱动，会话票据从有到无先记疑似（`sessionLostStreak`），疑似采样**只 MERGE 计数、绝不覆盖好备份**（复审§2 实证的死代码 bug：坏样本覆盖后 prev 无票据、streak 恒被清零），连续 2 次才冻结备份并按主机 6 小时节流通知；行为通道——`reportSessionSignal`（存 `sessionProbe`）把"任务页落在登录页 URL"（`looksLikeLoginPage` 只看 pathname，监控对象本身是登录页时不适用）与心跳重定向/401/403 计入同一 2 次确认窗口，确认后角标变红 `!` + 通知，`isProbeLost` 期间 backupCookies 拒绝写坏备份；重新登录（票据回来 / 页面回到正常 URL / 心跳 2xx）即恢复
 - **关键词监控**（可选，任务字段 `keyword` ≤100 字）：任务页每次加载完成后 `executeScript` 取 `document.body.innerText`（300KB 截断）跑 `keywordHit`，命中 → 系统通知 + 自动停任务
 - **调度抗抖动与睡眠自愈**（学 tab-reloader）：一次性 when ±15% 抖动（`jitteredDelayMs`，下限 30 秒）+ period 兜底 + 每次触发重 arm；`chrome.idle` 回 active 时过期 alarm 打散 0~1s 重建
-- **权限面收缩**：host 权限 `optional_host_permissions`，弹窗开始任务的手势里 `chrome.permissions.request` 目标 origin；拒绝时任务照常刷新，保活/关键词/备份降级（弹窗提示 `msgNoPermission`）。备份读不到 cookie（未授权）时 `decideBackupWrite` 首份无票据正常写、有票据后无票据会走确认窗口而非立即冻结
+- **权限面决策记录（勿再反复）**：host 权限维持常驻 `<all_urls>`。曾改为 `optional_host_permissions` + 手势内 `chrome.permissions.request` 按需申请，实测硬伤：系统授权框弹出即夺焦点关闭扩展弹窗，发起申请的脚本随之销毁，授权完成后任务**不会**自动开始，用户必须再点一次「开始」。本插件 GitHub Release 自用分发、不上商店，按需申请的合规收益为零、体验代价全额自受，已回退。将来真要提交商店时再做，且必须配套：监听 `permissions.onAdded` 在授权完成后自动续跑建任务流程，消灭二次点击
 - **重启恢复增强**：`pending` 显式集合防两任务争抢同页覆盖丢单（复审§3.1）；现场认领不到先经 20 秒 `watchForUrl` 延迟窗口再接住 SSO 晚到页面，等不到再重开
 - **使用边界说明**（已写入 README）：保活（合成事件）只对"按用户交互计时"有效；静默心跳对"按最后请求计时"有效；"绝对时长上限"无解。前提是机器开机不休眠、浏览器保持开启；关机空档靠 cookie 备份重启恢复，功能互补
 
@@ -84,7 +84,7 @@
 1. `node scripts/validate.mjs`：JSON/manifest/语言包/JS 语法一键校验（等价旧手工步骤 1-2）
 2. `node --test "tests/**/*.test.mjs"`：纯逻辑单元测试（引号必需，避免 shell 提前展开。glob 形式在 Node 24 可用；Node 22 早期如 22.14 不支持、报找不到文件，本机旧版本环境下改用显式路径 `node --test tests/tab-auto-refresh/logic.test.mjs`）
 3. UI 改动后可用 `scripts/screenshot-popup.mjs` 重新生成 `docs/tab-auto-refresh/popup.png`
-4. `chrome://extensions` 开发者模式加载插件文件夹，验证：设置/停止、倒计时归零后继续、右键菜单（页面+标签页）、立即刷新、角标计数、暂停/恢复全部、快捷键记住上次间隔、自动清理通知；1.7.0 新增：弹窗开始任务弹站点权限申请、拒绝后任务仍刷新但保活/关键词降级、30 秒任务下 12~20 秒能看到注入的心跳事件（DevTools 里断点或加 listener 观察）、同站另开无关标签页无心跳、同页停任务再启心跳恢复、关键词命中弹通知并停任务、模拟掉线（清服务端会话）后角标变红并通知、睡眠唤醒后过期 alarm 被重建
+4. `chrome://extensions` 开发者模式加载插件文件夹，验证：设置/停止、倒计时归零后继续、右键菜单（页面+标签页）、立即刷新、角标计数、暂停/恢复全部、快捷键记住上次间隔、自动清理通知；1.7.0 新增：点「开始」**不弹任何授权框**一次成任务、30 秒任务下 12~20 秒能看到注入的心跳事件（DevTools 里断点或加 listener 观察）、同站另开无关标签页无心跳、同页停任务再启心跳恢复、关键词命中弹通知并停任务、模拟掉线（清服务端会话）后角标变红并通知、睡眠唤醒后过期 alarm 被重建
 
 ## 环境备注
 

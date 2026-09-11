@@ -78,7 +78,6 @@
     "message": "监控页面已出现关键词「$KW$」，任务已自动停止",
     "placeholders": { "kw": { "content": "$1" } }
   },
-  "msgNoPermission": { "message": "未授予站点权限：任务将只刷新页面，保活、关键词与登录备份不可用" },
   "skipDiscardedLabel": { "message": "跳过已丢弃（休眠）的标签页" },
   "pauseAll": { "message": "暂停全部" },
   "resumeAll": { "message": "恢复全部" },

@@ -285,23 +285,12 @@ async function init() {
       } else {
         seconds = parseInt($("presetSelect").value, 10);
       }
-      /* 站点权限改为按需申请（可选权限）：必须在点击手势里同步发起；
-         用户拒绝时任务仍可跑（刷新本身靠 tabs 权限），但保活/关键词/备份受限 */
-      let granted = true;
-      try {
-        const origin = new URL(currentTab.url).origin + "/*";
-        granted = await chrome.permissions.request({ origins: [origin] });
-      } catch (e) {
-        granted = false;
-      }
       const keyword = String($("keywordInput").value || "").trim().slice(0, 100);
       const res = await send({ type: "start", tabId: currentTab.id, seconds, keyword });
       if (!res.ok) {
         setMsg(msg("errStart", [res.error || msg("errUnknown")]));
       } else if (clamped) {
         setMsg(msg("msgClamped"));
-      } else if (!granted) {
-        setMsg(msg("msgNoPermission"));
       } else {
         setMsg(msg("msgSet", [fmtInterval(res.intervalSec)]));
       }

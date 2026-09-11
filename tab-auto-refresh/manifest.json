@@ -6,7 +6,7 @@
   "default_locale": "zh_CN",
   "description": "__MSG_extDesc__",
   "permissions": ["alarms", "storage", "tabs", "contextMenus", "notifications", "cookies", "scripting", "idle"],
-  "optional_host_permissions": ["<all_urls>"],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",
     "type": "module"

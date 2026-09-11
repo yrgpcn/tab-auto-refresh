@@ -160,8 +160,6 @@ function startTask(tabId, seconds, keyword) {
     /* 开启任务时立即备份一次，避免首次刷新前关闭浏览器导致无备份可恢复 */
     await backupCookies(tabId);
     await armRefresh(tabId, safe);
-    /* 站点权限已改为按需申请（弹窗启动路径带用户手势申请）；
-       右键/快捷键路径无法弹窗申请，缺权限时保活、备份、心跳静默降级为不可用 */
     if ((await getSettings()).keepAlive) await keepAliveInject(tabId);
     await ensureHeartbeat(tabId);
     await chrome.storage.local.set({ pausedAll: false });
