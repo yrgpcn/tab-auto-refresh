@@ -14,6 +14,7 @@
 - `scripts/screenshot-popup.mjs`：mock chrome API 后用本机 Chrome 渲染弹窗截图
 - `tests/`：Node 内置 test runner 的单元测试（位于仓库根，避免被打进插件 zip）
 - `docs/`：README 用的截图等文档资源
+- `_code-review/`：**本地**代码审核归档（多轮报告 + 回归脚本），被 `.gitignore` 忽略；**不入库、不进 Release、新 clone 中不存在**——故本文件里凡引用 `_code-review/...` 的路径都只在本地有效，详见"代码审核归档与回归脚本"一节
 - 根 `package.json` 是私有的仓库工具配置，声明 `"type": "module"`、脚本和 repository 元数据，无 npm 依赖；不影响插件打包
 - `CHANGELOG.md`：按 Keep a Changelog 格式记录，按插件分段版本号
 
@@ -26,6 +27,10 @@
 - 版本号在插件 `manifest.json` 中维护
 - 发布流程：改 `manifest.json` 版本号并更新 changelog → 提交到 `main` → 打同名 tag（如 `tab-auto-refresh/v1.3.0`）→ 推送 `main` 和 tag，Actions 自动打包并创建 GitHub Release
 - tag 保留 `tab-auto-refresh/` 前缀（与 release.yml 的匹配规则和既有历史一致，勿改）
+- **三条持续生效的改法纪律**（07 裁定提出、08 复核要求升格进本文件——原先只写在 `_code-review/`，而那里被 `.gitignore` 排除、新 clone 里根本不存在，等于没有纪律）：
+  1. **复杂流程拆"纯函数计划 / 执行"两半**：凡含"先读后写、跨异步步骤共享状态"的流程（典型如启动恢复 `prune`），把顺序决策抽成纯函数产出计划、执行器只负责落盘，让顺序可被单元测试直接断言，而不是靠读代码推断（1.8.0 重构首位，目标函数名 `planPrune`）
+  2. **权限 ↔ 功能成对记账**：每次新增权限，在 `CHANGELOG.md` 该版本 Added 里点名，并在"tab-auto-refresh 要点"的权限清单补一行；反之新增需要权限的功能也必须同步更新权限说明。这既是防"权限面悄悄扩大"，也是将来上商店时的隐私说明底稿
+  3. **默认值变更一律过"行为倒退"审查**：开关默认开/关、阈值、间隔等默认值任何变动，都要逐条列出受影响路径与"用户已显式设过值"分支，确认不会改变既有用户的既有行为（内例：`0d9fa8a` 引入、`0b04251` 修复的僵尸 alarm 回归）
 
 ## tab-auto-refresh 要点
 
@@ -60,7 +65,8 @@
 - `tab-auto-refresh` 最新**已发布**版本是 `1.6.0`，tag 为 `tab-auto-refresh/v1.6.0`；发布面只保留最新 Release 与 tag，旧版本发布随新版本清理（release.yml 的 Prune 步骤自动执行）
 - `1.6.0` 包含：cookie 备份改 opt-in 开关（默认关）、启动恢复按注册域匹配全部备份主机（修复兄弟子域 SSO 票据恢复）、受限页面拒绝建任务、纯逻辑下沉 shared 并补测试、发布工作流自动清理旧 Release/tag
 - 该版本起 Release zip 顶层包含 `tab-auto-refresh/` 文件夹
-- **1.7.0 已完成开发（manifest 版本号已置 1.7.0，尚未打 tag 发布）**：后台保活（keep-alive，`settings.keepAlive` 默认开）+ 会话失效检测通知，实现要点见下节
+- **1.7.0 已完成开发并全部落盘（manifest 版本号 `1.7.0`，尚未打 tag 发布）**：`0b04251` 为 1.7.0 主体（后台保活 + 会话失效检测），其后的 `f0e8ef4` 为本轮"07 裁定批次"——吸收 Webhook、异常自动暂停、尊重用户操作（`skipOnActivity`）、防系统休眠（`keepAwake`）与关键词"检测链"，并在同批修掉这批新功能的一处共性缺陷（运行时状态落 `chrome.storage.session`、webhook 四处调用点补 `await`、`autoPaused` 与标签页存在性检查换序）。实现要点见下节
+- 发布前只差"打 tag → 推 `main` 与 tag"（版本号 `1.7.0` 与 CHANGELOG 段均已就绪，流程见"约定"）
 
 ## 1.7.0 实现要点（2026-09-11 完成开发，同日吸收同类项目经验增强）
 
@@ -84,15 +90,31 @@
 - zip 顶层必须包含 `tab-auto-refresh/` 文件夹，用户解压后可直接选择该文件夹；文件夹内根位置包含 `manifest.json`
 - 优先用 `git archive --format=zip --prefix=tab-auto-refresh/ -o tab-auto-refresh-vX.Y.Z.zip <tag>:tab-auto-refresh`（正斜杠路径，跨平台安全）
 
+## 代码审核归档与回归脚本（`_code-review/`，**仅本地**）
+
+- **去向**：仓库根 `_code-review/`，被 `.gitignore` 第 11 行忽略——只本地留存，不推送、不进 Release zip（`release.yml` 用 `git archive <tag>:tab-auto-refresh`，只取插件子目录）。**本文件中所有 `_code-review/...` 路径引用在 CI 与新 clone 中都悬空**，仅对本机审阅有效
+- **不要把它挪进 `tab-auto-refresh/`**：`scripts/validate.mjs` 的"未跟踪文件"守卫只覆盖插件目录，挪进去会让本地校验 exit=1
+- **组织约定**：报告按轮次编号（`01` 首轮 … `09` 07 裁定批次接手），每轮同步更新 `_code-review/README.md` 索引；引用结论写 `函数名 @ <commit>:<行>` 而非裸行号——行号每轮都在漂（实证：`checkKeyword` 从 `0d9fa8a:637` 漂到 `0b04251:640`）
+- **回归脚本**（改动对应功能后必跑）：
+  - `verify-sw-restart-state.mjs` — 跨 SW 实例的运行时状态（二次 `import` 模拟 SW 重启 + 共享 storage 桩）；配套 `对照-修复前_内存计数/` 冻结修复前源码做红→绿对照，退出码可直接判定
+  - `verify-prune-order.mjs` — `prune` 重挂接/清理顺序（05 §2"把刚 arm 的 alarm 反手清成僵尸"的回归场景）；配套 `对照-修复前(73a8be6)-prune顺序.mjs`
+  - `verify-streak.mjs` — 掉线探测的采样序列
+  - `_check_i18n.mjs` — 语言包完整性（zh/en 键位对齐、`data-i18n*` 与 `getMessage` 引用无悬空、manifest `__MSG__` 可达）
+  - `_gen_prune_harness.mjs` / `_extract_text.mjs` — 取源工具：顺序类缺陷用"从仓库源码原样切片"而非手写复刻；抓网页一律 `curl -sL`（不跟 301 只会拿到跳转壳）
+- **方法学红线（踩过坑）**：若验证脚本连"修复前源码"也判过，先怀疑**桩件监听器数组跨实例累积**——chrome 桩的 `addListener` 共用同一数组、新实例的监听器在末尾，必须取 `listeners.x.at(-1)`；取 `[0]` 读到的是上个实例的处理器，会让基线假绿
+- **待决（08 §3.8 路线 B）**：`verify-prune-order.mjs` / `_gen_prune_harness.mjs` 实为测试资产而非审核笔记，可考虑挪进 `tests/` 并挂 CI，使上述引用真正成立；未获批前维持本地
+
 ## 验证清单
 
-1. `node scripts/validate.mjs`：JSON/manifest/语言包/JS 语法一键校验（等价旧手工步骤 1-2）
-2. `node --test "tests/**/*.test.mjs"`：纯逻辑单元测试（引号必需，避免 shell 提前展开。glob 形式在 Node 24 可用；Node 22 早期如 22.14 不支持、报找不到文件，本机旧版本环境下改用显式路径 `node --test tests/tab-auto-refresh/logic.test.mjs`）
-3. UI 改动后可用 `scripts/screenshot-popup.mjs` 重新生成 `docs/tab-auto-refresh/popup.png`
-4. `chrome://extensions` 开发者模式加载插件文件夹，验证：设置/停止、倒计时归零后继续、右键菜单（页面+标签页）、立即刷新、角标计数、暂停/恢复全部、快捷键记住上次间隔、自动清理通知；1.7.0 新增：点「开始」**不弹任何授权框**一次成任务、30 秒任务下 12~20 秒能看到注入的心跳事件（DevTools 里断点或加 listener 观察）、同站另开无关标签页无心跳、同页停任务再启心跳恢复、关键词命中弹通知并停任务、模拟掉线（清服务端会话）后角标变红并通知、睡眠唤醒后过期 alarm 被重建
+1. `node scripts/validate.mjs`：JSON/manifest/语言包/JS 语法一键校验（等价旧手工步骤 1-2）。注意它会遍历**整个仓库根**做 JS 语法检查，故 `_code-review/` 里的脚本语法错同样会让本地校验 exit=1
+2. `node --test "tests/**/*.test.mjs"`：纯逻辑单元测试（引号必需，避免 shell 提前展开。glob 形式在 Node 24 与较新的 Node 22（本机 22.22.2 实测可用）均可；Node 22 早期如 22.14 不支持、报找不到文件，该环境下改用显式路径 `node --test tests/tab-auto-refresh/logic.test.mjs`）
+3. 常驻回归（改动心跳 / 掉线探测 / 自动暂停 / 保活 / `prune` 时必跑，脚本在本地归档目录）：`node _code-review/verify-sw-restart-state.mjs`、`node _code-review/verify-prune-order.mjs`、`node _code-review/verify-streak.mjs`；语言包改动另跑 `node _code-review/_check_i18n.mjs`
+4. UI 改动后可用 `scripts/screenshot-popup.mjs` 重新生成 `docs/tab-auto-refresh/popup.png`
+5. `chrome://extensions` 开发者模式加载插件文件夹，验证：设置/停止、倒计时归零后继续、右键菜单（页面+标签页）、立即刷新、角标计数、暂停/恢复全部、快捷键记住上次间隔、自动清理通知；1.7.0 新增：点「开始」**不弹任何授权框**一次成任务、30 秒任务下 12~20 秒能看到注入的心跳事件（DevTools 里断点或加 listener 观察）、同站另开无关标签页无心跳、同页停任务再启心跳恢复、关键词命中弹通知并停任务、模拟掉线（清服务端会话）后角标变红并通知、睡眠唤醒后过期 alarm 被重建
 
 ## 环境备注
 
 - 如果 GitHub 直连失败，可在本机使用 SOCKS 代理；推送示例：
   `git -c http.proxy=socks5://127.0.0.1:10808 push`
 - 本机 Codex PowerShell 可能没有 `npm`；验证和测试直接使用 `node` 命令
+- `scripts/screenshot-popup.mjs` 依赖 Playwright，本机不在 Node 默认解析路径；需显式给 `NODE_PATH="C:/Users/yrgpc/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules"`，否则报 `ERR_MODULE_NOT_FOUND: playwright`
