@@ -124,6 +124,7 @@ async function reportSessionSignal(root, host, suspect) {
         notify = true;
       }
     } else {
+      p.lastNotifiedAt = 0; /* 恢复=新故障周期起点：否则 6h 内二次独立掉线不再通知（05 §3.2） */
       p.sus = 0;
       p.lost = false;
     }
@@ -288,9 +289,9 @@ async function ensureHeartbeat(tabId) {
       await chrome.alarms.clear(hbName(tabId));
       return;
     }
-    /* 随机初始相位（0~一个周期）：多任务心跳不再同拍（04 复审 §4.3） */
+    /* 随机初始相位（1 秒~一个周期，05 复审 §3.4 下限防首拍立即触发）：多任务心跳不再同拍 */
     await chrome.alarms.create(hbName(tabId), {
-      when: Date.now() + Math.round(Math.random() * HEARTBEAT_MINUTES * 60 * 1000),
+      when: Date.now() + 1000 + Math.round(Math.random() * (HEARTBEAT_MINUTES * 60 * 1000 - 1000)),
       periodInMinutes: HEARTBEAT_MINUTES
     });
   } catch (e) {
@@ -305,22 +306,24 @@ async function doHeartbeat(tabId) {
       await chrome.alarms.clear(hbName(tabId));
       return;
     }
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 15000);
-    let res;
-    try {
-      /* Range 截断到 1KB：请求到达即完成会话续期，正文无人消费；
-         站点忽略 Range 时回退整页 200，判定逻辑不受影响（206 同在 ok 区间） */
-      res = await fetch(task.url, {
+    const send = (useRange) => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15000);
+      return fetch(task.url, {
         credentials: "include",
         cache: "no-store",
         redirect: "follow",
         signal: ctrl.signal,
-        headers: { Range: "bytes=0-1023" },
-      });
-    } finally {
-      clearTimeout(timer);
-    }
+        headers: useRange ? { Range: "bytes=0-1023" } : undefined,
+      }).finally(() => clearTimeout(timer));
+    };
+    /* Range 截断到 1KB：请求到达即完成会话续期，正文无人消费；
+       bytes=数字-数字 属 CORS 安全名单请求头值形式，不会引入预检（05 复审 §3.3 核实）；
+       站点忽略 Range 时回退整页 200，判定逻辑不受影响（206 同在 ok 区间） */
+    let res = await send(true);
+    /* 416 = 站点拒收该 Range（实现不规范）：去 Range 重试一次，
+       避免该站点的心跳通道静默失效（05 复审 §3.3） */
+    if (res.status === 416) res = await send(false);
     const root = siteRoot(hostOf(task.url));
     const landed = res.url || task.url;
     if (looksLikeLoginPage(landed) || res.status === 401 || res.status === 403) {
@@ -816,7 +819,15 @@ async function prune(adoptLegacyUrls = false) {
       dirty = true;
     }
     if (dirty) await setTasks(tasks);
-    for (const name of staleAlarms) await chrome.alarms.clear(name);
+    const liveIds = new Set(Object.keys(tasks)); /* 落盘后的最终键：被重挂接/重开占用的 id 不能清 */
+    /* 05 复审 §2 回归修复：延后清理若不看最终键集合，会把本轮刚 arm 的 alarm
+       （id 恰好曾是其他任务的键：tabId 互换 / watch 等回原 id / Chrome 复用 id）
+       一并清掉，产出"任务在、永不刷新"的僵尸——正是这次修复要消灭的状态 */
+    for (const name of staleAlarms) {
+      const id = name.startsWith(HB_PREFIX) ? name.slice(HB_PREFIX.length) : name.slice(PREFIX.length);
+      if (liveIds.has(id)) continue;
+      await chrome.alarms.clear(name);
+    }
     /* 启动时统一淘汰：v1.4.5 前遗留的多余备份、过期备份、超量备份 */
     await pruneCookieBackups(tasks);
   });
