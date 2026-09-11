@@ -48,7 +48,11 @@ page.on("console", (entry) => {
 
 await page.addInitScript((msgs) => {
   const now = Date.now();
-  const settings = { bypassCache: true, skipDiscarded: false, cookieBackup: true, keepAlive: true, httpHeartbeat: true };
+  const settings = {
+    bypassCache: true, skipDiscarded: false, cookieBackup: true,
+    keepAlive: true, httpHeartbeat: true, skipOnActivity: true, keepAwake: false,
+    webhookUrl: "", webhookEvents: ["session-lost", "keyword"],
+  };
   const tasks = {
     1: { intervalSec: 300, createdAt: now - 61_000 },
     2: { intervalSec: 60, createdAt: now - 121_000 },

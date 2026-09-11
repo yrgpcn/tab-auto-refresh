@@ -28,6 +28,8 @@ header {
 .tab-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tab-url { color: #6b7280; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hint { color: #6b7280; font-size: 11px; margin-top: 6px; }
+.webhook-events { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 6px; }
+.row-check.compact { font-size: 11px; margin: 0; }
 .hint.warn { color: #b45309; }
 .row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .row .label { flex: none; color: #374151; }

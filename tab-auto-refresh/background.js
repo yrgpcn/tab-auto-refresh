@@ -7,8 +7,13 @@ import {
   clampInterval,
   domainChain,
   hostOf,
+  isErrorStatus,
   jitteredDelayMs,
+  getTaskKeywords,
   keywordHit,
+  normalizeWebhookUrl,
+  parseKeywords,
+  pickHits,
   looksLikeLoginPage,
   sameHost,
   sameSite,
@@ -134,7 +139,7 @@ async function reportSessionSignal(root, host, suspect) {
       await chrome.storage.local.set({ [PROBE_KEY]: all });
       await updateBadge();
     }
-    if (notify) notifySessionLost(host);
+    if (notify) await notifySessionLost(host);
   } catch (e) {
     /* 探针失败不影响主流程 */
   }
@@ -147,7 +152,7 @@ async function isProbeLost(url) {
 }
 
 /* 为某个标签页开启定时刷新，返回实际生效的间隔秒数；开始新任务即解除全局暂停 */
-function startTask(tabId, seconds, keyword) {
+function startTask(tabId, seconds, keyword, keepWatching) {
   const { seconds: safe } = clampInterval(seconds);
   return withTaskLock(async () => {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
@@ -159,15 +164,19 @@ function startTask(tabId, seconds, keyword) {
       throw new Error(chrome.i18n.getMessage("errRestricted") || "Browser internal pages cannot be auto-refreshed");
     }
     const url = tab.url;
-    const kw = String(keyword == null ? "" : keyword).trim();
+    /* 多关键词（功能3）：keywords[] + onHit；旧任务读侧经 getTaskKeywords 兼容单串 */
+    const kws = parseKeywords(keyword);
     const tasks = await getTasks();
     tasks[tabId] = { intervalSec: safe, createdAt: Date.now(), url };
-    if (kw) tasks[tabId].keyword = kw.slice(0, 100);
+    if (kws.length) {
+      tasks[tabId].keywords = kws;
+      if (keepWatching) tasks[tabId].onHit = "continue";
+    }
     await setTasks(tasks);
     /* 开启任务时立即备份一次，避免首次刷新前关闭浏览器导致无备份可恢复 */
     await backupCookies(tabId);
     await armRefresh(tabId, safe);
-    if ((await getSettings()).keepAlive) await keepAliveInject(tabId);
+    await syncKeepAliveConfig(tabId);
     await ensureHeartbeat(tabId);
     await chrome.storage.local.set({ pausedAll: false });
     await updateBadge();
@@ -181,6 +190,15 @@ function stopTask(tabId) {
     const tasks = await getTasks();
     if (!tasks[tabId]) return;
     stopKeepAlive(tabId);
+    detectChains.delete(tabId); /* 终止该页在飞的关键词检测链 */
+    /* 运行时状态一并清（会话态）：真假人活动时间戳与错误/验证墙连击都归属该标签页 */
+    await rt(() =>
+      chrome.storage.session.remove([
+        rtTab(RT_ACTIVITY, tabId),
+        rtTab(RT_ERROR, tabId),
+        rtTab(RT_CAPTCHA, tabId),
+      ])
+    );
     delete tasks[tabId];
     await setTasks(tasks);
     await chrome.alarms.clear(alarmName(tabId));
@@ -263,6 +281,60 @@ async function pruneCookieBackups(remainingTasks) {
    不用 registerContentScripts：matches 是站点级会溢出到同站无关标签页，
    且站点注册 id 与任务 id 语义分裂，重启后停止任务清不掉注册。 ---- */
 const KEEPALIVE_SCRIPT = "content/keepalive.js";
+/* 错误页/验证墙确认与交互跳过的参数（06 §4.3 / §4.5 吸收项） */
+const PAUSE_CONFIRM_SAMPLES = 2;
+const ACTIVITY_SKIP_MS = 60000;
+
+/* ---- 跨 SW 实例的运行时状态（chrome.storage.session）----
+   Chrome 官方：MV3 的 service worker「闲置 30 秒即终止（收事件或调扩展 API 会重置计时器）」，
+   且明确要求「为意外终止做好准备：持久化状态」。下面三种状态的两端间隔都是分钟级，
+   放在内存变量里必然被清零——本批首版就是内存 Map，实测三个功能全废：
+     ① 异常连击（error/captcha）：心跳 4 分钟一次、验证墙随刷新周期探一次，
+        两次采样落在两个 SW 实例 → 计数每次从 0 起，"连续 2 次才暂停"退化成永不暂停
+        （与复审 §2 的 sessionLostStreak 同类缺陷；那次是靠把计数写进备份条目修的）；
+     ② 真人活动时间戳：SW 一回收即丢 → 60 秒跳过窗口失效；
+     ③ keepAwake 持锁标记：回收后误判"未持锁" → 关开关时不再 release，系统一直不睡。
+   chrome.storage.session 的语义正好：跨 SW 回收存活、随浏览器会话结束清空（与 power
+   请求的真实生命周期一致），不落磁盘、不需要新权限（storage 已声明）。
+   验证脚本：`_code-review/verify-sw-restart-state.mjs`（用二次 import 模拟 SW 重启，
+   同一场景对修复前/后两份源码各跑一次）。 */
+const RT_ACTIVITY = "rt:activity";
+const RT_ERROR = "rt:error";
+const RT_CAPTCHA = "rt:captcha";
+const RT_AWAKE = "rt:awake";
+const rtTab = (base, tabId) => base + ":" + tabId;
+
+/* 读写走独立串行队列：与 tasks 的 withTaskLock 无关（在锁内再入队会死锁），
+   但同一键的"读-改-写"必须串起来，否则并发 +1 会丢计数 */
+let rtQueue = Promise.resolve();
+function rt(run) {
+  const job = () => Promise.resolve().then(run).catch(() => {});
+  rtQueue = rtQueue.then(job, job);
+  return rtQueue;
+}
+
+async function rtGet(key) {
+  try {
+    const data = await chrome.storage.session.get(key);
+    return data[key];
+  } catch (e) {
+    return undefined; /* 会话存储不可用：按"无状态"降级，功能弱化但不报错 */
+  }
+}
+
+async function rtSet(key, value) {
+  await rt(() => chrome.storage.session.set({ [key]: value }));
+}
+
+/* 连击计数 +1 并返回新值（读改写整体入队） */
+function rtBump(key) {
+  let next = 0;
+  return rt(async () => {
+    const data = await chrome.storage.session.get(key);
+    next = (Number(data[key]) || 0) + 1;
+    await chrome.storage.session.set({ [key]: next });
+  }).then(() => next);
+}
 
 /* 向任务标签页注入心跳脚本；脚本守卫可重启，重复注入等价于重启心跳 */
 async function keepAliveInject(tabId) {
@@ -271,6 +343,44 @@ async function keepAliveInject(tabId) {
   } catch (e) {
     /* 受限页面 / 渲染上下文未就绪 / 缺站点权限 / API 异常：静默降级，绝不阻塞任务主流程 */
   }
+}
+
+/* 防系统休眠（学 ARP 的 chrome.power）：有任务且开关开启时持 system 级锁（屏幕可灭、
+   系统不睡）；任务清空/开关关闭即释放。updateBadge 是所有任务增删路径的必经点，
+   锁的收敛就挂在那里 */
+async function applyKeepAwake() {
+  try {
+    if (!chrome.power) return;
+    const [settings, tasks] = await Promise.all([getSettings(), getTasks()]);
+    const want = !!settings.keepAwake && Object.keys(tasks).length > 0;
+    if (want) {
+      /* 持锁标记存会话态：重复 request 按文档是"替换"（无害），但仍挡掉高频无谓调用 */
+      if (!(await rtGet(RT_AWAKE))) {
+        chrome.power.requestKeepAwake("system");
+        await rtSet(RT_AWAKE, true);
+      }
+    } else {
+      /* 无条件 release：锁挂在扩展上、跨 SW 回收存活，而持锁标记只在会话态——
+         若靠标记判断，SW 回收后就会漏掉这次释放，系统一直不睡（实测见
+         `_code-review/verify-sw-restart-state.mjs` S3）。未持锁时 release 无副作用。 */
+      chrome.power.releaseKeepAwake();
+      if (await rtGet(RT_AWAKE)) await rtSet(RT_AWAKE, false);
+    }
+  } catch (e) {
+    /* power API 不可用：静默 */
+  }
+}
+
+/* 注入门控解耦（08 §3.1 裁定）：heartbeat 与 activityWatch 各有开关，任一开启即注入，
+   配置经 query 拉取 / config 推送双通道热更新——关保活不再连坐其他注入功能 */
+async function syncKeepAliveConfig(tabId) {
+  const settings = await getSettings();
+  const heartbeat = !!settings.keepAlive;
+  const activityWatch = !!settings.skipOnActivity;
+  if (heartbeat || activityWatch) await keepAliveInject(tabId);
+  chrome.tabs
+    .sendMessage(tabId, { type: "keepalive-config", heartbeat, activityWatch })
+    .catch(() => {});
 }
 
 /* 任务停止：通知页面内脚本自停（标签页级注入没有注册表需要清理） */
@@ -326,12 +436,26 @@ async function doHeartbeat(tabId) {
     if (res.status === 416) res = await send(false);
     const root = siteRoot(hostOf(task.url));
     const landed = res.url || task.url;
+    /* 错误页通道：5xx/404 连续命中 → 任务自动暂停；恢复 2xx 自动解除（06 §4.3）
+       连击计数存会话态（跨 SW 回收存活），否则两次心跳隔着 4 分钟、SW 早已回收，
+       计数每次从 0 起 → 阈值永远到不了（见 RT_* 注释与 verify-sw-restart-state.mjs）
+       与掉线通道并行且互不污染：不进 sessionProbe，不影响备份冻结 */
+    if (isErrorStatus(res.status)) {
+      const s = await rtBump(rtTab(RT_ERROR, tabId));
+      if (s >= PAUSE_CONFIRM_SAMPLES) await pauseTaskAuto(tabId, "error-page");
+    } else {
+      await rtSet(rtTab(RT_ERROR, tabId), 0); /* 0 = 计数清零（不必删键，读侧 Number()||0 等价） */
+    }
     if (looksLikeLoginPage(landed) || res.status === 401 || res.status === 403) {
       await reportSessionSignal(root, hostOf(landed) || root, true);
     } else if (res.ok) {
       await reportSessionSignal(root, hostOf(landed) || root, false);
+      const t2 = (await getTasks())[tabId];
+      if (t2 && t2.autoPaused && t2.autoPaused.reason === "error-page") {
+        await resumeTaskAuto(tabId); /* 站点活着了：静默自愈 */
+      }
     }
-    /* 其余状态码（5xx/网络错）是站点故障，不产生掉线信号 */
+    /* 401/403 走掉线疑似（登录墙语义），5xx 走错误页暂停，互不混淆 */
   } catch (e) {
     /* fetch 失败（无权限/离线/站点挂了）：无信号，静默 */
   }
@@ -342,10 +466,18 @@ async function reconcileKeepAlive() {
   try {
     const [settings, tasks] = await Promise.all([getSettings(), getTasks()]);
     for (const tabId of Object.keys(tasks).map(Number)) {
-      if (settings.keepAlive) await keepAliveInject(tabId);
+      if (settings.keepAlive || settings.skipOnActivity) await keepAliveInject(tabId);
       else stopKeepAlive(tabId);
+      chrome.tabs
+        .sendMessage(tabId, {
+          type: "keepalive-config",
+          heartbeat: !!settings.keepAlive,
+          activityWatch: !!settings.skipOnActivity,
+        })
+        .catch(() => {});
       await ensureHeartbeat(tabId);
     }
+    await applyKeepAwake();
   } catch (e) {
     console.warn("reconcile keep-alive failed:", e);
   }
@@ -383,32 +515,145 @@ async function reloadTab(tabId) {
   await chrome.tabs.reload(tabId, { bypassCache: !!settings.bypassCache });
 }
 
-/* 关键词命中检查（品类第二曲线：从"定时刷新"到"页面监控"）：
-   任务页每次加载完成后在页面里取 innerText，命中 → 系统通知 + 停止任务 */
-async function checkKeyword(tabId, keyword) {
-  if (!keyword) return;
-  try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: () => {
-        const t = document.body && document.body.innerText;
-        return typeof t === "string" ? t.slice(0, 300000) : "";
-      },
+/* ---- 关键词检测链（08 裁定方案 C：全在后台，不碰注入通道，
+   与 keepAlive 门控零耦合）。每次页面 complete 起一条链：立即查一次，
+   未命中再于 3s / 10s 有界重采样——专治 SPA/迟渲染在 complete 时刻正文
+   未就位的漏检；正文与上次相同则提前结束。新链起链即作废旧链（Map 里换
+   token），杜绝并发链重复通知/竞态停任务。SW 中途回收丢链可接受，
+   下个 complete 或刷新周期自动重建 ---- */
+const detectChains = new Map();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function startDetectChain(tabId) {
+  const token = {}; /* 链身份：Map 里的值被替换即视为本链过期 */
+  detectChains.set(tabId, token);
+  let lastText = null;
+  for (const delay of [0, 3000, 10000]) {
+    if (delay) await sleep(delay);
+    if (detectChains.get(tabId) !== token) return;
+    let task;
+    try {
+      task = (await getTasks())[tabId];
+    } catch (e) {
+      return;
+    }
+    if (!task || !getTaskKeywords(task).length) {
+      detectChains.delete(tabId);
+      return;
+    }
+    let text;
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          const t = document.body && document.body.innerText;
+          return typeof t === "string" ? t.slice(0, 300000) : "";
+        },
+      });
+      text = results && results[0] && results[0].result;
+    } catch (e) {
+      text = undefined;
+    }
+    if (detectChains.get(tabId) !== token) return;
+    if (typeof text !== "string") {
+      detectChains.delete(tabId); /* 注入失败：等下个刷新周期 */
+      return;
+    }
+    const { present, newly } = pickHits(text, getTaskKeywords(task), task.notifiedKeys);
+    if (newly.length) {
+      detectChains.delete(tabId);
+      await onKeywordHit(tabId, task, newly, present);
+      return;
+    }
+    /* continue 模式下在场集收缩（关键词消失→下次再现重新通知）；值没变不写 */
+    if (task.onHit === "continue" && sameSet(present, task.notifiedKeys) === false) {
+      await withTaskLock(async () => {
+        const tasks = await getTasks();
+        if (tasks[tabId] && detectChains.get(tabId) === token) {
+          tasks[tabId] = Object.assign({}, tasks[tabId], { notifiedKeys: present });
+          await setTasks(tasks);
+        }
+      });
+    }
+    if (lastText !== null && text === lastText) {
+      detectChains.delete(tabId); /* 正文稳定：继续等没意义 */
+      return;
+    }
+    lastText = text;
+  }
+  detectChains.delete(tabId);
+}
+
+function sameSet(a, b) {
+  const x = (a || []).slice().sort().join("\u0000");
+  const y = (b || []).slice().sort().join("\u0000");
+  return x === y;
+}
+
+async function onKeywordHit(tabId, task, newly, present) {
+  const label = newly.join(", ");
+  const message = chrome.i18n.getMessage("notifKeywordHits", [label]);
+  chrome.notifications
+    .create("keyword-hit-" + tabId, {
+      type: "basic",
+      iconUrl: "icons/icon48.png",
+      title: chrome.i18n.getMessage("notifTitle"),
+      message,
+    })
+    .catch(() => {});
+  await postWebhook("keyword", {
+    content: message,
+    text: label,
+    host: hostOf(task.url) || "",
+    url: task.url || "",
+  });
+  if (task.onHit === "continue") {
+    /* 持续监控：记录已通知集，等待新命中；任务不停 */
+    await withTaskLock(async () => {
+      const tasks = await getTasks();
+      if (tasks[tabId]) {
+        tasks[tabId] = Object.assign({}, tasks[tabId], { notifiedKeys: present });
+        await setTasks(tasks);
+      }
     });
-    const text = results && results[0] && results[0].result;
-    if (keywordHit(text, keyword)) {
-      chrome.notifications
-        .create("keyword-hit-" + tabId, {
-          type: "basic",
-          iconUrl: "icons/icon48.png",
-          title: chrome.i18n.getMessage("notifTitle"),
-          message: chrome.i18n.getMessage("notifKeywordHit", [keyword])
-        })
-        .catch(() => {});
-      await stopTask(tabId);
+  } else {
+    await stopTask(tabId); /* 默认行为不变：命中即停（抢一次场景） */
+  }
+}
+
+/* ---- Webhook 通知（学 ARP"通知出机器"）：无新权限，常驻 host_permissions
+   已覆盖任意 http(s) 目标。载荷同时填充 content(Discord/Slack)/text(Telegram)/
+   body(通用) 三个别名 + type/url/host/ts，任何预设服务或自定义端点开箱即用。
+   调用方必须 await（四处调用点都写在 async 函数里）：fetch 必须挂在被 await 的
+   链路里，否则扩展 SW 被回收时请求会被截断（Chrome 要求"持久化状态、别裸甩异步"） ---- */
+async function postWebhook(event, payload) {
+  try {
+    const settings = await getSettings();
+    const url = normalizeWebhookUrl(settings.webhookUrl);
+    if (!url) return;
+    const events =
+      Array.isArray(settings.webhookEvents) && settings.webhookEvents.length
+        ? settings.webhookEvents
+        : DEFAULT_SETTINGS.webhookEvents;
+    if (!events.includes(event)) return;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    try {
+      const body = Object.assign({ type: event, ts: Date.now() }, payload);
+      body.content = payload.content || "";
+      body.text = payload.text || payload.content || "";
+      body.body = payload.body || payload.content || "";
+      await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
     }
   } catch (e) {
-    /* 缺权限 / 渲染层未就绪 / 注入失败：下个刷新周期再试 */
+    /* 辅助链路：失败静默，绝不影响主流程 */
   }
 }
 
@@ -544,6 +789,7 @@ async function restoreCookies(host) {
 /* 工具栏角标四态（学 tab-reloader 的集中切换）：
    掉线待重登 "!" 红 > 全局暂停 "‖" 灰 > 监控数量 蓝 > 无任务空 */
 async function updateBadge() {
+  void applyKeepAwake(); /* 任务增删/暂停的所有路径都经过这里 */
   try {
     const [tasks, paused, probeData] = await Promise.all([
       getTasks(),
@@ -557,8 +803,13 @@ async function updateBadge() {
       const root = siteRoot(hostOf(t.url));
       if (root && probes[root] && probes[root].lost) { anyLost = true; break; }
     }
-    const color = anyLost ? "#dc2626" : paused ? "#6b7280" : "#2563eb";
-    const text = anyLost ? "!" : paused && n > 0 ? "‖" : n > 0 ? String(n) : "";
+    let anyAutoPaused = false;
+    for (const t of Object.values(tasks)) {
+      if (t.autoPaused) { anyAutoPaused = true; break; }
+    }
+    /* 五态优先级：掉线 ! 红 > 自动暂停 ⚠ 橙 > 全部暂停 ‖ 灰 > 计数 蓝 > 空 */
+    const color = anyLost ? "#dc2626" : anyAutoPaused ? "#d97706" : paused ? "#6b7280" : "#2563eb";
+    const text = anyLost ? "!" : anyAutoPaused ? "⚠" : paused && n > 0 ? "‖" : n > 0 ? String(n) : "";
     await chrome.action.setBadgeBackgroundColor({ color });
     await chrome.action.setBadgeText({ text });
   } catch (e) {
@@ -566,7 +817,7 @@ async function updateBadge() {
   }
 }
 
-function notifyTaskStopped(tabId) {
+async function notifyTaskStopped(tabId, url, reason) {
   chrome.notifications
     .create("refresh-stopped-" + tabId, {
       type: "basic",
@@ -575,10 +826,26 @@ function notifyTaskStopped(tabId) {
       message: chrome.i18n.getMessage("notifStopped")
     })
     .catch(() => {}); /* 系统通知被关闭时不影响任务清理流程 */
+  /* await 而非 void：postWebhook 内是 fetch，必须挂在被 await 的链路里，
+     否则 SW 回收会截断请求（本批首版四处都写成 void，与函数注释自相矛盾） */
+  await postWebhook("task-stopped", {
+    content: chrome.i18n.getMessage("notifStopped"),
+    host: hostOf(url) || "",
+    url: url || "",
+    reason: reason || "tab-gone",
+  });
+}
+
+/* 08 复审 §3.6：URL 必须在 stopTask 之前取——任务记录删除后就拿不到了 */
+async function stopTaskWithNotice(tabId, reason) {
+  const task = (await getTasks())[tabId];
+  const url = (task && task.url) || "";
+  await stopTask(tabId);
+  await notifyTaskStopped(tabId, url, reason);
 }
 
 /* 服务器端会话失效提醒：cookie 备份只能恢复票据，救不回已注销的会话 */
-function notifySessionLost(host) {
+async function notifySessionLost(host) {
   chrome.notifications
     .create("session-lost-" + host, {
       type: "basic",
@@ -587,6 +854,10 @@ function notifySessionLost(host) {
       message: chrome.i18n.getMessage("notifSessionLost", [host])
     })
     .catch(() => {});
+  await postWebhook("session-lost", {
+    content: chrome.i18n.getMessage("notifSessionLost", [host]),
+    host,
+  });
 }
 
 /* 定时器触发：刷新类 alarm 走刷新并重新 arm；心跳 alarm 走静默请求 */
@@ -606,19 +877,27 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   await armRefresh(tabId, tasks[tabId].intervalSec);
   if (paused) return; /* 暂停期间跳过，恢复后按原周期继续 */
   const tab = await chrome.tabs.get(tabId).catch(() => null);
+  /* 标签页不存在优先于自动暂停判定：否则"被自动暂停的任务 + 用户关掉标签页"
+     永远等不到清理（旧行为是关掉即停任务并通知），会留下静默僵尸任务 */
   if (!tab) {
-    await stopTask(tabId);
-    notifyTaskStopped(tabId);
+    await stopTaskWithNotice(tabId, "tab-gone");
     return;
   }
+  if (tasks[tabId].autoPaused) return; /* 错误页/验证墙自动暂停：alarm 已由 armRefresh 续跑，等恢复 */
   const settings = await getSettings();
+  /* 真人 60 秒内在该页操作过则跳过本次刷新（isTrusted 过滤，保活合成事件不会误报，06 §4.5）
+     策略是"跳过"而非"重置计时"：重置会被用户操作无限期推迟，违背盯变化的用途；
+     时间戳存会话态——SW 回收后仍记得，否则该开关基本无效（见 RT_* 注释） */
+  if (settings.skipOnActivity) {
+    const last = Number(await rtGet(rtTab(RT_ACTIVITY, tabId))) || 0;
+    if (Date.now() - last < ACTIVITY_SKIP_MS) return;
+  }
   if (settings.skipDiscarded && tab.discarded) return; /* 休眠标签页不唤醒 */
   try {
     await reloadTab(tabId);
   } catch (e) {
     /* 标签页已关闭或页面受限：清理任务并通知用户 */
-    await stopTask(tabId);
-    notifyTaskStopped(tabId);
+    await stopTaskWithNotice(tabId, "refresh-failed");
   }
 });
 
@@ -637,9 +916,10 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   await reportSessionSignal(siteRoot(hostOf(task.url)), hostOf(task.url), loginSuspect);
   await backupCookies(tabId);
   await refreshTaskUrl(tabId);
-  await checkKeyword(tabId, task.keyword);
-  /* 保活注入点：每次加载完成补注入，覆盖刷新、页面内导航与会话恢复后的首载 */
-  if ((await getSettings()).keepAlive) await keepAliveInject(tabId);
+  void startDetectChain(tabId); /* 关键词检测链（立即 + 3s + 10s 有界重采样） */
+  /* 保活/活动监听：每次加载完成同步注入与配置（门控解耦见 08 §3.1） */
+  await syncKeepAliveConfig(tabId);
+  await probeCaptcha(tabId); /* 验证墙探测：连续命中自动暂停，见 probeCaptcha 注释 */
 });
 
 /* 按任务记录的网址重新打开标签页并重映射任务与定时器；返回是否成功 */
@@ -906,9 +1186,101 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "sync" || !changes.settings) return;
   const o = changes.settings.oldValue || {};
   const n = changes.settings.newValue || {};
-  if (o.keepAlive === n.keepAlive && o.httpHeartbeat === n.httpHeartbeat) return;
+  const touched = (k) => o[k] !== n[k];
+  if (!(["keepAlive", "httpHeartbeat", "skipOnActivity", "keepAwake"].some(touched))) return;
   reconcileKeepAlive();
 });
+
+/* ---- 错误页 / 验证墙 → 任务级自动暂停（06 §4.3）----
+   独立于掉线状态机（不进 sessionProbe，防污染备份冻结语义）：
+   心跳侧 5xx/404 连续 PAUSE_CONFIRM_SAMPLES 次、或页面侧验证墙特征连续命中才暂停；
+   错误页暂停后若心跳恢复 2xx 自动解除；验证墙由用户过墙后手动/自动恢复。
+   暂停期间定时器照常续跑（onAlarm 早退），恢复零重建 ---- */
+async function probeCaptcha(tabId) {
+  try {
+    const task = (await getTasks())[tabId];
+    if (!task) return;
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const s = ((document.title || "") + "\n" + ((document.body && document.body.innerText) || "")).slice(0, 4000).toLowerCase();
+        let hit = /(captcha|verify you are human|just a moment|attention required|access denied|pardon our interruption|human verification|安全验证|验证码|人机验证)/.test(s);
+        if (!hit) {
+          for (const el of document.querySelectorAll("iframe, frame, script[src]")) {
+            const u = el.getAttribute("src") || "";
+            if (/challenges\.cloudflare\.com|recaptcha|hcaptcha/i.test(u)) { hit = true; break; }
+          }
+        }
+        return hit;
+      },
+    });
+    const wall = !!(results && results[0] && results[0].result === true);
+    const cur = (await getTasks())[tabId];
+    if (!cur) return;
+    if (!wall) {
+      await rtSet(rtTab(RT_CAPTCHA, tabId), 0);
+      if (cur.autoPaused && cur.autoPaused.reason === "captcha") await resumeTaskAuto(tabId);
+      return;
+    }
+    /* 连击计数同样存会话态：验证墙随刷新周期（≥30 秒）探一次，SW 早被回收，
+       内存计数永远到不了阈值（见 RT_* 注释与 verify-sw-restart-state.mjs） */
+    const s = await rtBump(rtTab(RT_CAPTCHA, tabId));
+    if (s >= PAUSE_CONFIRM_SAMPLES) await pauseTaskAuto(tabId, "captcha");
+  } catch (e) {
+    /* 注入失败（权限/时序）：忽略，下个周期再探 */
+  }
+}
+
+async function pauseTaskAuto(tabId, reason) {
+  let didPause = false;
+  let task;
+  await withTaskLock(async () => {
+    const tasks = await getTasks();
+    task = tasks[tabId];
+    if (task && !task.autoPaused) {
+      tasks[tabId] = Object.assign({}, task, { autoPaused: { reason, at: Date.now() } });
+      await setTasks(tasks);
+      didPause = true;
+    }
+  });
+  if (!didPause) return;
+  await updateBadge();
+  const message = chrome.i18n.getMessage(
+    reason === "captcha" ? "notifTaskPausedCaptcha" : "notifTaskPausedError"
+  );
+  chrome.notifications
+    .create("task-paused-" + tabId, {
+      type: "basic",
+      iconUrl: "icons/icon48.png",
+      title: chrome.i18n.getMessage("notifTitle"),
+      message,
+    })
+    .catch(() => {});
+  await postWebhook("task-paused", {
+    content: message,
+    host: hostOf(task.url) || "",
+    url: task.url || "",
+    reason,
+  });
+}
+
+async function resumeTaskAuto(tabId) {
+  let done = false;
+  await withTaskLock(async () => {
+    const tasks = await getTasks();
+    if (tasks[tabId] && tasks[tabId].autoPaused) {
+      const t = Object.assign({}, tasks[tabId]);
+      delete t.autoPaused;
+      tasks[tabId] = t;
+      await setTasks(tasks);
+      done = true;
+    }
+  });
+  /* 恢复即清连击：避免"过墙后残留计数"让下一次同因暂停来得过早 */
+  await rtSet(rtTab(RT_ERROR, tabId), 0);
+  await rtSet(rtTab(RT_CAPTCHA, tabId), 0);
+  if (done) await updateBadge();
+}
 
 /* 与弹窗通信 */
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -918,7 +1290,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await cleanupInvalidTasks();
         sendResponse({ ok: true });
       } else if (msg.type === "start") {
-        const r = await startTask(msg.tabId, msg.seconds, msg.keyword);
+        const r = await startTask(msg.tabId, msg.seconds, msg.keyword, msg.keepWatching);
         sendResponse({ ok: true, intervalSec: r.safe });
       } else if (msg.type === "stop") {
         await stopTask(msg.tabId);
@@ -936,6 +1308,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await chrome.storage.sync.set({
           settings: Object.assign({}, settings, msg.settings)
         });
+        sendResponse({ ok: true });
+      } else if (msg.type === "keepalive-query") {
+        /* 页面脚本注入后拉配置快照（心跳/活动监听各自开关） */
+        const settings = await getSettings();
+        sendResponse({
+          heartbeat: !!settings.keepAlive,
+          activityWatch: !!settings.skipOnActivity,
+        });
+      } else if (msg.type === "user-activity") {
+        if (sender.tab && typeof sender.tab.id === "number") {
+          await rtSet(rtTab(RT_ACTIVITY, sender.tab.id), Date.now());
+        }
+        sendResponse({ ok: true });
+      } else if (msg.type === "resume-task") {
+        await resumeTaskAuto(msg.tabId);
         sendResponse({ ok: true });
       } else {
         sendResponse({ ok: false });

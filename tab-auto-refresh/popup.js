@@ -4,7 +4,9 @@ import {
   RESTRICTED_URL,
   clampInterval,
   formatCountdown,
-  formatInterval
+  formatInterval,
+  getTaskKeywords,
+  parseKeywords
 } from "./shared/logic.js";
 
 const $ = (id) => document.getElementById(id);
@@ -157,10 +159,23 @@ function buildTaskItem(tabId, task, tab) {
     dsp.textContent = msg("discardedHint");
     sub.appendChild(dsp);
   }
-  if (task.keyword) {
+  /* 自动暂停（错误页/验证墙）：行内标原因 + 恢复按钮（08 §3.5 可解释性要求） */
+  if (task.autoPaused) {
+    const ap = document.createElement("span");
+    ap.className = "invalid";
+    ap.textContent = msg(
+      task.autoPaused.reason === "captcha" ? "pausedCaptchaChip" : "pausedErrorChip"
+    );
+    sub.appendChild(ap);
+  }
+  const kws = getTaskKeywords(task);
+  if (kws.length) {
     const kw = document.createElement("span");
     kw.className = "next";
-    kw.textContent = msg("keywordChip", [task.keyword]);
+    kw.textContent =
+      task.onHit === "continue"
+        ? msg("keywordChipWatch", [kws.join(", ")])
+        : msg("keywordChip", [kws.join(", ")]);
     sub.appendChild(kw);
   }
   meta.appendChild(sub);
@@ -177,6 +192,17 @@ function buildTaskItem(tabId, task, tab) {
       if (!res.ok) setMsg(msg("errRefresh", [res.error || msg("errUnknown")]));
     });
     actions.appendChild(now);
+  }
+  if (tab && task.autoPaused) {
+    const resume = document.createElement("button");
+    resume.className = "mini";
+    resume.textContent = msg("actionResume");
+    resume.addEventListener("click", async () => {
+      await send({ type: "resume-task", tabId });
+      await refreshState();
+      renderAll();
+    });
+    actions.appendChild(resume);
   }
   const cancel = document.createElement("button");
   cancel.className = "mini danger";
@@ -255,7 +281,16 @@ async function saveSettings() {
       skipDiscarded: $("skipDiscardedCheck").checked,
       cookieBackup: $("cookieBackupCheck").checked,
       keepAlive: $("keepAliveCheck").checked,
-      httpHeartbeat: $("httpHeartbeatCheck").checked
+      httpHeartbeat: $("httpHeartbeatCheck").checked,
+      skipOnActivity: $("skipOnActivityCheck").checked,
+      keepAwake: $("keepAwakeCheck").checked,
+      webhookUrl: $("webhookUrlInput").value.trim(),
+      webhookEvents: [
+        $("webhookEvSession").checked && "session-lost",
+        $("webhookEvKeyword").checked && "keyword",
+        $("webhookEvStopped").checked && "task-stopped",
+        $("webhookEvPaused").checked && "task-paused"
+      ].filter(Boolean)
     }
   });
 }
@@ -274,6 +309,16 @@ async function init() {
   $("cookieBackupCheck").checked = !!settings.cookieBackup;
   $("keepAliveCheck").checked = !!settings.keepAlive;
   $("httpHeartbeatCheck").checked = !!settings.httpHeartbeat;
+  $("skipOnActivityCheck").checked = !!settings.skipOnActivity;
+  $("keepAwakeCheck").checked = !!settings.keepAwake;
+  $("webhookUrlInput").value = settings.webhookUrl || "";
+  {
+    const evs = Array.isArray(settings.webhookEvents) ? settings.webhookEvents : [];
+    $("webhookEvSession").checked = evs.includes("session-lost");
+    $("webhookEvKeyword").checked = evs.includes("keyword");
+    $("webhookEvStopped").checked = evs.includes("task-stopped");
+    $("webhookEvPaused").checked = evs.includes("task-paused");
+  }
   await renderAll();
 
   $("toggleBtn").addEventListener("click", async () => {
@@ -292,8 +337,10 @@ async function init() {
       } else {
         seconds = parseInt($("presetSelect").value, 10);
       }
-      const keyword = String($("keywordInput").value || "").trim().slice(0, 100);
-      const res = await send({ type: "start", tabId: currentTab.id, seconds, keyword });
+      /* parseKeywords 与后台同一实现：解析 + 去重 + 限条数，保证存储里落的形状一致 */
+      const keyword = parseKeywords($("keywordInput").value).join(",");
+      const keepWatching = $("keepWatchingCheck").checked;
+      const res = await send({ type: "start", tabId: currentTab.id, seconds, keyword, keepWatching });
       if (!res.ok) {
         setMsg(msg("errStart", [res.error || msg("errUnknown")]));
       } else if (clamped) {
@@ -311,6 +358,13 @@ async function init() {
   $("cookieBackupCheck").addEventListener("change", saveSettings);
   $("keepAliveCheck").addEventListener("change", saveSettings);
   $("httpHeartbeatCheck").addEventListener("change", saveSettings);
+  $("skipOnActivityCheck").addEventListener("change", saveSettings);
+  $("keepAwakeCheck").addEventListener("change", saveSettings);
+  $("webhookUrlInput").addEventListener("change", saveSettings);
+  $("webhookEvSession").addEventListener("change", saveSettings);
+  $("webhookEvKeyword").addEventListener("change", saveSettings);
+  $("webhookEvStopped").addEventListener("change", saveSettings);
+  $("webhookEvPaused").addEventListener("change", saveSettings);
 
   $("pauseAllBtn").addEventListener("click", async () => {
     await send({ type: "toggle-pause-all" });

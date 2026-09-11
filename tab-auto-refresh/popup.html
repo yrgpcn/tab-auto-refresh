@@ -30,8 +30,12 @@
     </div>
     <div class="row">
       <span class="label" data-i18n="keywordLabel"></span>
-      <input id="keywordInput" type="text" maxlength="100" data-i18n-placeholder="keywordPlaceholder">
+      <input id="keywordInput" type="text" data-i18n-placeholder="keywordPlaceholder">
     </div>
+    <label class="row-check">
+      <input id="keepWatchingCheck" type="checkbox">
+      <span data-i18n="keepWatchingLabel"></span>
+    </label>
     <label class="row-check">
       <input id="bypassCheck" type="checkbox">
       <span data-i18n="bypassLabel"></span>
@@ -52,6 +56,36 @@
       <input id="httpHeartbeatCheck" type="checkbox">
       <span data-i18n="httpHeartbeatLabel"></span>
     </label>
+    <label class="row-check">
+      <input id="skipOnActivityCheck" type="checkbox">
+      <span data-i18n="skipOnActivityLabel"></span>
+    </label>
+    <label class="row-check">
+      <input id="keepAwakeCheck" type="checkbox">
+      <span data-i18n="keepAwakeLabel"></span>
+    </label>
+    <div class="row">
+      <span class="label" data-i18n="webhookLabel"></span>
+      <input id="webhookUrlInput" type="text" data-i18n-placeholder="webhookPlaceholder">
+    </div>
+    <div class="row webhook-events">
+      <label class="row-check compact">
+        <input id="webhookEvSession" type="checkbox">
+        <span data-i18n="webhookEvSession"></span>
+      </label>
+      <label class="row-check compact">
+        <input id="webhookEvKeyword" type="checkbox">
+        <span data-i18n="webhookEvKeyword"></span>
+      </label>
+      <label class="row-check compact">
+        <input id="webhookEvStopped" type="checkbox">
+        <span data-i18n="webhookEvStopped"></span>
+      </label>
+      <label class="row-check compact">
+        <input id="webhookEvPaused" type="checkbox">
+        <span data-i18n="webhookEvPaused"></span>
+      </label>
+    </div>
     <button id="toggleBtn" class="primary"></button>
     <div id="msg" class="hint"></div>
   </section>

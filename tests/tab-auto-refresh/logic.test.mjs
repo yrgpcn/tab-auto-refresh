@@ -13,6 +13,11 @@ import {
   hostOf,
   nextBackupState,
   applyBackupAction,
+  parseKeywords,
+  getTaskKeywords,
+  pickHits,
+  normalizeWebhookUrl,
+  isErrorStatus,
   decideBackupWrite,
   BACKUP_ACT,
   looksLikeLoginPage,
@@ -279,6 +284,60 @@ test("httpHeartbeat is on by default like keepAlive", () => {
   assert.equal(DEFAULT_SETTINGS.httpHeartbeat, true);
 });
 
+test("parseKeywords splits, dedupes case-insensitively, caps length and count", () => {
+  assert.deepEqual(parseKeywords("补货, 有票 ,,补货"), ["补货", "有票"]);
+  assert.deepEqual(parseKeywords("a, A ,b"), ["a", "b"]);
+  assert.deepEqual(parseKeywords("x".repeat(150)), ["x".repeat(100)]);
+  const many = Array.from({ length: 15 }, (_, i) => "k" + i).join(",");
+  assert.equal(parseKeywords(many).length, 10);
+  assert.deepEqual(parseKeywords(null), []);
+  assert.deepEqual(parseKeywords("  "), []);
+});
+
+test("getTaskKeywords prefers keywords[] and falls back to legacy keyword string", () => {
+  assert.deepEqual(getTaskKeywords({ keywords: ["a", "b"] }), ["a", "b"]);
+  assert.deepEqual(getTaskKeywords({ keyword: "old" }), ["old"]);
+  assert.deepEqual(getTaskKeywords({ keywords: ["a"], keyword: "b" }), ["a"]);
+  assert.deepEqual(getTaskKeywords({}), []);
+  assert.deepEqual(getTaskKeywords(null), []);
+});
+
+test("pickHits separates present/newly/notified for continuous watching", () => {
+  const text = "NOW IN STOCK and available";
+  const a = pickHits(text, ["in stock", "available"], []);
+  assert.deepEqual(a.present, ["in stock", "available"]);
+  assert.deepEqual(a.newly, ["in stock", "available"]);
+  /* 已通知（大小写不同也算已通知）→ 不重复报 */
+  const b = pickHits(text, ["in stock", "available"], ["IN STOCK"]);
+  assert.deepEqual(b.newly, ["available"]);
+  /* 关键词消失：present 收缩，供调用方回写在场集 */
+  const c = pickHits("nothing here", ["in stock", "available"], ["in stock", "available"]);
+  assert.deepEqual(c.present, []);
+  assert.deepEqual(c.newly, []);
+});
+
+test("normalizeWebhookUrl accepts only http(s) and trims", () => {
+  assert.equal(normalizeWebhookUrl("  https://h.example/x  "), "https://h.example/x");
+  assert.equal(normalizeWebhookUrl("http://localhost:8080/hook"), "http://localhost:8080/hook");
+  assert.equal(normalizeWebhookUrl("javascript:alert(1)"), "");
+  assert.equal(normalizeWebhookUrl("ftp://x"), "");
+  assert.equal(normalizeWebhookUrl(""), "");
+  assert.equal(normalizeWebhookUrl(null), "");
+  assert.equal(normalizeWebhookUrl("not a url"), "");
+});
+
+test("isErrorStatus covers server faults and missing pages only", () => {
+  assert.ok(isErrorStatus(500) && isErrorStatus(503) && isErrorStatus(404));
+  assert.ok(!isErrorStatus(200) && !isErrorStatus(206) && !isErrorStatus(403));
+  assert.ok(!isErrorStatus(302));
+});
+
+test("monitoring-related defaults are off-by-default / empty-by-default", () => {
+  assert.equal(DEFAULT_SETTINGS.skipOnActivity, false);
+  assert.equal(DEFAULT_SETTINGS.keepAwake, false);
+  assert.equal(DEFAULT_SETTINGS.webhookUrl, "");
+  assert.deepEqual(DEFAULT_SETTINGS.webhookEvents, ["session-lost", "keyword", "task-stopped", "task-paused"]);
+});
 test("cookie backup is opt-in: off by default", () => {
   assert.equal(DEFAULT_SETTINGS.cookieBackup, false);
 });

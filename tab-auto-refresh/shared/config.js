@@ -14,6 +14,11 @@ export const DEFAULT_SETTINGS = {
   cookieBackup: false,
   keepAlive: true,
   httpHeartbeat: true,
+  skipOnActivity: false,
+  keepAwake: false,
+  /* Webhook：载荷会向所配 URL 披露被监控站点，敏感面——默认空=彻底关闭 */
+  webhookUrl: "",
+  webhookEvents: ["session-lost", "keyword", "task-stopped", "task-paused"],
   lastIntervalSec: DEFAULT_INTERVAL_SEC
 };
 

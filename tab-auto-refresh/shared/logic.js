@@ -161,6 +161,11 @@ export function applyBackupAction(prevEntry, nextCookies, now) {
   return { write: { cookies: nextCookies, timestamp: now, schemaVersion: 2 }, notify: false };
 }
 
+/* 错误页判定：服务器故障或页面失踪——心跳连续命中则自动暂停任务（06 §4.3） */
+export function isErrorStatus(status) {
+  return status >= 500 || status === 404;
+}
+
 /* 登录页 URL 启发式：只看 pathname（忽略 query 里 returnURL 之类的干扰项），
    命中 login/signin/auth/sso 等路径段即疑似登录页。掉线行为信号用 */
 export function looksLikeLoginPage(u) {
@@ -169,6 +174,55 @@ export function looksLikeLoginPage(u) {
     return /(^|\/)(login|logon|log-in|signin|sign-in|sign_in|auth|oauth|sso|cas|passport|id\.html)(\/|[.?#]|$)/.test(p);
   } catch (e) {
     return false;
+  }
+}
+
+/* 用户输入解析：逗号/换行分隔，去空、按小写去重，每条 ≤100 字、上限 10 条 */
+export function parseKeywords(input) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of String(input == null ? "" : input).split(/[,\n]/)) {
+    const k = raw.trim().slice(0, 100);
+    if (!k || seen.has(k.toLowerCase())) continue;
+    seen.add(k.toLowerCase());
+    out.push(k);
+    if (out.length >= 10) break;
+  }
+  return out;
+}
+
+/* 任务关键词读取（单一事实源）：新数据读 keywords[]，v1.7.0 旧任务兼容单串 keyword。
+   后台与弹窗都用它，杜绝"两处各自做兼容"的分叉 */
+export function getTaskKeywords(task) {
+  if (!task) return [];
+  const list = Array.isArray(task.keywords)
+    ? task.keywords
+    : task.keyword
+      ? [task.keyword]
+      : [];
+  return list.filter((k) => typeof k === "string" && k.trim());
+}
+
+/* 命中划分：present=当前在场的全部关键词；newly=在场但尚未通知过的（大小写不敏感）。
+   调用方用 present 回写"在场集"（关键词消失即移出，下次再现重新通知），用 newly 触发通知 */
+export function pickHits(text, keywords, notifiedKeys) {
+  const list = Array.isArray(keywords) ? keywords : [];
+  const present = list.filter((k) => keywordHit(text, k));
+  const known = new Set(
+    (Array.isArray(notifiedKeys) ? notifiedKeys : []).map((k) => String(k).toLowerCase())
+  );
+  const newly = present.filter((k) => !known.has(String(k).toLowerCase()));
+  return { present, newly };
+}
+
+/* webhook 地址校验：仅接受 http(s)，其余（空/非法/其他协议）一律视为关闭 */
+export function normalizeWebhookUrl(u) {
+  const v = String(u == null ? "" : u).trim();
+  try {
+    const x = new URL(v);
+    return x.protocol === "https:" || x.protocol === "http:" ? v : "";
+  } catch (e) {
+    return "";
   }
 }
 

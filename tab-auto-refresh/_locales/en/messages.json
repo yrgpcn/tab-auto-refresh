@@ -71,15 +71,34 @@
   "keepAliveLabel": { "message": "Keep awake: injects simulated activity into monitored pages to delay server-side login expiry" },
   "httpHeartbeatLabel": { "message": "Silent heartbeat: periodically pings the monitored URL in the background to hold the session without touching the page" },
   "keywordLabel": { "message": "Keyword (optional)" },
-  "keywordPlaceholder": { "message": "Notify me when this text appears" },
+  "keywordPlaceholder": { "message": "comma-separated, e.g. in stock, available" },
+  "keepWatchingLabel": { "message": "Keep watching after a hit (default: task stops on hit; on = keep monitoring, notify only on new hits)" },
+  "keywordChipWatch": {
+    "message": " - still watching \"$KW$\"",
+    "placeholders": { "kw": { "content": "$1" } }
+  },
+  "skipOnActivityLabel": { "message": "Skip refreshes while you are using the page (within 60s; real input counts, keep-awake simulation does not)" },
+  "keepAwakeLabel": { "message": "Prevent system sleep while tasks run (keeps the machine awake - be careful on laptop battery)" },
+  "webhookLabel": { "message": "Webhook" },
+  "webhookPlaceholder": { "message": "https://… (Discord/Telegram/Slack/Ntfy work; empty = off)" },
+  "webhookEvSession": { "message": "session lost" },
+  "webhookEvKeyword": { "message": "keyword hit" },
+  "webhookEvStopped": { "message": "task auto-stopped" },
+  "notifKeywordHits": {
+    "message": "The monitored page now contains the keyword \"$KW$\"",
+    "placeholders": { "kw": { "content": "$1" } }
+  },
   "keywordChip": {
     "message": " - watching \"$KW$\"",
     "placeholders": { "kw": { "content": "$1" } }
   },
-  "notifKeywordHit": {
-    "message": "The monitored page now contains the keyword \"$KW$\"; the task was stopped automatically",
-    "placeholders": { "kw": { "content": "$1" } }
-  },
+
+  "pausedErrorChip": { "message": " - page keeps erroring, auto-paused" },
+  "pausedCaptchaChip": { "message": " - hit a bot check, auto-paused" },
+  "actionResume": { "message": "Resume" },
+  "notifTaskPausedError": { "message": "The monitored page keeps returning errors (5xx/404); the task is auto-paused and will resume once the page recovers" },
+  "notifTaskPausedCaptcha": { "message": "The monitored page hit a bot verification wall; the task is auto-paused - pass the check and press Resume" },
+  "webhookEvPaused": { "message": "task auto-paused" },
   "intervalLabel": { "message": "Interval" },
   "customPlaceholder": { "message": "Custom seconds" },
   "bypassLabel": { "message": "Bypass cache when refreshing (like Ctrl+F5)" },

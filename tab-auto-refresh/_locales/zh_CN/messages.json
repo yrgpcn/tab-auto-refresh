@@ -70,15 +70,34 @@
   "keepAliveLabel": { "message": "后台保活：定期向监控页面注入模拟活动，延缓服务器端登录过期" },
   "httpHeartbeatLabel": { "message": "静默心跳：定期向监控地址发后台请求，不打扰页面地续住会话" },
   "keywordLabel": { "message": "关键词（可选）" },
-  "keywordPlaceholder": { "message": "页面出现该文字时通知我" },
+  "keywordPlaceholder": { "message": "逗号分隔多个，如：补货, 有票" },
+  "keepWatchingLabel": { "message": "命中后继续监控（默认命中即停任务；开启则持续盯，新命中才再次通知）" },
+  "keywordChipWatch": {
+    "message": " · 持续盯「$KW$」",
+    "placeholders": { "kw": { "content": "$1" } }
+  },
+  "skipOnActivityLabel": { "message": "你在操作该页面时跳过刷新（60 秒内有真人操作即跳；保活的模拟活动不会被误判）" },
+  "keepAwakeLabel": { "message": "有任务时阻止系统休眠（会持续占用电源，笔记本电池场景慎用）" },
+  "webhookLabel": { "message": "Webhook" },
+  "webhookPlaceholder": { "message": "https://…（Discord/Telegram/Slack/Ntfy 均可，留空关闭）" },
+  "webhookEvSession": { "message": "会话掉线" },
+  "webhookEvKeyword": { "message": "关键词命中" },
+  "webhookEvStopped": { "message": "任务自动停止" },
+  "notifKeywordHits": {
+    "message": "监控页面已出现关键词「$KW$」",
+    "placeholders": { "kw": { "content": "$1" } }
+  },
   "keywordChip": {
     "message": " · 盯「$KW$」",
     "placeholders": { "kw": { "content": "$1" } }
   },
-  "notifKeywordHit": {
-    "message": "监控页面已出现关键词「$KW$」，任务已自动停止",
-    "placeholders": { "kw": { "content": "$1" } }
-  },
+
+  "pausedErrorChip": { "message": " · 页面持续报错，已自动暂停" },
+  "pausedCaptchaChip": { "message": " · 遇到人机验证，已自动暂停" },
+  "actionResume": { "message": "恢复" },
+  "notifTaskPausedError": { "message": "监控页面持续返回错误（5xx/404），任务已自动暂停；页面恢复后会自动继续" },
+  "notifTaskPausedCaptcha": { "message": "监控页面出现人机验证墙，任务已自动暂停；请在页面中通过验证后点恢复" },
+  "webhookEvPaused": { "message": "任务自动暂停" },
   "skipDiscardedLabel": { "message": "跳过已丢弃（休眠）的标签页" },
   "pauseAll": { "message": "暂停全部" },
   "resumeAll": { "message": "恢复全部" },

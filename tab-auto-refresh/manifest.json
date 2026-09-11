@@ -5,7 +5,7 @@
   "minimum_chrome_version": "120",
   "default_locale": "zh_CN",
   "description": "__MSG_extDesc__",
-  "permissions": ["alarms", "storage", "tabs", "contextMenus", "notifications", "cookies", "scripting", "idle"],
+  "permissions": ["alarms", "storage", "tabs", "contextMenus", "notifications", "cookies", "scripting", "idle", "power"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",
