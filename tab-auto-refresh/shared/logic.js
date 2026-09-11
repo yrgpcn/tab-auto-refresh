@@ -147,6 +147,20 @@ export function decideBackupWrite(prevEntry, nextCookies, now) {
   return { action: BACKUP_ACT.MERGE, streak, entry: { sessionLostStreak: streak }, notify: false };
 }
 
+/* 决策 + 落盘映射二合一（04 复审 §4.4）：后台写入与回归测试共用这一个实现，
+   杜绝"测试复刻一遍映射、后台另写一遍"的契约两半漂移——死代码 bug 即此类。
+   返回 { write, notify }：write=null 表示本次什么都不写（冻结且通知处于节流期） */
+export function applyBackupAction(prevEntry, nextCookies, now) {
+  const d = decideBackupWrite(prevEntry, nextCookies, now);
+  if (d.action === BACKUP_ACT.FREEZE) {
+    return { write: d.notify ? Object.assign({}, prevEntry, d.entry) : null, notify: !!d.notify };
+  }
+  if (d.action === BACKUP_ACT.MERGE) {
+    return { write: Object.assign({}, prevEntry, d.entry), notify: false };
+  }
+  return { write: { cookies: nextCookies, timestamp: now, schemaVersion: 2 }, notify: false };
+}
+
 /* 登录页 URL 启发式：只看 pathname（忽略 query 里 returnURL 之类的干扰项），
    命中 login/signin/auth/sso 等路径段即疑似登录页。掉线行为信号用 */
 export function looksLikeLoginPage(u) {
@@ -165,12 +179,14 @@ export function keywordHit(text, keyword) {
   return String(text == null ? "" : text).toLowerCase().includes(k);
 }
 
-/* 刷新间隔抖动：±pct%（rand 注入以便测试），下限 minMs（30 秒 alarms 红线） */
+/* 刷新间隔抖动：±pct%（rand 注入以便测试），下限 minMs（30 秒 alarms 红线）。
+   基准已贴地板（30 秒档）时对称抖动约一半样本会被地板抬平（04 复审 §4.5），
+   该档改为只正向抖动，保住去相关幅度 */
 export function jitteredDelayMs(seconds, pct = 15, rand = Math.random, minMs = 30000) {
   const base = Math.max(Number(seconds) || 0, 30) * 1000;
-  const ratio = rand() * 2 - 1;
-  const v = base * (1 + (Math.max(0, Math.min(50, pct)) / 100) * ratio);
-  return Math.max(minMs, Math.round(v));
+  const p = Math.max(0, Math.min(50, pct)) / 100;
+  const ratio = base <= minMs ? rand() : rand() * 2 - 1;
+  return Math.max(minMs, Math.round(base * (1 + p * ratio)));
 }
 
 /* 取 origin+pathname 作为网址匹配键（忽略 hash 查询参数差异） */

@@ -3,9 +3,8 @@
 import { PREFIX, PRESETS, DEFAULT_SETTINGS, HB_PREFIX } from "./shared/config.js";
 import {
   RESTRICTED_URL,
-  BACKUP_ACT,
+  applyBackupAction,
   clampInterval,
-  decideBackupWrite,
   domainChain,
   hostOf,
   jitteredDelayMs,
@@ -110,24 +109,31 @@ async function reportSessionSignal(root, host, suspect) {
     const data = await chrome.storage.local.get(PROBE_KEY);
     const all = data[PROBE_KEY] || {};
     const p = all[root] || { sus: 0, lost: false, lastNotifiedAt: 0 };
+    const stamp = () => (p.sus || 0) + "|" + (p.lost ? 1 : 0) + "|" + (p.lastNotifiedAt || 0);
+    const before = stamp();
+    let notify = false;
+    const now = Date.now();
     if (suspect) {
-      p.sus = (p.sus || 0) + 1;
-      if (p.sus >= SESSION_LOST_CONFIRM_SAMPLES) p.lost = true;
+      /* 已确认掉线后不再累加 sus：lost 已锁死，计数只会无上限增长 */
+      if (!p.lost) {
+        p.sus = (p.sus || 0) + 1;
+        if (p.sus >= SESSION_LOST_CONFIRM_SAMPLES) p.lost = true;
+      }
+      if (p.lost && now - (p.lastNotifiedAt || 0) >= SESSION_LOST_NOTIFY_MS) {
+        p.lastNotifiedAt = now;
+        notify = true;
+      }
     } else {
       p.sus = 0;
       p.lost = false;
     }
-    const now = Date.now();
-    if (p.lost && now - (p.lastNotifiedAt || 0) >= SESSION_LOST_NOTIFY_MS) {
-      p.lastNotifiedAt = now;
+    /* 值没变就不写盘、不刷角标（04 复审 §4.2）：30 秒任务的每次页面加载都会打到这里 */
+    if (stamp() !== before) {
       all[root] = p;
       await chrome.storage.local.set({ [PROBE_KEY]: all });
-      notifySessionLost(host);
-    } else {
-      all[root] = p;
-      await chrome.storage.local.set({ [PROBE_KEY]: all });
+      await updateBadge();
     }
-    await updateBadge();
+    if (notify) notifySessionLost(host);
   } catch (e) {
     /* 探针失败不影响主流程 */
   }
@@ -194,7 +200,8 @@ async function armRefresh(tabId, intervalSec) {
   });
 }
 
-/* 系统从睡眠唤醒后自愈（学 tab-reloader）：把所有已过期的任务 alarm 打散 0~1s 重建 */
+/* 系统从睡眠唤醒后自愈（学 tab-reloader）：过期刷新 alarm 重走完整周期+抖动，
+   过期心跳 alarm 打散 0~60 秒重建（与 ensureHeartbeat 的随机相位同一节奏） */
 chrome.idle.onStateChanged.addListener(async (state) => {
   if (state !== "active") return;
   try {
@@ -204,7 +211,7 @@ chrome.idle.onStateChanged.addListener(async (state) => {
       if (!a.scheduledTime || a.scheduledTime >= now) continue;
       if (a.name.startsWith(HB_PREFIX)) {
         await chrome.alarms.create(a.name, {
-          when: now + Math.round(Math.random() * 1000),
+          when: now + Math.round(Math.random() * 60000),
           periodInMinutes: HEARTBEAT_MINUTES
         });
       } else if (a.name.startsWith(PREFIX)) {
@@ -281,7 +288,11 @@ async function ensureHeartbeat(tabId) {
       await chrome.alarms.clear(hbName(tabId));
       return;
     }
-    await chrome.alarms.create(hbName(tabId), { periodInMinutes: HEARTBEAT_MINUTES });
+    /* 随机初始相位（0~一个周期）：多任务心跳不再同拍（04 复审 §4.3） */
+    await chrome.alarms.create(hbName(tabId), {
+      when: Date.now() + Math.round(Math.random() * HEARTBEAT_MINUTES * 60 * 1000),
+      periodInMinutes: HEARTBEAT_MINUTES
+    });
   } catch (e) {
     /* 心跳开关或闹钟异常不阻塞任务 */
   }
@@ -298,11 +309,14 @@ async function doHeartbeat(tabId) {
     const timer = setTimeout(() => ctrl.abort(), 15000);
     let res;
     try {
+      /* Range 截断到 1KB：请求到达即完成会话续期，正文无人消费；
+         站点忽略 Range 时回退整页 200，判定逻辑不受影响（206 同在 ok 区间） */
       res = await fetch(task.url, {
         credentials: "include",
         cache: "no-store",
         redirect: "follow",
         signal: ctrl.signal,
+        headers: { Range: "bytes=0-1023" },
       });
     } finally {
       clearTimeout(timer);
@@ -438,28 +452,17 @@ async function backupCookies(tabId) {
     if (cookies.length > MAX_COOKIES_PER_HOST) cookies.length = MAX_COOKIES_PER_HOST;
     const key = COOKIE_BACKUP_PREFIX + host;
     const now = Date.now();
-    /* 会话探针已判定该根域掉线：行为证据强于状态采样，直接保护备份不被写坏 */
+    /* 行为通道已判定该根域掉线：证据强于状态采样，直接保护备份不被写坏 */
     if (await isProbeLost(task.url)) return;
     /* 掉线确认窗口（复审§2 修复）：疑似采样只累加计数（MERGE），绝不把坏样本
        写进 cookies——否则下一轮 prev 里没有会话票据，streak 恒被清零，
        确认窗口不可达且最后一次好备份在第 2 次采样就被污染。timestamp 保持
        最后有效备份时间，长期冻结的备份由 30 天 TTL 自然淘汰 */
     const prevEntry = (await chrome.storage.local.get(key))[key];
-    const d = decideBackupWrite(prevEntry, cookies, now);
-    if (d.action === BACKUP_ACT.FREEZE) {
-      if (d.notify) {
-        await chrome.storage.local.set({ [key]: Object.assign({}, prevEntry, d.entry) });
-        notifySessionLost(host);
-      }
-      return;
-    }
-    if (d.action === BACKUP_ACT.MERGE) {
-      await chrome.storage.local.set({ [key]: Object.assign({}, prevEntry, d.entry) });
-      return;
-    }
-    await chrome.storage.local.set({
-      [key]: { cookies, timestamp: now, schemaVersion: 2 }
-    });
+    /* 决策与落盘映射同一纯函数（04 复审 §4.4）：write=null 表示冻结且节流，什么都不写 */
+    const act = applyBackupAction(prevEntry, cookies, now);
+    if (act.write) await chrome.storage.local.set({ [key]: act.write });
+    if (act.notify) notifySessionLost(host);
   } catch (e) {
     try {
       const flagged = (await chrome.storage.local.get(BACKUP_WARN_KEY))[BACKUP_WARN_KEY];
@@ -739,6 +742,10 @@ async function prune(adoptLegacyUrls = false) {
        可能撞上无关的新标签页），只有网址一致才保留；无网址的旧任务按
        adoptLegacyUrls 决定补记网址（扩展更新，tabId 仍有效）还是淘汰（浏览器重启） */
     const claimed = new Set();
+    /* 未认领任务的旧 alarm 先记账、setTasks 落盘后再清（04 复审 §4.1）：
+       SW 中途回收时宁可留"有 alarm 没任务"（onAlarm 找不到任务会自清），
+       也不能留"有任务没 alarm"的静默僵尸 */
+    const staleAlarms = [];
     /* 待处理集合（复审§3.1 修复）：认领写入 tasks[match.id] 前必须确认该 id
        不再是别的未处理任务的键，否则两个任务撞同一页时后者被覆盖静默丢失 */
     const pending = new Set(Object.keys(tasks).map(Number));
@@ -773,8 +780,7 @@ async function prune(adoptLegacyUrls = false) {
       let match =
         openTabs.find((t) => !claimed.has(t.id) && !pending.has(t.id) && tabShowsUrl(t, task.url)) || null;
       delete tasks[tabId];
-      await chrome.alarms.clear(alarmName(tabId));
-      await chrome.alarms.clear(hbName(tabId));
+      staleAlarms.push(alarmName(tabId), hbName(tabId));
       if (match) {
         claimed.add(match.id);
         pending.delete(match.id);
@@ -810,6 +816,7 @@ async function prune(adoptLegacyUrls = false) {
       dirty = true;
     }
     if (dirty) await setTasks(tasks);
+    for (const name of staleAlarms) await chrome.alarms.clear(name);
     /* 启动时统一淘汰：v1.4.5 前遗留的多余备份、过期备份、超量备份 */
     await pruneCookieBackups(tasks);
   });

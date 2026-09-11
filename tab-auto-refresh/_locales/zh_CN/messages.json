@@ -30,6 +30,7 @@
   },
   "taskInvalid": { "message": "标签页已失效" },
   "pausedHint": { "message": " · 已暂停" },
+  "discardedHint": { "message": " · 休眠中，已跳过刷新（唤醒该标签页即恢复）" },
   "perInterval": {
     "message": "每 $INTERVAL$",
     "placeholders": { "interval": { "content": "$1" } }

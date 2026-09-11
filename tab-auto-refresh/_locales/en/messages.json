@@ -39,6 +39,7 @@
     "placeholders": { "time": { "content": "$1" } }
   },
   "pausedHint": { "message": " - paused" },
+  "discardedHint": { "message": " - tab sleeping, refresh skipped (wake the tab to resume)" },
   "actionNow": { "message": "Refresh now" },
   "actionCancel": { "message": "Cancel" },
   "errRefresh": {

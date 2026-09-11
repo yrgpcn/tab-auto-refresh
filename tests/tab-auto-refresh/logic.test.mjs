@@ -12,6 +12,7 @@ import {
   formatInterval,
   hostOf,
   nextBackupState,
+  applyBackupAction,
   decideBackupWrite,
   BACKUP_ACT,
   looksLikeLoginPage,
@@ -185,64 +186,43 @@ test("nextBackupState requires a confirmation window before freezing backups", (
   assert.equal(overdue.notify, true);
 });
 
-/* 复审§2 的集成契约：模拟 backupCookies 反复用"上一份备份 + 本次采样"驱动决策，
-   验证坏样本绝不覆盖好备份、streak 能累加到确认值。纯测 nextBackupState 会漏掉
-   这个跨采样状态传递——正是当初"确认窗口不可达"死代码 bug 的藏身处。 */
-function simulateBackupSamples(samples) {
-  let entry; /* 存储里的当前备份 */
-  const now0 = 1_800_000_000_000;
-  const log = [];
+/* 复审§2 集成契约（04 复审 §4.4 升级版）：测试直接驱动 applyBackupAction——
+   后台写盘用的就是它，决策与落盘映射不再有两半，测试不可能与实现悄悄分家。 */
+function runSamples(samples, now0 = 1_800_000_000_000) {
+  let entry;
+  const acts = [];
   samples.forEach((cookies, i) => {
-    const d = decideBackupWrite(entry, cookies, now0 + i * 1000);
-    let label;
-    if (d.action === BACKUP_ACT.OVERWRITE) {
-      entry = { cookies, timestamp: now0 + i * 1000, schemaVersion: 2 };
-      label = "覆盖";
-    } else if (d.action === BACKUP_ACT.MERGE) {
-      entry = Object.assign({}, entry, d.entry); /* 关键：不碰 cookies/timestamp */
-      label = "记streak";
-    } else {
-      if (d.notify) entry = Object.assign({}, entry, d.entry);
-      label = d.notify ? "冻结+通知" : "冻结(节流)";
-    }
-    log.push({
-      label,
-      streak: entry ? entry.sessionLostStreak || 0 : 0,
-      hasSessionTicket: entry ? hasSessionCookie(entry.cookies) : false,
-    });
+    const act = applyBackupAction(entry, cookies, now0 + i * 1000);
+    if (act.write) entry = act.write;
+    acts.push(act);
   });
-  return log;
+  return { acts, entry };
 }
 
-test("decideBackupWrite keeps the last good backup until the loss is confirmed", () => {
+test("applyBackupAction keeps the last good backup until the loss is confirmed", () => {
   const withTicket = [{ name: "sid" }];
   const noTicket = [{ name: "pref", expirationDate: 9e9 }];
-  /* 采样1 在线 → 覆盖；之后 3 次掉线采样 */
-  const log = simulateBackupSamples([withTicket, noTicket, noTicket, noTicket]);
-  assert.equal(log[0].label, "覆盖");
-  assert.equal(log[0].hasSessionTicket, true);
-  /* 疑似第 1 次：只记 streak，好备份的会话票据必须还在 */
-  assert.equal(log[1].label, "记streak");
-  assert.equal(log[1].streak, 1);
-  assert.equal(log[1].hasSessionTicket, true, "疑似采样绝不能覆盖掉最后一次好备份");
-  /* 疑似第 2 次：达到确认窗口，冻结并通知，好备份仍完好 */
-  assert.equal(log[2].label, "冻结+通知");
-  assert.equal(log[2].hasSessionTicket, true);
-  /* 第 3 次：已处于掉线态，继续冻结（通知被节流） */
-  assert.equal(log[3].label, "冻结(节流)");
-  assert.equal(log[3].hasSessionTicket, true);
+  const { acts, entry } = runSamples([withTicket, noTicket, noTicket, noTicket]);
+  assert.equal(hasSessionCookie(acts[0].write.cookies), true); /* 1 在线：正常覆盖 */
+  assert.equal(acts[1].notify, false);
+  assert.equal(hasSessionCookie(acts[1].write.cookies), true, "疑似采样绝不能覆盖最后一次好备份");
+  assert.equal(acts[1].write.sessionLostStreak, 1);
+  assert.equal(acts[2].notify, true); /* 2 连缺：确认冻结并通知 */
+  assert.equal(acts[2].write.sessionLostAt !== undefined, true);
+  assert.equal(hasSessionCookie(acts[2].write.cookies), true);
+  assert.equal(acts[3].write, null, "持续掉线：什么都不写");
+  assert.equal(acts[3].notify, false, "通知按 6h 节流");
+  assert.equal(hasSessionCookie(entry.cookies), true, "存储里仍是最后一次好备份");
 });
 
-test("decideBackupWrite recovers when a session ticket comes back", () => {
+test("applyBackupAction recovers when a session ticket comes back", () => {
   const withTicket = [{ name: "sid" }];
   const noTicket = [{ name: "pref", expirationDate: 9e9 }];
-  /* 在线 → 疑似1 → 重新登录（又有票据）→ 应恢复正常覆盖、清计数 */
-  const log = simulateBackupSamples([withTicket, noTicket, withTicket]);
-  assert.equal(log[1].label, "记streak");
-  assert.equal(log[1].streak, 1);
-  assert.equal(log[2].label, "覆盖");
-  assert.equal(log[2].streak, 0, "重新登录后 streak 归零");
-  assert.equal(log[2].hasSessionTicket, true);
+  const { acts, entry } = runSamples([withTicket, noTicket, withTicket]);
+  assert.equal(acts[1].write.sessionLostStreak, 1);
+  assert.equal(acts[2].write.sessionLostStreak, undefined, "重新登录后计数清除");
+  assert.equal(acts[2].write.sessionLostAt, undefined, "冻结标记随之清除");
+  assert.equal(entry.cookies[0].name, "sid", "恢复即正常覆盖");
 });
 
 test("decideBackupWrite: first sample with no history just writes normally", () => {
@@ -286,6 +266,13 @@ test("jitteredDelayMs stays within ±pct and above the 30s alarm floor", () => {
   /* pct 上限夹到 50%，rand 结果仍在 [0,1] 内 */
   const hi = jitteredDelayMs(60, 90, () => 1);
   assert.ok(hi <= 60000 * 1.5 + 1 && hi >= 60000);
+});
+
+test("jitteredDelayMs jitters forward-only at the 30s floor", () => {
+  /* 30 秒档基准即地板：对称抖动约一半样本被抬平，正向抖动保住全幅（04 §4.5） */
+  assert.equal(jitteredDelayMs(30, 15, () => 0), 30000);
+  assert.ok(jitteredDelayMs(30, 15, () => 0.5) > 30000);
+  assert.equal(jitteredDelayMs(30, 15, () => 1), 34500);
 });
 
 test("httpHeartbeat is on by default like keepAlive", () => {

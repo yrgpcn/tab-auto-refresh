@@ -150,6 +150,13 @@ function buildTaskItem(tabId, task, tab) {
   } else {
     sub.textContent = base;
   }
+  /* skipDiscarded 命中是唯一的静默跳过（03 报告 §2.4c 可解释性）：行内标注原因 */
+  if (settings.skipDiscarded && tab && tab.discarded) {
+    const dsp = document.createElement("span");
+    dsp.className = "next";
+    dsp.textContent = msg("discardedHint");
+    sub.appendChild(dsp);
+  }
   if (task.keyword) {
     const kw = document.createElement("span");
     kw.className = "next";
