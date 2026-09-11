@@ -150,6 +150,12 @@ function buildTaskItem(tabId, task, tab) {
   } else {
     sub.textContent = base;
   }
+  if (task.keyword) {
+    const kw = document.createElement("span");
+    kw.className = "next";
+    kw.textContent = msg("keywordChip", [task.keyword]);
+    sub.appendChild(kw);
+  }
   meta.appendChild(sub);
   li.appendChild(meta);
 
@@ -241,7 +247,8 @@ async function saveSettings() {
       bypassCache: $("bypassCheck").checked,
       skipDiscarded: $("skipDiscardedCheck").checked,
       cookieBackup: $("cookieBackupCheck").checked,
-      keepAlive: $("keepAliveCheck").checked
+      keepAlive: $("keepAliveCheck").checked,
+      httpHeartbeat: $("httpHeartbeatCheck").checked
     }
   });
 }
@@ -259,6 +266,7 @@ async function init() {
   $("skipDiscardedCheck").checked = !!settings.skipDiscarded;
   $("cookieBackupCheck").checked = !!settings.cookieBackup;
   $("keepAliveCheck").checked = !!settings.keepAlive;
+  $("httpHeartbeatCheck").checked = !!settings.httpHeartbeat;
   await renderAll();
 
   $("toggleBtn").addEventListener("click", async () => {
@@ -277,11 +285,23 @@ async function init() {
       } else {
         seconds = parseInt($("presetSelect").value, 10);
       }
-      const res = await send({ type: "start", tabId: currentTab.id, seconds });
+      /* 站点权限改为按需申请（可选权限）：必须在点击手势里同步发起；
+         用户拒绝时任务仍可跑（刷新本身靠 tabs 权限），但保活/关键词/备份受限 */
+      let granted = true;
+      try {
+        const origin = new URL(currentTab.url).origin + "/*";
+        granted = await chrome.permissions.request({ origins: [origin] });
+      } catch (e) {
+        granted = false;
+      }
+      const keyword = String($("keywordInput").value || "").trim().slice(0, 100);
+      const res = await send({ type: "start", tabId: currentTab.id, seconds, keyword });
       if (!res.ok) {
         setMsg(msg("errStart", [res.error || msg("errUnknown")]));
       } else if (clamped) {
         setMsg(msg("msgClamped"));
+      } else if (!granted) {
+        setMsg(msg("msgNoPermission"));
       } else {
         setMsg(msg("msgSet", [fmtInterval(res.intervalSec)]));
       }
@@ -294,6 +314,7 @@ async function init() {
   $("skipDiscardedCheck").addEventListener("change", saveSettings);
   $("cookieBackupCheck").addEventListener("change", saveSettings);
   $("keepAliveCheck").addEventListener("change", saveSettings);
+  $("httpHeartbeatCheck").addEventListener("change", saveSettings);
 
   $("pauseAllBtn").addEventListener("click", async () => {
     await send({ type: "toggle-pause-all" });

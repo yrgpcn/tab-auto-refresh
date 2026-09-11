@@ -36,12 +36,17 @@
     }
   }
 
-  function schedule() {
+  /* 首个 tick 提前到 12~20 秒：短刷新周期（30/60 秒）下页面会被反复重载，
+     慢心跳永远来不及触发（复审§3.2 的互相抑制问题）；之后回到 45~75 秒慢节奏 */
+  function schedule(first) {
+    const delay = first
+      ? 12000 + Math.random() * 8000
+      : 45000 + Math.random() * 30000;
     timer = setTimeout(() => {
       if (stopped) return;
       tick();
-      schedule();
-    }, 45000 + Math.random() * 30000);
+      schedule(false);
+    }, delay);
   }
 
   function onMessage(msg) {
@@ -69,5 +74,5 @@
     /* 上下文失效时定时器随页面销毁 */
   }
 
-  schedule();
+  schedule(true);
 })();

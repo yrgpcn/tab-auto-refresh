@@ -12,6 +12,11 @@ import {
   formatInterval,
   hostOf,
   nextBackupState,
+  decideBackupWrite,
+  BACKUP_ACT,
+  looksLikeLoginPage,
+  keywordHit,
+  jitteredDelayMs,
   hasSessionCookie,
   sameHost,
   sameSite,
@@ -178,6 +183,113 @@ test("nextBackupState requires a confirmation window before freezing backups", (
   assert.equal(throttled.notify, false);
   const overdue = nextBackupState({ sessionLostAt: now - 7 * 60 * 60 * 1000 }, 4, now);
   assert.equal(overdue.notify, true);
+});
+
+/* 复审§2 的集成契约：模拟 backupCookies 反复用"上一份备份 + 本次采样"驱动决策，
+   验证坏样本绝不覆盖好备份、streak 能累加到确认值。纯测 nextBackupState 会漏掉
+   这个跨采样状态传递——正是当初"确认窗口不可达"死代码 bug 的藏身处。 */
+function simulateBackupSamples(samples) {
+  let entry; /* 存储里的当前备份 */
+  const now0 = 1_800_000_000_000;
+  const log = [];
+  samples.forEach((cookies, i) => {
+    const d = decideBackupWrite(entry, cookies, now0 + i * 1000);
+    let label;
+    if (d.action === BACKUP_ACT.OVERWRITE) {
+      entry = { cookies, timestamp: now0 + i * 1000, schemaVersion: 2 };
+      label = "覆盖";
+    } else if (d.action === BACKUP_ACT.MERGE) {
+      entry = Object.assign({}, entry, d.entry); /* 关键：不碰 cookies/timestamp */
+      label = "记streak";
+    } else {
+      if (d.notify) entry = Object.assign({}, entry, d.entry);
+      label = d.notify ? "冻结+通知" : "冻结(节流)";
+    }
+    log.push({
+      label,
+      streak: entry ? entry.sessionLostStreak || 0 : 0,
+      hasSessionTicket: entry ? hasSessionCookie(entry.cookies) : false,
+    });
+  });
+  return log;
+}
+
+test("decideBackupWrite keeps the last good backup until the loss is confirmed", () => {
+  const withTicket = [{ name: "sid" }];
+  const noTicket = [{ name: "pref", expirationDate: 9e9 }];
+  /* 采样1 在线 → 覆盖；之后 3 次掉线采样 */
+  const log = simulateBackupSamples([withTicket, noTicket, noTicket, noTicket]);
+  assert.equal(log[0].label, "覆盖");
+  assert.equal(log[0].hasSessionTicket, true);
+  /* 疑似第 1 次：只记 streak，好备份的会话票据必须还在 */
+  assert.equal(log[1].label, "记streak");
+  assert.equal(log[1].streak, 1);
+  assert.equal(log[1].hasSessionTicket, true, "疑似采样绝不能覆盖掉最后一次好备份");
+  /* 疑似第 2 次：达到确认窗口，冻结并通知，好备份仍完好 */
+  assert.equal(log[2].label, "冻结+通知");
+  assert.equal(log[2].hasSessionTicket, true);
+  /* 第 3 次：已处于掉线态，继续冻结（通知被节流） */
+  assert.equal(log[3].label, "冻结(节流)");
+  assert.equal(log[3].hasSessionTicket, true);
+});
+
+test("decideBackupWrite recovers when a session ticket comes back", () => {
+  const withTicket = [{ name: "sid" }];
+  const noTicket = [{ name: "pref", expirationDate: 9e9 }];
+  /* 在线 → 疑似1 → 重新登录（又有票据）→ 应恢复正常覆盖、清计数 */
+  const log = simulateBackupSamples([withTicket, noTicket, withTicket]);
+  assert.equal(log[1].label, "记streak");
+  assert.equal(log[1].streak, 1);
+  assert.equal(log[2].label, "覆盖");
+  assert.equal(log[2].streak, 0, "重新登录后 streak 归零");
+  assert.equal(log[2].hasSessionTicket, true);
+});
+
+test("decideBackupWrite: first sample with no history just writes normally", () => {
+  const noTicket = [{ name: "pref", expirationDate: 9e9 }];
+  const d = decideBackupWrite(undefined, noTicket, 1);
+  assert.equal(d.action, BACKUP_ACT.OVERWRITE);
+  assert.equal(d.streak, 0);
+});
+
+test("looksLikeLoginPage matches login paths but ignores query returnURL noise", () => {
+  assert.ok(looksLikeLoginPage("https://ex.com/login"));
+  assert.ok(looksLikeLoginPage("https://ex.com/accounts/Signin?next=/home"));
+  assert.ok(looksLikeLoginPage("https://sso.ex.com/oauth/authorize"));
+  assert.ok(looksLikeLoginPage("https://ex.com/login.html"));
+  /* 普通页面不误判 */
+  assert.ok(!looksLikeLoginPage("https://ex.com/dashboard"));
+  assert.ok(!looksLikeLoginPage("https://ex.com/blog/logging-basics"));
+  /* query 里的 returnURL 含 login 不该触发（只看 pathname） */
+  assert.ok(!looksLikeLoginPage("https://ex.com/home?next=/login"));
+  assert.ok(!looksLikeLoginPage("not a url"));
+  assert.ok(!looksLikeLoginPage(""));
+});
+
+test("keywordHit is case-insensitive substring and rejects empty keyword", () => {
+  assert.ok(keywordHit("已售罄，请明天再来", "售罄"));
+  assert.ok(keywordHit("OUT OF STOCK", "out of stock"));
+  assert.ok(keywordHit("In Stock Now", "in stock"));
+  assert.ok(!keywordHit("hello", ""));
+  assert.ok(!keywordHit("hello", "   "));
+  assert.ok(!keywordHit("", "x"));
+  assert.ok(!keywordHit(null, "x"));
+});
+
+test("jitteredDelayMs stays within ±pct and above the 30s alarm floor", () => {
+  /* rand 注入使结果确定 */
+  assert.equal(jitteredDelayMs(300, 15, () => 1), 300000 * 1.15); /* +15% */
+  assert.equal(jitteredDelayMs(300, 15, () => 0), 300000 * 0.85); /* -15% */
+  assert.equal(jitteredDelayMs(300, 15, () => 0.5), 300000); /* 中点无偏移 */
+  /* 30 秒 -15% 会低于 30000，被下限抬到 30000 */
+  assert.equal(jitteredDelayMs(30, 15, () => 0), 30000);
+  /* pct 上限夹到 50%，rand 结果仍在 [0,1] 内 */
+  const hi = jitteredDelayMs(60, 90, () => 1);
+  assert.ok(hi <= 60000 * 1.5 + 1 && hi >= 60000);
+});
+
+test("httpHeartbeat is on by default like keepAlive", () => {
+  assert.equal(DEFAULT_SETTINGS.httpHeartbeat, true);
 });
 
 test("cookie backup is opt-in: off by default", () => {

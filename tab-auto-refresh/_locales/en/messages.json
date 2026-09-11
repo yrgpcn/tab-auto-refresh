@@ -68,6 +68,18 @@
   "errRestricted": { "message": "Browser internal pages (chrome:// etc.) cannot be auto-refreshed" },
   "cookieBackupLabel": { "message": "Restore logins after restart: backs up site cookies locally (stored in plaintext)" },
   "keepAliveLabel": { "message": "Keep awake: injects simulated activity into monitored pages to delay server-side login expiry" },
+  "httpHeartbeatLabel": { "message": "Silent heartbeat: periodically pings the monitored URL in the background to hold the session without touching the page" },
+  "keywordLabel": { "message": "Keyword (optional)" },
+  "keywordPlaceholder": { "message": "Notify me when this text appears" },
+  "keywordChip": {
+    "message": " - watching \"$KW$\"",
+    "placeholders": { "kw": { "content": "$1" } }
+  },
+  "notifKeywordHit": {
+    "message": "The monitored page now contains the keyword \"$KW$\"; the task was stopped automatically",
+    "placeholders": { "kw": { "content": "$1" } }
+  },
+  "msgNoPermission": { "message": "Site permission denied: the tab will still refresh, but keep-awake, keyword watch and cookie backup are unavailable" },
   "intervalLabel": { "message": "Interval" },
   "customPlaceholder": { "message": "Custom seconds" },
   "bypassLabel": { "message": "Bypass cache when refreshing (like Ctrl+F5)" },

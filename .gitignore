@@ -6,3 +6,6 @@ tab-auto-refresh-v*.zip
 .tmp/
 *.log
 Thumbs.db
+
+# 本地代码审核笔记（仅本地留存，不推送、不打包）
+_code-review/

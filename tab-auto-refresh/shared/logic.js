@@ -130,6 +130,49 @@ export function nextBackupState(prevEntry, streak, now) {
   return { lost: false, entry: { sessionLostStreak: streak } };
 }
 
+/* 备份写入决策（纯函数，复审§2 修复的核心）：把"上一份备份 + 本次采样"映射为
+   对存储的写入动作。与 nextBackupState 的区别：streak 从 prevEntry 内部推导，
+   且疑似未确认时动作是 MERGE（只并入计数字段、保留旧 cookies 与 timestamp），
+   绝不用坏样本覆盖最后一次在线备份——否则下一轮 prev 里没有会话票据，
+   suspect 恒假、streak 永远到不了确认值（复审报告实证的死代码 bug）。 */
+export const BACKUP_ACT = { OVERWRITE: "overwrite", MERGE: "merge", FREEZE: "freeze" };
+
+export function decideBackupWrite(prevEntry, nextCookies, now) {
+  if (!prevEntry) return { action: BACKUP_ACT.OVERWRITE, streak: 0, notify: false };
+  const suspect = sessionLostDetected(prevEntry.cookies, nextCookies);
+  const streak = suspect ? (prevEntry.sessionLostStreak || 0) + 1 : 0;
+  if (!suspect) return { action: BACKUP_ACT.OVERWRITE, streak: 0, notify: false };
+  const st = nextBackupState(prevEntry, streak, now);
+  if (st.lost) return { action: BACKUP_ACT.FREEZE, streak, entry: st.entry, notify: !!st.notify };
+  return { action: BACKUP_ACT.MERGE, streak, entry: { sessionLostStreak: streak }, notify: false };
+}
+
+/* 登录页 URL 启发式：只看 pathname（忽略 query 里 returnURL 之类的干扰项），
+   命中 login/signin/auth/sso 等路径段即疑似登录页。掉线行为信号用 */
+export function looksLikeLoginPage(u) {
+  try {
+    const p = new URL(u).pathname.toLowerCase();
+    return /(^|\/)(login|logon|log-in|signin|sign-in|sign_in|auth|oauth|sso|cas|passport|id\.html)(\/|[.?#]|$)/.test(p);
+  } catch (e) {
+    return false;
+  }
+}
+
+/* 关键词命中：大小写不敏感的包含判断；空关键词不判定 */
+export function keywordHit(text, keyword) {
+  const k = String(keyword == null ? "" : keyword).trim().toLowerCase();
+  if (!k) return false;
+  return String(text == null ? "" : text).toLowerCase().includes(k);
+}
+
+/* 刷新间隔抖动：±pct%（rand 注入以便测试），下限 minMs（30 秒 alarms 红线） */
+export function jitteredDelayMs(seconds, pct = 15, rand = Math.random, minMs = 30000) {
+  const base = Math.max(Number(seconds) || 0, 30) * 1000;
+  const ratio = rand() * 2 - 1;
+  const v = base * (1 + (Math.max(0, Math.min(50, pct)) / 100) * ratio);
+  return Math.max(minMs, Math.round(v));
+}
+
 /* 取 origin+pathname 作为网址匹配键（忽略 hash 查询参数差异） */
 export function urlKey(u) {
   try {

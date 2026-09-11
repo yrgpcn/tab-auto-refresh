@@ -28,6 +28,10 @@
       <select id="presetSelect"></select>
       <input id="customInput" type="number" min="30" step="1" data-i18n-placeholder="customPlaceholder">
     </div>
+    <div class="row">
+      <span class="label" data-i18n="keywordLabel"></span>
+      <input id="keywordInput" type="text" maxlength="100" data-i18n-placeholder="keywordPlaceholder">
+    </div>
     <label class="row-check">
       <input id="bypassCheck" type="checkbox">
       <span data-i18n="bypassLabel"></span>
@@ -43,6 +47,10 @@
     <label class="row-check">
       <input id="keepAliveCheck" type="checkbox">
       <span data-i18n="keepAliveLabel"></span>
+    </label>
+    <label class="row-check">
+      <input id="httpHeartbeatCheck" type="checkbox">
+      <span data-i18n="httpHeartbeatLabel"></span>
     </label>
     <button id="toggleBtn" class="primary"></button>
     <div id="msg" class="hint"></div>
