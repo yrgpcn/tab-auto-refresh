@@ -33,7 +33,7 @@ const HEARTBEAT_MINUTES = 4;
 /* 重启恢复时等待页面自行到位的窗口（学 tab-reloader：救"先 SSO 跳转才到位"的页面） */
 const RECLAIM_WATCH_MS = 20000;
 /* 备份失败（如触顶 storage 配额）只告警一次；落存储持久化，SW 重启不重置 */
-const BACKUP_WARN_KEY = "cookieBa…dOnce";
+const BACKUP_WARN_KEY = "cookieBackupWarnedOnce";
 
 function alarmName(tabId) {
   return PREFIX + tabId;

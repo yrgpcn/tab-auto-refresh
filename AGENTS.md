@@ -61,11 +61,11 @@
 - 该版本起 Release zip 顶层包含 `tab-auto-refresh/` 文件夹
 - **1.7.0 已完成开发（manifest 版本号已置 1.7.0，尚未打 tag 发布）**：后台保活（keep-alive，`settings.keepAlive` 默认开）+ 会话失效检测通知，实现要点见下节
 
-## 1.7.0 实现要点（2026-09-11 完成开发，09-14 吸收同类项目经验增强）
+## 1.7.0 实现要点（2026-09-11 完成开发，同日吸收同类项目经验增强）
 
 背景：1.4.5 实测出现“服务器端空闲超时掉登录”——cookie 备份只能恢复票据，救不回服务端已注销的会话。按判定机制分三类：按用户交互心跳计时（可注入合成活动解决）、按最后请求计时（后台静默请求可解，见同类项目 staying_alive；关机窗口无解）、绝对时长上限（无解）。
 
-- **合成活动注入**（`settings.keepAlive`，默认开）：**标签页级**注入，不用 `registerContentScripts`（其 matches 是站点级，会溢出到同站无关标签页，且站点注册 id 与任务 id 语义分裂导致重启后清不掉）。注入点：startTask 即时 `executeScript`（仅补首屏）+ `tabs.onUpdated` complete 分支对任务页每次加载补注入；停止任务经 `keepalive-off` 消息让页面内脚本自停；`reconcileKeepAlive` 在 onStartup/onInstalled（prune 之后）与 sync.settings **真变化**（keepAlive/httpHeartbeat 值变动）时收敛存量任务页，`rememberLastInterval` 值未变不写盘，避免无关 sync 写引发心跳重置风暴。内容脚本 `content/keepalive.js` 派发 `mousemove` / `keydown`：首个心跳 12~20 秒（防短刷新周期把慢心跳永远憋死，复审§3.2）、之后 45~75 秒随机；守卫是可重启语义（`window.__tarKeepAlive` 存上一实例停止函数，重复注入=重启心跳，`keepalive-off` 清标记）。所有保活调用静默降级，不阻塞任务启停。已知边界：校验 `event.isTrusted` 的站点无效；`document.hidden` 时暂停心跳的站点无效
+- **合成活动注入**（`settings.keepAlive`，默认开）：**标签页级**注入，不用 `registerContentScripts`（其 matches 是站点级，会溢出到同站无关标签页，且站点注册 id 与任务 id 语义分裂导致重启后清不掉）。注入点：startTask 即时 `executeScript`（仅补首屏）+ `tabs.onUpdated` complete 分支对任务页每次加载补注入；停止任务经 `keepalive-off` 消息让页面内脚本自停；`reconcileKeepAlive` 在 onStartup/onInstalled（prune 之后）与 sync.settings **真变化**（keepAlive/httpHeartbeat 值变动）时收敛存量任务页，`rememberLastInterval` 值未变不写盘，避免无关 sync 写引发心跳重置风暴。内容脚本 `content/keepalive.js` 向 `document` 派发 `mousemove` / `keydown`（document 级派发经冒泡同时覆盖挂 document 与 window 的监听器；挂 window 只覆盖 window 一级，严格更差——04 复审 P1）：首个心跳 12~20 秒（防短刷新周期把慢心跳永远憋死，复审§3.2）、之后 45~75 秒随机；守卫是可重启语义（`window.__tarKeepAlive` 存上一实例停止函数，重复注入=重启心跳，`keepalive-off` 清标记）。所有保活调用静默降级，不阻塞任务启停。已知边界：校验 `event.isTrusted` 的站点无效；`document.hidden` 时暂停心跳的站点无效
 - **静默 HTTP 心跳**（`settings.httpHeartbeat`，默认开）：`hb-<tabId>` alarm 每 4 分钟对任务 URL 发 `fetch(credentials: include, cache: no-store)`，15 秒 AbortController 超时；这是"按最后请求计时"类会话的保活路线（学 staying_alive），不动用户页面。响应落登录页 / 401 / 403 → 疑似掉线信号；正常 2xx → 恢复信号
 - **掉线探测双通道 + 通知**：状态通道——`decideBackupWrite` 纯函数驱动，会话票据从有到无先记疑似（`sessionLostStreak`），疑似采样**只 MERGE 计数、绝不覆盖好备份**（复审§2 实证的死代码 bug：坏样本覆盖后 prev 无票据、streak 恒被清零），连续 2 次才冻结备份并按主机 6 小时节流通知；行为通道——`reportSessionSignal`（存 `sessionProbe`）把"任务页落在登录页 URL"（`looksLikeLoginPage` 只看 pathname，监控对象本身是登录页时不适用）与心跳重定向/401/403 计入同一 2 次确认窗口，确认后角标变红 `!` + 通知，`isProbeLost` 期间 backupCookies 拒绝写坏备份；重新登录（票据回来 / 页面回到正常 URL / 心跳 2xx）即恢复
 - **关键词监控**（可选，任务字段 `keyword` ≤100 字）：任务页每次加载完成后 `executeScript` 取 `document.body.innerText`（300KB 截断）跑 `keywordHit`，命中 → 系统通知 + 自动停任务

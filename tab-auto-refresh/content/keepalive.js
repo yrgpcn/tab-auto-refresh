@@ -1,7 +1,10 @@
 /* keep-alive 内容脚本：任务开启「后台保活」时注入监控站点，
    每隔 45~75 秒派发一次模拟的鼠标/键盘事件，冒充用户在场，
    延缓"按用户交互心跳计时"的服务器端会话过期。
-   已知边界：校验 event.isTrusted 的站点无效；document.hidden 时暂停心跳的站点无效。 */
+   事件派发到 document：DOM 事件自子向父冒泡，document 级派发能同时覆盖
+   document 与 window 两级监听器；挂 window 派发只覆盖 window 一级，严格更差。
+   已知边界：校验 event.isTrusted 的站点无效；document.hidden 时暂停心跳的
+   站点无效；挂在 document.body 或具体元素上的监听器覆盖不到（冒泡不向下）。 */
 
 (() => {
   /* 守卫是"可重启"语义：window.__tarKeepAlive 存的是上一实例的停止函数。
@@ -22,13 +25,13 @@
     try {
       const x = Math.round(Math.random() * 800) + 100;
       const y = Math.round(Math.random() * 600) + 100;
-      window.dispatchEvent(new MouseEvent("mousemove", {
+      document.dispatchEvent(new MouseEvent("mousemove", {
         bubbles: true, cancelable: true, clientX: x, clientY: y
       }));
-      window.dispatchEvent(new KeyboardEvent("keydown", {
+      document.dispatchEvent(new KeyboardEvent("keydown", {
         bubbles: true, cancelable: true, key: "Shift", code: "ShiftLeft", keyCode: 16
       }));
-      window.dispatchEvent(new KeyboardEvent("keyup", {
+      document.dispatchEvent(new KeyboardEvent("keyup", {
         bubbles: true, cancelable: true, key: "Shift", code: "ShiftLeft", keyCode: 16
       }));
     } catch (e) {
