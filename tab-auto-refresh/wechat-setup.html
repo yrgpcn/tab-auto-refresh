@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>微信直连配置教程</title>
+  <link rel="stylesheet" href="wechat-setup.css">
+</head>
+<body>
+  <!-- 文案全部走语言包（与弹窗同一套 data-i18n 机制）：页面只有结构与键名，
+       中英文各一份不会跑偏。页面本身就是仓库里的教程文件，弹窗的
+       「配置教程」链接直接打开它（chrome-extension://<id>/wechat-setup.html） -->
+  <main class="page">
+    <h1 data-i18n="guideTitle"></h1>
+    <p class="intro" data-i18n="guideIntro"></p>
+
+    <section class="step">
+      <h2 data-i18n="guideStep1Title"></h2>
+      <p data-i18n="guideStep1Body"></p>
+      <p>
+        <a class="btn" id="sandboxLink" target="_blank" rel="noopener"
+           href="https://mp.weixin.qq.com/debug/cgi-bin/sandbox?t=sandbox/login"
+           data-i18n="guideOpenSandbox"></a>
+      </p>
+      <p data-i18n="guideStep1Body2"></p>
+    </section>
+
+    <section class="step">
+      <h2 data-i18n="guideStep2Title"></h2>
+      <p data-i18n="guideStep2Body"></p>
+      <pre class="code">{{title.DATA}}
+{{content.DATA}}</pre>
+      <p class="note" data-i18n="guideStep2Why"></p>
+      <p data-i18n="guideStep2Body2"></p>
+    </section>
+
+    <section class="step">
+      <h2 data-i18n="guideStep3Title"></h2>
+      <p data-i18n="guideStep3Body"></p>
+    </section>
+
+    <section class="step">
+      <h2 data-i18n="guideStep4Title"></h2>
+      <ul class="list">
+        <li data-i18n="guideFixFollow"></li>
+        <li data-i18n="guideFixAppId"></li>
+        <li data-i18n="guideFixTemplate"></li>
+        <li data-i18n="guideFixIp"></li>
+        <li data-i18n="guideFixQuota"></li>
+        <li data-i18n="guideFixOther"></li>
+      </ul>
+    </section>
+
+    <section class="step">
+      <h2 data-i18n="guideSafetyTitle"></h2>
+      <ul class="list">
+        <li data-i18n="guideSafetySync"></li>
+        <li data-i18n="guideSafetyRoute"></li>
+        <li data-i18n="guideSafetyOff"></li>
+        <li data-i18n="guideRisk"></li>
+      </ul>
+    </section>
+  </main>
+
+  <script type="module" src="wechat-setup.js"></script>
+</body>
+</html>

@@ -69,6 +69,16 @@
         <input id="captchaGuardCheck" type="checkbox">
         <span data-i18n="captchaGuardLabel"></span>
       </label>
+      <label class="row-check" data-i18n-title="wechatHint">
+        <input id="wechatEnabledCheck" type="checkbox">
+        <span data-i18n="wechatLabel"></span>
+      </label>
+    </div>
+    <!-- 微信直连：开启后才显示这一行（配置入口 + 最近一次推送结果）。
+         平时不占高度——设置卡片已经贴着 600px 上限，多一行就从任务列表里扣 -->
+    <div id="wechatRow" class="row wx-row" hidden>
+      <button id="wechatSetupBtn" class="mini" type="button" data-i18n="wechatSetup"></button>
+      <span id="wechatState" class="wx-state"></span>
     </div>
     <div class="row">
       <span class="label" data-i18n="webhookLabel"></span>
@@ -109,6 +119,39 @@
   <footer id="repoFooter">
     <a href="https://github.com/yrgpcn/tab-auto-refresh" target="_blank" rel="noopener">github.com/yrgpcn/tab-auto-refresh</a>
   </footer>
+
+  <!-- 微信配置走二级视图：四行输入框直接铺在主视图里必然顶破 600px 上限
+       （设置卡片一张已经贴着上限，任务列表全靠 flex 让位）。切换由 body.wx-mode 控制 -->
+  <div id="wechatView">
+    <header class="wx-head">
+      <button id="wechatBackBtn" class="mini" type="button" data-i18n="wechatBack"></button>
+      <span class="wx-title" data-i18n="wechatViewTitle"></span>
+    </header>
+    <section class="card card-fixed">
+      <div class="wx-intro" data-i18n="wechatIntro"></div>
+      <a id="wechatGuideLink" class="wx-guide" href="wechat-setup.html" target="_blank" rel="noopener"
+         data-i18n="wechatGuideLink" data-i18n-title="wechatGuideHint"></a>
+      <div class="row">
+        <span class="label" data-i18n="wechatAppIdLabel"></span>
+        <input id="wechatAppIdInput" type="text" data-i18n-placeholder="wechatAppIdPlaceholder">
+      </div>
+      <div class="row">
+        <span class="label" data-i18n="wechatSecretLabel"></span>
+        <input id="wechatSecretInput" type="text" data-i18n-placeholder="wechatSecretPlaceholder" data-i18n-title="wechatSecretHint">
+      </div>
+      <div class="row">
+        <span class="label" data-i18n="wechatOpenIdLabel"></span>
+        <input id="wechatOpenIdInput" type="text" data-i18n-placeholder="wechatOpenIdPlaceholder">
+      </div>
+      <div class="row">
+        <span class="label" data-i18n="wechatTplLabel"></span>
+        <input id="wechatTplInput" type="text" data-i18n-placeholder="wechatTplPlaceholder" data-i18n-title="wechatTplHint">
+      </div>
+      <div class="wx-tpl-hint" data-i18n="wechatTplBody"></div>
+      <button id="wechatTestBtn" class="mini wx-test" type="button" data-i18n="wechatTestBtn"></button>
+      <div id="wechatViewState" class="hint"></div>
+    </section>
+  </div>
 
   <script type="module" src="popup.js"></script>
 </body>

@@ -1,4 +1,9 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
+/* hidden 属性走的是浏览器默认样式（display:none），而作者样式里的任何 display 都会压过它——
+   同特异性下作者样式优先。这里栽过一次：#wechatRow 是 .row（display:flex），
+   于是 hidden 完全失效、开关关着那行也照样占高度（高度门禁的"总高≤600"看不出来，
+   只能靠"开/关两态高度必须不同"抓到）。显式声明一次，别让每个新增元素各踩一遍 */
+[hidden] { display: none !important; }
 body {
   /* Chrome 弹窗外框上限是 800x600；宽度 400px 是"双列开关"能放下的最小宽度。
      高度不逐块算，改用 flex + max-height 兜底：内容不足 600px 时高度仍由内容决定（不会留白），
@@ -164,3 +169,29 @@ button { cursor: pointer; border: none; border-radius: 8px; font-size: 13px; fon
 #repoFooter { text-align: center; padding: 0 0 8px; }
 #repoFooter a { color: #9ca3af; font-size: 11px; text-decoration: none; }
 #repoFooter a:hover { color: #1d4ed8; text-decoration: underline; }
+
+/* ---- 微信直连 ---- */
+/* 这一行只在开关打开时出现（配置入口 + 最近一次推送结果），关闭时完全不占高度 */
+.wx-row { gap: 8px; }
+.wx-state { font-size: 11px; color: #6b7280; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wx-state.error { color: #b91c1c; }
+.wx-state.ok { color: #059669; }
+
+/* 二级视图：四行输入框直接铺在主视图里必然顶破 600px 上限，所以整页切换。
+   用 display 而不是 hidden 属性控制——`#wechatView{display:block}` 的 id 特异性会盖过
+   [hidden] 的 display:none，用 hidden 会变成"永远看得见" */
+#wechatView { display: none; }
+body.wx-mode > *:not(#wechatView) { display: none; }
+body.wx-mode #wechatView { display: block; }
+.wx-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px 6px; }
+.wx-title { font-weight: 700; font-size: 14px; color: #1d4ed8; }
+.wx-intro { font-size: 11px; color: #6b7280; line-height: 1.55; margin-bottom: 8px; }
+/* 教程入口：摆在四个输入框之前——需要教程的正是还没拿到凭据、正要问"这四项去哪找"的人 */
+.wx-guide { display: inline-block; font-size: 12px; color: #1d4ed8; margin-bottom: 8px; }
+.wx-guide:hover { text-decoration: underline; }
+/* 模板内容写错是最常见的"推了但空白"，单独用警示色标出来 */
+.wx-tpl-hint { font-size: 11px; color: #b45309; line-height: 1.55; margin: 2px 0 6px; }
+/* label 定宽，四行输入框左边缘才对得齐；定宽也逼着标签必须短 */
+#wechatView .row .label { width: 68px; }
+#wechatView .row { margin-bottom: 6px; }
+#wechatTestBtn { margin: 2px 0 6px; }

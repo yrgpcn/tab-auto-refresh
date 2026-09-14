@@ -3,6 +3,11 @@
 export const MIN_INTERVAL_SEC = 30;
 export const DEFAULT_INTERVAL_SEC = 300;
 
+/* 外发通知的事件清单（单一事实源）：webhook 与微信直连共用同一份"要通知哪些事件"。
+   1.7.0 只在 webhook 上用（键名 webhookEvents），1.8.0 起键名 notifyEvents，
+   旧键由 notifyEventsOf 兼容接续——两处各写一份兼容必然分叉 */
+export const NOTIFY_EVENTS = ["session-lost", "keyword", "task-stopped", "task-paused"];
+
 /* 兜底刷新间隔：无效输入与过小值都按最小间隔处理（30 秒起步） */
 export function clampInterval(seconds, min = MIN_INTERVAL_SEC) {
   const n = Math.floor(Number(seconds));
@@ -161,6 +166,44 @@ export function applyBackupAction(prevEntry, nextCookies, now) {
   return { write: { cookies: nextCookies, timestamp: now, schemaVersion: 2 }, notify: false };
 }
 
+/* cookie 的"登录票据"得分（12 复审 §4）：备份超限需要截断时，先用它决定留谁。
+   判据取自各家会话 cookie 的通行写法，从强到弱：
+     httpOnly（脚本不可读，登录票据几乎都带）
+     > 无 expirationDate（会话票，随浏览器关闭失效，正是「重启后恢复登录」要保的）
+     > __Host- / __Secure- 前缀（站点显式标记的关键票据）
+     > path=/（作用域最广） */
+export function cookieTicketScore(c) {
+  if (!c) return 0;
+  let score = 0;
+  if (c.httpOnly) score += 8;
+  if (isSessionCookie(c)) score += 4;
+  if (/^__(Host|Secure)-/i.test(String(c.name || ""))) score += 2;
+  if (String(c.path || "") === "/") score += 1;
+  return score;
+}
+
+/* 同分时的稳定次序：域越短越可能是父域 SSO 票据（先），最后按 name 兜底——
+   总要有全序，否则同一份 cookie 集合两次排序可能给出不同结果 */
+export function compareCookiePriority(a, b) {
+  const byScore = cookieTicketScore(b) - cookieTicketScore(a);
+  if (byScore) return byScore;
+  const byDomain = String((a && a.domain) || "").length - String((b && b.domain) || "").length;
+  if (byDomain) return byDomain;
+  return String((a && a.name) || "").localeCompare(String((b && b.name) || ""));
+}
+
+/* 备份条目数封顶。关键点：只在**超限时**排序切尾，正常规模原样返回——
+   否则每次备份的 cookie 顺序都会变，白白制造内容差异。
+   原实现直接 `cookies.length = max`（按 getAll 的返回顺序切尾，顺序未定义），
+   若票据落在尾部就是"每次备份都稳定缺它"的静默失效（12 复审 §4） */
+export function capCookies(cookies, max) {
+  const list = Array.isArray(cookies) ? cookies.slice() : [];
+  if (!(max > 0) || list.length <= max) return list;
+  list.sort(compareCookiePriority);
+  list.length = max;
+  return list;
+}
+
 /* 错误页判定：服务器故障或页面失踪——心跳连续命中则自动暂停任务（06 §4.3） */
 export function isErrorStatus(status) {
   return status >= 500 || status === 404;
@@ -259,4 +302,103 @@ export function tabShowsUrl(tab, url) {
   if (tab.url === url) return true;
   const k = urlKey(url);
   return !!k && urlKey(tab.url) === k;
+}
+
+/* ================= 微信直连（公众号模板消息）纯逻辑 =================
+   为什么有这块：扩展的 Service Worker 带 <all_urls> 主机权限即可跨源 fetch，
+   实测能直连 api.weixin.qq.com（微信不返回 CORS 头，网页语境会 Failed to fetch，
+   扩展 SW 语境 HTTP 200）。所以"不经任何第三方服务商、也不用自建中继"是可行的。
+   下面把"发什么、怎么判失败"做成纯函数，Node 单测可离线覆盖（不需要真凭据）。 */
+
+/* 模板消息只认这两个变量名，与用户在测试号后台建的模板内容一一对应：
+   {{title.DATA}} / {{content.DATA}}。写成别的名字会推出一张空白卡片 */
+export const WECHAT_TEMPLATE_KEYS = ["title", "content"];
+
+/* 单字段长度上限（保守值）：模板变量超长整条会被拒，截断比整条失败划算 */
+export const WECHAT_FIELD_MAX = 400;
+/* 标题字段更短：微信卡片标题本身就是一行 */
+export const WECHAT_TITLE_MAX = 100;
+
+/* 凭据完整性：四样缺一不可。返回缺失项（键名），让弹窗能点名而不是笼统报错 */
+export function wechatConfigState(settings) {
+  const s = settings || {};
+  const fields = [
+    ["appId", s.wechatAppId],
+    ["secret", s.wechatAppSecret],
+    ["openId", s.wechatOpenId],
+    ["templateId", s.wechatTemplateId]
+  ];
+  const missing = fields
+    .filter(([, v]) => !String(v == null ? "" : v).trim())
+    .map(([k]) => k);
+  return { ready: missing.length === 0, missing };
+}
+
+/* 通知事件清单读取（单一事实源）：新键 notifyEvents，兼容 1.7.0 的 webhookEvents */
+export function notifyEventsOf(settings) {
+  const s = settings || {};
+  if (Array.isArray(s.notifyEvents)) return s.notifyEvents;
+  if (Array.isArray(s.webhookEvents)) return s.webhookEvents;
+  return NOTIFY_EVENTS.slice();
+}
+
+/* access_token 请求体（stable_token 接口）。用 stable_token 而非老 /cgi-bin/token：
+   老接口每刷一次就把上一个 token 作废，多端并发/多重启会互相打掉；
+   stable_token 在 force_refresh=false 时有效期内返回同一个 token（官方语义） */
+export function buildTokenRequest(appId, secret, force = false) {
+  return {
+    grant_type: "client_credential",
+    appid: String(appId == null ? "" : appId).trim(),
+    secret: String(secret == null ? "" : secret).trim(),
+    force_refresh: !!force
+  };
+}
+
+/* 模板消息请求体。url 只在合法 http(s) 时带上——点击卡片跳转用，
+   非法值会让整条消息被拒，宁可不给跳转也不要整条失败 */
+export function buildWechatMessage({ openId, templateId, title, content, url } = {}) {
+  const clip = (s, n) => {
+    const v = String(s == null ? "" : s);
+    return v.length <= n ? v : v.slice(0, n - 1) + "…";
+  };
+  const data = {};
+  data[WECHAT_TEMPLATE_KEYS[0]] = { value: clip(title, WECHAT_TITLE_MAX) };
+  data[WECHAT_TEMPLATE_KEYS[1]] = { value: clip(content, WECHAT_FIELD_MAX) };
+  const body = {
+    touser: String(openId == null ? "" : openId).trim(),
+    template_id: String(templateId == null ? "" : templateId).trim(),
+    data
+  };
+  const u = String(url == null ? "" : url).trim();
+  if (/^https?:\/\//i.test(u)) body.url = u;
+  return body;
+}
+
+/* token 缓存新鲜度：过期前 5 分钟即视为过期（留出网络往返余量，
+   避免"刚取到就过期"的边界失败）。cache = {token, expireAt} */
+export const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+export function tokenFresh(cache, now) {
+  if (!cache || !cache.token) return false;
+  return Number(cache.expireAt) - TOKEN_REFRESH_MARGIN_MS > now;
+}
+
+/* token 失效码：清缓存重取一次再试（40001 invalid credential / 42001 token expired） */
+export function isTokenErrorCode(code) {
+  return code === 40001 || code === 42001;
+}
+
+/* 错误码 → 文案键。给用户看的是"该去哪改"，不是一个数字 */
+export const WECHAT_ERROR_KEYS = {
+  40001: "wechatErrToken",
+  42001: "wechatErrToken",
+  40003: "wechatErrOpenId",
+  40013: "wechatErrAppId",
+  40037: "wechatErrTemplate",
+  40164: "wechatErrIp",
+  43004: "wechatErrFollow",
+  45009: "wechatErrQuota",
+  47003: "wechatErrTemplate"
+};
+export function wechatErrorKey(code) {
+  return WECHAT_ERROR_KEYS[code] || "wechatErrOther";
 }

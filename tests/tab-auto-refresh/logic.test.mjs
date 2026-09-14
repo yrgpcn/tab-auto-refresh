@@ -13,6 +13,9 @@ import {
   hostOf,
   nextBackupState,
   applyBackupAction,
+  capCookies,
+  compareCookiePriority,
+  cookieTicketScore,
   parseKeywords,
   getTaskKeywords,
   pickHits,
@@ -30,6 +33,18 @@ import {
   siteRoot,
   tabShowsUrl,
   urlKey,
+  NOTIFY_EVENTS,
+  WECHAT_TEMPLATE_KEYS,
+  WECHAT_FIELD_MAX,
+  WECHAT_TITLE_MAX,
+  TOKEN_REFRESH_MARGIN_MS,
+  buildTokenRequest,
+  buildWechatMessage,
+  isTokenErrorCode,
+  notifyEventsOf,
+  tokenFresh,
+  wechatConfigState,
+  wechatErrorKey,
 } from "../../tab-auto-refresh/shared/logic.js";
 
 test("clampInterval falls back to the default for invalid input", () => {
@@ -335,7 +350,15 @@ test("isErrorStatus covers server faults and missing pages only", () => {
 test("monitoring-related defaults are off-by-default / empty-by-default", () => {
   assert.equal(DEFAULT_SETTINGS.keepAwake, false);
   assert.equal(DEFAULT_SETTINGS.webhookUrl, "");
-  assert.deepEqual(DEFAULT_SETTINGS.webhookEvents, ["session-lost", "keyword", "task-stopped", "task-paused"]);
+  /* 1.8.0 起事件清单键名是 notifyEvents（webhook 与微信直连共用一份） */
+  assert.deepEqual(DEFAULT_SETTINGS.notifyEvents, ["session-lost", "keyword", "task-stopped", "task-paused"]);
+  /* 微信直连：凭据是"能以你的名义发消息"的钥匙，默认必须关且四项全空 ——
+     打开它、填凭据都必须是用户的显式动作 */
+  assert.equal(DEFAULT_SETTINGS.wechatEnabled, false);
+  assert.equal(DEFAULT_SETTINGS.wechatAppId, "");
+  assert.equal(DEFAULT_SETTINGS.wechatAppSecret, "");
+  assert.equal(DEFAULT_SETTINGS.wechatOpenId, "");
+  assert.equal(DEFAULT_SETTINGS.wechatTemplateId, "");
 });
 test("respecting user activity is on by default", () => {
   /* 刻意与上一组分开：它是注入门控之一，默认值变更是有行为面影响的有意决定，
@@ -344,4 +367,163 @@ test("respecting user activity is on by default", () => {
 });
 test("cookie backup is opt-in: off by default", () => {
   assert.equal(DEFAULT_SETTINGS.cookieBackup, false);
+});
+
+/* ================= 微信直连（公众号模板消息） =================
+   这块全是纯函数，所以"发什么给微信"离线就能钉死，不需要真凭据、不联网。
+   线上真正会咬人的两类错误：模板变量名不匹配（推出一张空白卡片）、
+   把整条推失败当作"没配好"（其实只是 url 不合法）—— 下面都覆盖了。 */
+
+test("wechatConfigState names every missing credential", () => {
+  assert.deepEqual(wechatConfigState({}).missing, ["appId", "secret", "openId", "templateId"]);
+  assert.equal(wechatConfigState({}).ready, false);
+  /* 只填了空白不算填过——从页面复制时很容易带进空格 */
+  assert.deepEqual(
+    wechatConfigState({ wechatAppId: "   ", wechatAppSecret: "s" }).missing,
+    ["appId", "openId", "templateId"]
+  );
+  const full = wechatConfigState({
+    wechatAppId: "wx1",
+    wechatAppSecret: "sec",
+    wechatOpenId: "o1",
+    wechatTemplateId: "tpl"
+  });
+  assert.equal(full.ready, true);
+  assert.deepEqual(full.missing, []);
+});
+
+test("notifyEventsOf reads the new key and keeps the 1.7.0 webhookEvents value", () => {
+  assert.deepEqual(notifyEventsOf({ notifyEvents: ["keyword"] }), ["keyword"]);
+  /* 老安装存的键名是 webhookEvents：升级后不能把用户的勾选静默覆盖成默认全选 */
+  assert.deepEqual(notifyEventsOf({ webhookEvents: ["keyword"] }), ["keyword"]);
+  /* 两个键都在时以新键为准 */
+  assert.deepEqual(
+    notifyEventsOf({ notifyEvents: ["keyword"], webhookEvents: ["session-lost"] }),
+    ["keyword"]
+  );
+  assert.deepEqual(notifyEventsOf({}), NOTIFY_EVENTS);
+});
+
+test("buildTokenRequest follows the stable_token contract", () => {
+  assert.deepEqual(buildTokenRequest(" wx1 ", " sec ", false), {
+    grant_type: "client_credential",
+    appid: "wx1",
+    secret: "sec",
+    force_refresh: false
+  });
+  assert.equal(buildTokenRequest("wx1", "sec", true).force_refresh, true);
+});
+
+test("buildWechatMessage uses exactly the title/content template keys", () => {
+  const body = buildWechatMessage({
+    openId: " o1 ",
+    templateId: " tpl ",
+    title: "标题",
+    content: "正文",
+    url: "https://example.com/x"
+  });
+  /* 变量名必须与用户模板里的 {{title.DATA}} / {{content.DATA}} 完全一致 */
+  assert.deepEqual(Object.keys(body.data).sort(), WECHAT_TEMPLATE_KEYS.slice().sort());
+  assert.equal(body.touser, "o1");
+  assert.equal(body.template_id, "tpl");
+  assert.equal(body.data.title.value, "标题");
+  assert.equal(body.data.content.value, "正文");
+  assert.equal(body.url, "https://example.com/x");
+});
+
+test("buildWechatMessage drops a non-http url instead of failing the whole push", () => {
+  for (const bad of ["", null, undefined, "chrome://extensions", "javascript:alert(1)", "ftp://x/y"]) {
+    const body = buildWechatMessage({ openId: "o", templateId: "t", title: "a", content: "b", url: bad });
+    assert.equal("url" in body, false, "不该带上非法 url: " + String(bad));
+  }
+  assert.equal(
+    buildWechatMessage({ openId: "o", templateId: "t", title: "a", content: "b", url: "http://x/y" }).url,
+    "http://x/y"
+  );
+});
+
+test("buildWechatMessage clips over-long fields rather than sending them verbatim", () => {
+  const long = "x".repeat(WECHAT_FIELD_MAX + 50);
+  const body = buildWechatMessage({ openId: "o", templateId: "t", title: long, content: long });
+  assert.equal(body.data.title.value.length, WECHAT_TITLE_MAX);
+  assert.equal(body.data.content.value.length, WECHAT_FIELD_MAX);
+  assert.ok(body.data.content.value.endsWith("…"));
+});
+
+test("tokenFresh keeps a safety margin before the token expires", () => {
+  const now = 1_000_000;
+  assert.equal(tokenFresh({ token: "t", expireAt: now + 7_200_000 }, now), true);
+  /* 距过期只剩 5 分钟以内算过期：提前重取，别等它自然失效时才发第一条 */
+  assert.equal(tokenFresh({ token: "t", expireAt: now + TOKEN_REFRESH_MARGIN_MS }, now), false);
+  assert.equal(tokenFresh({ token: "", expireAt: now + 9e9 }, now), false);
+  assert.equal(tokenFresh(null, now), false);
+});
+
+test("wechat error codes map to a fix-it message, unknown codes fall back", () => {
+  assert.equal(wechatErrorKey(40013), "wechatErrAppId");
+  assert.equal(wechatErrorKey(43004), "wechatErrFollow");
+  assert.equal(wechatErrorKey(40164), "wechatErrIp");
+  assert.equal(wechatErrorKey(40037), "wechatErrTemplate");
+  assert.equal(wechatErrorKey(47003), "wechatErrTemplate");
+  assert.equal(wechatErrorKey(12345), "wechatErrOther");
+  assert.equal(wechatErrorKey(undefined), "wechatErrOther");
+  /* 40001/42001 是"令牌失效"，代码据此清缓存重取一次再试 */
+  assert.ok(isTokenErrorCode(40001) && isTokenErrorCode(42001));
+  assert.ok(!isTokenErrorCode(40013));
+});
+
+/* ---- 备份截断必须保住登录票据（12 报告 §4）----
+   原实现是 `cookies.length = MAX`，按 chrome.cookies.getAll 的返回顺序切尾，
+   而该顺序未定义——票据落在尾部就是"每次备份都稳定缺它"的静默失效。
+   这组用例把"该被保住的那类 cookie"钉死，防止将来排序规则被改回去。 */
+const tracking = (i) => ({ name: "ad_" + i, domain: "ads.site.test", path: "/track", secure: true, expirationDate: 9e9 });
+const sessionTicket = { name: "sid", domain: "site.test", path: "/", httpOnly: true, secure: true };
+const persistentTicket = { name: "remember", domain: "site.test", path: "/", httpOnly: true, expirationDate: 9e9 };
+
+test("cookieTicketScore ranks session tickets above long-lived tracking cookies", () => {
+  assert.ok(cookieTicketScore(sessionTicket) > cookieTicketScore(persistentTicket));
+  assert.ok(cookieTicketScore(persistentTicket) > cookieTicketScore(tracking(1)));
+  assert.equal(cookieTicketScore(null), 0);
+  /* __Host- / __Secure- 前缀是站点显式标记的关键票据 */
+  assert.ok(cookieTicketScore({ name: "__Host-sid", path: "/" }) > cookieTicketScore({ name: "sid", path: "/" }));
+});
+
+test("compareCookiePriority is a total order (no equal-score ties drift)", () => {
+  const a = { name: "a", domain: "x.y.site.test", path: "/" };
+  const b = { name: "b", domain: "site.test", path: "/" };
+  /* 同分时域更短的在前，且方向必须稳定 */
+  assert.ok(compareCookiePriority(b, a) < 0);
+  assert.ok(compareCookiePriority(a, b) > 0);
+  assert.equal(compareCookiePriority(a, a), 0);
+});
+
+test("capCookies keeps the session ticket when the backup is truncated", () => {
+  /* 票据放在最后一位——正是原实现会切掉的位置 */
+  const cookies = [];
+  for (let i = 0; i < 199; i++) cookies.push(tracking(i));
+  cookies.push(sessionTicket);
+  const capped = capCookies(cookies, 200);
+  assert.equal(capped.length, 200); /* 200 条不截断 */
+  assert.equal(capCookies(cookies.concat(tracking(200)), 200).some((c) => c.name === "sid"), true);
+});
+
+test("capCookies truncates to the cap and keeps ticket-like cookies, not insertion order", () => {
+  const cookies = [];
+  for (let i = 0; i < 300; i++) cookies.push(tracking(i));
+  cookies.push(sessionTicket, persistentTicket); /* 两条票据都在尾部 */
+  const capped = capCookies(cookies, 200);
+  assert.equal(capped.length, 200);
+  assert.ok(capped.some((c) => c.name === "sid"));
+  assert.ok(capped.some((c) => c.name === "remember"));
+  /* 原实现（直接切尾）会丢掉这两条：这就是红/绿的分界 */
+  const naive = cookies.slice(0, 200);
+  assert.equal(naive.some((c) => c.name === "sid"), false);
+});
+
+test("capCookies leaves normal-sized backups in their original order", () => {
+  const cookies = [tracking(1), sessionTicket, tracking(2)];
+  assert.deepEqual(capCookies(cookies, 200).map((c) => c.name), ["ad_1", "sid", "ad_2"]);
+  /* 不改动入参，也不在未超限时排序 */
+  assert.equal(cookies[0].name, "ad_1");
+  assert.deepEqual(capCookies(null, 200), []);
 });

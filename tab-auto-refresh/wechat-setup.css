@@ -1,0 +1,61 @@
+/* 微信直连配置教程页：与弹窗同一套配色（#f5f7fb 底 / #fff 卡片 / #1d4ed8 主色），
+   但按"整页阅读"排版——弹窗那套 400px 定宽与 600px 限高在这里都不适用 */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #f5f7fb;
+  color: #1f2937;
+  font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.75;
+  padding: 24px 16px 48px;
+}
+.page { max-width: 680px; margin: 0 auto; }
+h1 {
+  font-size: 22px;
+  color: #1d4ed8;
+  margin-bottom: 6px;
+}
+.intro {
+  color: #4b5563;
+  margin-bottom: 20px;
+}
+.step {
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+  padding: 16px 18px;
+  margin-bottom: 12px;
+}
+.step h2 {
+  font-size: 15px;
+  margin-bottom: 8px;
+}
+.step p + p { margin-top: 8px; }
+.btn {
+  display: inline-block;
+  background: #1d4ed8;
+  color: #fff;
+  border-radius: 6px;
+  padding: 6px 14px;
+  text-decoration: none;
+  font-size: 13px;
+}
+.btn:hover { background: #1741b6; }
+.code {
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 8px 0;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.note {
+  color: #92400e;
+  font-size: 13px;
+}
+.list { padding-left: 20px; }
+.list li { margin-top: 4px; }
+.list li:first-child { margin-top: 0; }

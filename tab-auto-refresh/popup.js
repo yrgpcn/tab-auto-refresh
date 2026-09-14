@@ -7,10 +7,20 @@ import {
   formatInterval,
   getTaskKeywords,
   normalizeWebhookUrl,
-  parseKeywords
+  notifyEventsOf,
+  parseKeywords,
+  wechatConfigState
 } from "./shared/logic.js";
 
 const $ = (id) => document.getElementById(id);
+
+/* 微信配置项的 label 键：缺项提示要点名，不能只说"配置不完整" */
+const WECHAT_FIELD_LABEL_KEYS = {
+  appId: "wechatAppIdLabel",
+  secret: "wechatSecretLabel",
+  openId: "wechatOpenIdLabel",
+  templateId: "wechatTplLabel"
+};
 
 let currentTab = null;
 let tasks = {};
@@ -19,6 +29,8 @@ let pausedAll = false;
 let alarmsMap = {};
 let msgTimer = null;
 let renderSeq = 0;
+/* 最近一次微信推送结果（后台写 storage.local），用于"静默失败也要看得见" */
+let wechatLast = null;
 
 function msg(key, subs) {
   return chrome.i18n.getMessage(key, subs) || key;
@@ -42,6 +54,14 @@ function fmtInterval(sec) {
     minutes: msg("unitMinutes"),
     seconds: msg("unitSeconds")
   });
+}
+
+function fmtClock(ms) {
+  try {
+    return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  } catch (e) {
+    return "";
+  }
 }
 
 function setMsg(text) {
@@ -80,10 +100,17 @@ async function refreshState() {
     /* 兼容 1.1.0 及之前存在 local 里的设置 */
     data = await chrome.storage.local.get("settings");
   }
-  const local = await chrome.storage.local.get(["tasks", "pausedAll"]);
+  const local = await chrome.storage.local.get(["tasks", "pausedAll", "wechatLastResult"]);
   tasks = local.tasks || {};
-  settings = Object.assign({}, DEFAULT_SETTINGS, data.settings || {});
+  const stored = data.settings || {};
+  settings = Object.assign({}, DEFAULT_SETTINGS, stored);
+  /* 1.7.0 的事件清单键名是 webhookEvents：必须在合并默认值之后按"原始存储里有没有新键"
+     再定夺一次，否则默认值会把老用户的勾选悄悄覆盖成全选（后台同处理） */
+  if (!Array.isArray(stored.notifyEvents) && Array.isArray(stored.webhookEvents)) {
+    settings.notifyEvents = stored.webhookEvents;
+  }
   pausedAll = !!local.pausedAll;
+  wechatLast = local.wechatLastResult || null;
   await syncAlarms();
 }
 
@@ -258,6 +285,12 @@ async function renderAll() {
   renderCountdowns();
 }
 
+/* 预设下拉与秒数框是"同一个间隔"的两个入口，必须互斥（12 复审 §2）：
+   原实现两边都没有 change/input 监听，于是"先在秒数框填 90，再从下拉选每 5 分钟"
+   会静默按 90 跑——下拉显示 5 分钟、实际生效 90 秒，只有 4 秒后就消失的提示行
+   里能看到真值。现在任何时刻只有一个入口持有值：
+     选具体预设 → 清空秒数框；秒数框一有数字 → 下拉切到「自定义」；
+     秒数框被清空 → 回落默认预设。界面即事实，不存在"两个都说自己算数" */
 function initPresetSelect() {
   const sel = $("presetSelect");
   for (const p of PRESETS) {
@@ -266,15 +299,45 @@ function initPresetSelect() {
     opt.textContent = msg(p.key);
     sel.appendChild(opt);
   }
+  const custom = document.createElement("option");
+  custom.value = "";
+  custom.textContent = msg("presetCustom");
+  sel.appendChild(custom);
+
   const preferred = clampInterval(settings.lastIntervalSec).seconds;
   const preferredPreset = PRESETS.find((p) => p.seconds === preferred);
   if (preferredPreset) {
     sel.value = String(preferred);
     $("customInput").value = "";
   } else {
-    sel.value = String(DEFAULT_INTERVAL_SEC);
+    sel.value = "";
     $("customInput").value = String(preferred);
   }
+}
+
+function bindIntervalInputs() {
+  const sel = $("presetSelect");
+  const box = $("customInput");
+  sel.addEventListener("change", () => {
+    if (sel.value !== "") {
+      box.value = ""; /* 选了具体预设：以预设为准 */
+      return;
+    }
+    /* 选「自定义」：预填当前生效值，避免出现"选了自定义却没填"的第三种状态，
+       也让下面的读取逻辑只需要面对"框里有数"这一种情况 */
+    if (box.value.trim() === "") box.value = String(clampInterval(settings.lastIntervalSec).seconds);
+    box.focus();
+  });
+  box.addEventListener("input", () => {
+    if (box.value.trim() !== "") {
+      sel.value = ""; /* 秒数框里有数字：以它为准，下拉显示「自定义」 */
+      return;
+    }
+    /* 秒数框被清空 → 回落默认预设（不留"两个都说自己算数"的状态）。
+       sel.value 赋一个不存在的选项会变成空串，用这一点兜底 */
+    sel.value = String(DEFAULT_INTERVAL_SEC);
+    if (sel.value !== String(DEFAULT_INTERVAL_SEC)) sel.value = String(PRESETS[0].seconds);
+  });
 }
 
 async function saveSettings() {
@@ -290,12 +353,18 @@ async function saveSettings() {
       keepAwake: $("keepAwakeCheck").checked,
       captchaGuard: $("captchaGuardCheck").checked,
       webhookUrl: $("webhookUrlInput").value.trim(),
-      webhookEvents: [
+      /* 1.8.0 起键名 notifyEvents：webhook 与微信直连共用这一份事件清单 */
+      notifyEvents: [
         $("webhookEvSession").checked && "session-lost",
         $("webhookEvKeyword").checked && "keyword",
         $("webhookEvStopped").checked && "task-stopped",
         $("webhookEvPaused").checked && "task-paused"
-      ].filter(Boolean)
+      ].filter(Boolean),
+      wechatEnabled: $("wechatEnabledCheck").checked,
+      wechatAppId: $("wechatAppIdInput").value.trim(),
+      wechatAppSecret: $("wechatSecretInput").value.trim(),
+      wechatOpenId: $("wechatOpenIdInput").value.trim(),
+      wechatTemplateId: $("wechatTplInput").value.trim()
     }
   });
 }
@@ -307,6 +376,37 @@ function renderWebhookValidity() {
   $("webhookInvalid").hidden = !(raw && !normalizeWebhookUrl(raw));
 }
 
+/* 微信状态：优先报"配置不全"（用户能立刻修的本地问题），
+   配置齐了才显示后台最近一次推送的结果。两处显示同一段文字：
+   主视图那行是概览，配置视图里是详情。 */
+function wechatStatus() {
+  if (!$("wechatEnabledCheck").checked) return null;
+  const state = wechatConfigState({
+    wechatAppId: $("wechatAppIdInput").value,
+    wechatAppSecret: $("wechatSecretInput").value,
+    wechatOpenId: $("wechatOpenIdInput").value,
+    wechatTemplateId: $("wechatTplInput").value
+  });
+  if (!state.ready) {
+    const names = state.missing.map((k) => msg(WECHAT_FIELD_LABEL_KEYS[k])).join(msg("listSeparator"));
+    return { text: msg("wechatMissing", [names]), cls: "error" };
+  }
+  if (!wechatLast) return { text: msg("wechatStateIdle"), cls: "" };
+  if (wechatLast.ok) return { text: msg("wechatStateOk", [fmtClock(wechatLast.at)]), cls: "ok" };
+  return { text: msg(wechatLast.errorKey || "wechatErrOther"), cls: "error" };
+}
+
+function renderWechat() {
+  const on = $("wechatEnabledCheck").checked;
+  $("wechatRow").hidden = !on;
+  const st = wechatStatus();
+  $("wechatState").textContent = st ? st.text : "";
+  $("wechatState").className = "wx-state" + (st && st.cls ? " " + st.cls : "");
+  $("wechatViewState").textContent = st ? st.text : "";
+  $("wechatViewState").className = "hint" + (st && st.cls ? " " + st.cls : "");
+  $("wechatViewState").hidden = !st;
+}
+
 async function init() {
   applyI18n();
   /* 后台异步清理失效任务，结果经 storage.onChanged 回填，不阻塞首屏渲染 */
@@ -316,6 +416,7 @@ async function init() {
 
   await refreshState();
   initPresetSelect();
+  bindIntervalInputs();
   $("bypassCheck").checked = settings.bypassCache !== false;
   $("skipDiscardedCheck").checked = !!settings.skipDiscarded;
   $("cookieBackupCheck").checked = !!settings.cookieBackup;
@@ -327,12 +428,18 @@ async function init() {
   $("webhookUrlInput").value = settings.webhookUrl || "";
   renderWebhookValidity();
   {
-    const evs = Array.isArray(settings.webhookEvents) ? settings.webhookEvents : [];
+    const evs = notifyEventsOf(settings);
     $("webhookEvSession").checked = evs.includes("session-lost");
     $("webhookEvKeyword").checked = evs.includes("keyword");
     $("webhookEvStopped").checked = evs.includes("task-stopped");
     $("webhookEvPaused").checked = evs.includes("task-paused");
   }
+  $("wechatEnabledCheck").checked = !!settings.wechatEnabled;
+  $("wechatAppIdInput").value = settings.wechatAppId || "";
+  $("wechatSecretInput").value = settings.wechatAppSecret || "";
+  $("wechatOpenIdInput").value = settings.wechatOpenId || "";
+  $("wechatTplInput").value = settings.wechatTemplateId || "";
+  renderWechat();
   await renderAll();
 
   $("toggleBtn").addEventListener("click", async () => {
@@ -341,15 +448,19 @@ async function init() {
       await send({ type: "stop", tabId: currentTab.id });
       setMsg(msg("msgStopped"));
     } else {
+      /* 自定义优先：下拉停在「自定义」（value=""）或秒数框里有数，都以秒数框为准。
+         两者已被 bindIntervalInputs 做成互斥显示，所以"下拉显示某预设、实际按秒数框跑"
+         这种静默不一致不会再出现 */
+      const presetVal = $("presetSelect").value;
       const custom = parseInt($("customInput").value, 10);
       let seconds;
       let clamped = false;
-      if (custom > 0) {
+      if (presetVal === "" || custom > 0) {
         const c = clampInterval(custom);
         seconds = c.seconds;
         clamped = c.clamped;
       } else {
-        seconds = parseInt($("presetSelect").value, 10);
+        seconds = parseInt(presetVal, 10);
       }
       /* parseKeywords 与后台同一实现：解析 + 去重 + 限条数，保证存储里落的形状一致 */
       const keyword = parseKeywords($("keywordInput").value).join(",");
@@ -384,6 +495,39 @@ async function init() {
   $("webhookEvStopped").addEventListener("change", saveSettings);
   $("webhookEvPaused").addEventListener("change", saveSettings);
 
+  /* 微信直连：开关即时保存并刷新状态行；凭据在二级视图里填，change（失焦/回车）才写盘 */
+  $("wechatEnabledCheck").addEventListener("change", () => {
+    renderWechat();
+    saveSettings();
+  });
+  for (const id of ["wechatAppIdInput", "wechatSecretInput", "wechatOpenIdInput", "wechatTplInput"]) {
+    $(id).addEventListener("change", () => {
+      renderWechat();
+      saveSettings();
+    });
+  }
+  $("wechatSetupBtn").addEventListener("click", () => {
+    document.body.classList.add("wx-mode");
+    $("wechatAppIdInput").focus();
+  });
+  $("wechatBackBtn").addEventListener("click", () => {
+    document.body.classList.remove("wx-mode");
+  });
+  /* 测试消息：填完凭据立刻能验证，不用等某个事件真的发生。
+     结果经后台写 storage → onChanged 回流，这里同时也用返回值即时刷新一次 */
+  $("wechatTestBtn").addEventListener("click", async () => {
+    const btn = $("wechatTestBtn");
+    btn.disabled = true;
+    btn.textContent = msg("wechatTestSending");
+    const res = await send({ type: "wechat-test" });
+    btn.disabled = false;
+    btn.textContent = msg("wechatTestBtn");
+    if (res && res.result) {
+      wechatLast = res.result;
+      renderWechat();
+    }
+  });
+
   $("pauseAllBtn").addEventListener("click", async () => {
     await send({ type: "toggle-pause-all" });
     await refreshState();
@@ -399,6 +543,11 @@ async function init() {
 
   /* 只在任务 / 暂停 / 设置变化时重绘；cookie 备份等高频键的写入不触发全量刷新 */
   chrome.storage.onChanged.addListener(async (changes) => {
+    /* 推送结果也要跟着刷新——不然弹窗开着时状态永远是打开那一刻的 */
+    if (changes.wechatLastResult) {
+      wechatLast = changes.wechatLastResult.newValue || null;
+      renderWechat();
+    }
     if (!changes.tasks && !changes.pausedAll && !changes.settings) return;
     await refreshState();
     await renderAll();

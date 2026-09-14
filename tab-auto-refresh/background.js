@@ -4,14 +4,19 @@ import { PREFIX, PRESETS, DEFAULT_SETTINGS, HB_PREFIX } from "./shared/config.js
 import {
   RESTRICTED_URL,
   applyBackupAction,
+  buildTokenRequest,
+  buildWechatMessage,
+  capCookies,
   clampInterval,
   domainChain,
   hostOf,
   isErrorStatus,
+  isTokenErrorCode,
   jitteredDelayMs,
   getTaskKeywords,
   keywordHit,
   normalizeWebhookUrl,
+  notifyEventsOf,
   parseKeywords,
   pickHits,
   looksLikeLoginPage,
@@ -19,6 +24,9 @@ import {
   sameSite,
   siteRoot,
   tabShowsUrl,
+  tokenFresh,
+  wechatConfigState,
+  wechatErrorKey,
   SESSION_LOST_CONFIRM_SAMPLES,
   SESSION_LOST_NOTIFY_MS,
 } from "./shared/logic.js";
@@ -69,6 +77,18 @@ async function ensureTaskTabIds() {
   return taskTabIdSet;
 }
 
+/* 存盘设置 → 生效设置。除补默认值外还承接键改名：
+   1.7.0 的通知事件清单叫 webhookEvents，1.8.0 起叫 notifyEvents（webhook 与微信共用）。
+   必须在 Object.assign 之前判断"存盘里有没有新键"——合并之后新键总在（默认值注入），
+   老用户的选择会被默认值悄悄覆盖成全选 */
+function normalizeStoredSettings(stored) {
+  const s = Object.assign({}, DEFAULT_SETTINGS, stored || {});
+  if (!Array.isArray((stored || {}).notifyEvents) && Array.isArray((stored || {}).webhookEvents)) {
+    s.notifyEvents = stored.webhookEvents;
+  }
+  return s;
+}
+
 /* 偏好设置存 chrome.storage.sync 跨设备同步；旧版本留在 local 的设置自动迁移 */
 async function getSettings() {
   const [syncData, localData] = await Promise.all([
@@ -76,15 +96,15 @@ async function getSettings() {
     chrome.storage.local.get("settings"),
   ]);
   if (syncData.settings) {
-    return Object.assign({}, DEFAULT_SETTINGS, syncData.settings);
+    return normalizeStoredSettings(syncData.settings);
   }
   if (localData.settings) {
-    const migrated = Object.assign({}, DEFAULT_SETTINGS, localData.settings);
+    const migrated = normalizeStoredSettings(localData.settings);
     await chrome.storage.sync.set({ settings: migrated });
     await chrome.storage.local.remove("settings");
     return migrated;
   }
-  return Object.assign({}, DEFAULT_SETTINGS);
+  return normalizeStoredSettings(null);
 }
 
 /* 全局暂停是本机状态，跟随任务一起存 chrome.storage.local */
@@ -245,19 +265,41 @@ chrome.idle.onStateChanged.addListener(async (state) => {
   }
 });
 
+/* 掉线探针按"仍被任务引用的根域"收敛（12 复审 §5）：
+   站点掉线 → 探针 lost=true → 用户停掉该站任务 → 探针却留在存储里没有任何清理路径，
+   只有"一次正常信号"才会复位。于是稍后在同一站点重建任务时，startTask 里那次
+   `await backupCookies(tabId)` 会被 isProbeLost 静默跳过——而它正是"防首次刷新前
+   关浏览器"的那次备份。角标只读当前任务涉及的根域（updateBadge 按 tasks 过滤），
+   所以删掉无任务引用的探针不影响任何判定，顺带止住探针条目的无界增长。
+   注意探针不只服务备份：行为通道（登录页/401）与掉线通知也写它，所以开关关闭时
+   同样要收敛，不能塞进 cookieBackup 分支里。 */
+async function pruneStaleProbes(roots) {
+  const data = await chrome.storage.local.get(PROBE_KEY);
+  const all = data[PROBE_KEY];
+  if (!all) return;
+  const kept = {};
+  let dropped = 0;
+  for (const [root, value] of Object.entries(all)) {
+    if (roots.has(root)) kept[root] = value;
+    else dropped++;
+  }
+  if (dropped > 0) await chrome.storage.local.set({ [PROBE_KEY]: kept });
+}
+
 /* 备份清理三条件：站点不再被任何任务使用 / 超过 TTL / 超过站点数上限（按时间留新）；
    备份功能关闭时不留死数据，清空全部备份 */
 async function pruneCookieBackups(remainingTasks) {
+  const roots = new Set();
+  for (const t of Object.values(remainingTasks || {})) {
+    const r = siteRoot(hostOf(t.url));
+    if (r) roots.add(r);
+  }
+  await pruneStaleProbes(roots);
   if (!(await getSettings()).cookieBackup) {
     const all = await chrome.storage.local.get(null);
     const keys = Object.keys(all).filter((k) => k.startsWith(COOKIE_BACKUP_PREFIX));
     if (keys.length > 0) await chrome.storage.local.remove(keys);
     return;
-  }
-  const roots = new Set();
-  for (const t of Object.values(remainingTasks || {})) {
-    const r = siteRoot(hostOf(t.url));
-    if (r) roots.add(r);
   }
   /* storage.get 不支持通配符，必须全量读取再按前缀过滤 */
   const all = await chrome.storage.local.get(null);
@@ -604,7 +646,7 @@ async function onKeywordHit(tabId, task, newly, present) {
       message,
     })
     .catch(() => {});
-  await postWebhook("keyword", {
+  await notifyOut("keyword", {
     content: message,
     text: label,
     host: hostOf(task.url) || "",
@@ -636,10 +678,7 @@ async function postWebhook(event, payload) {
     const settings = await getSettings();
     const url = normalizeWebhookUrl(settings.webhookUrl);
     if (!url) return;
-    const events =
-      Array.isArray(settings.webhookEvents) && settings.webhookEvents.length
-        ? settings.webhookEvents
-        : DEFAULT_SETTINGS.webhookEvents;
+    const events = notifyEventsOf(settings);
     if (!events.includes(event)) return;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 15000);
@@ -660,6 +699,158 @@ async function postWebhook(event, payload) {
   } catch (e) {
     /* 辅助链路：失败静默，绝不影响主流程 */
   }
+}
+
+/* ---- 微信直连（不经任何中继，扩展 SW 直接调 api.weixin.qq.com）----
+   与 webhook 并列的第二个外发出口，两者共用 notifyEvents 事件清单、各有独立开关。
+   可行性依据（13 报告，实测对照）：网页语境 fetch 微信接口被 CORS 拦（Failed to fetch），
+   而扩展 SW 语境 HTTP 200 —— 微信不返回 CORS 头对扩展不构成障碍，manifest 的
+   <all_urls> 已覆盖，无需新增权限（也就不会触发商店重审）。
+
+   令牌缓存必须落 chrome.storage.session：MV3 SW 闲置 30 秒就被回收，内存缓存等于没有；
+   session 不同步、关浏览器即清，正适合这种短期令牌。
+   推送结果落 chrome.storage.local（本机可见反馈）——静默失败必须留痕，
+   否则用户会以为"配好了、在发"。 */
+const WX_TOKEN_KEY = "wechatToken";
+const WX_LAST_KEY = "wechatLastResult";
+const WX_FETCH_TIMEOUT_MS = 15000;
+/* 事件 → 卡片标题用的文案键。前四个复用弹窗里的事件标签（不再新增一套同义键）；
+   test 是「发送测试消息」按钮专用的伪事件——它只要求凭据填全，
+   不受总开关与事件勾选约束（配好之前就得能试） */
+const WECHAT_EVENT_TITLE_KEYS = {
+  keyword: "webhookEvKeyword",
+  "task-stopped": "webhookEvStopped",
+  "task-paused": "webhookEvPaused",
+  "session-lost": "webhookEvSession",
+  test: "wechatEvTest",
+};
+
+async function wxFetch(url, body, timeoutMs = WX_FETCH_TIMEOUT_MS) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* 取 access_token：优先缓存，force 时强制刷新（官方 stable_token 的 force_refresh）。
+   失败时把微信的错误码挂在 error.wechatCode 上，让调用方能给出可读提示 */
+async function getWechatToken(settings, force) {
+  const now = Date.now();
+  if (!force) {
+    const d = await chrome.storage.session.get(WX_TOKEN_KEY);
+    if (tokenFresh(d[WX_TOKEN_KEY], now)) return d[WX_TOKEN_KEY].token;
+  }
+  const data = await wxFetch(
+    "https://api.weixin.qq.com/cgi-bin/stable_token",
+    buildTokenRequest(settings.wechatAppId, settings.wechatAppSecret, force)
+  );
+  if (!data || !data.access_token) {
+    const err = new Error("stable_token failed");
+    err.wechatCode = data && typeof data.errcode === "number" ? data.errcode : -1;
+    throw err;
+  }
+  const cache = {
+    token: data.access_token,
+    expireAt: now + (Number(data.expires_in) || 7200) * 1000,
+  };
+  await chrome.storage.session.set({ [WX_TOKEN_KEY]: cache });
+  return cache.token;
+}
+
+/* 最近一次推送结果（弹窗据此给可见反馈）。只留最近一次，不堆积 */
+async function setWechatResult(result) {
+  try {
+    await chrome.storage.local.set({
+      [WX_LAST_KEY]: Object.assign({ at: Date.now() }, result),
+    });
+  } catch (e) {
+    /* 反馈写不进去不能反过来影响推送本身 */
+  }
+}
+
+/* 卡片正文：命中/暂停原因 + 站点 + 页面。模板只有 title/content 两个变量，
+   所以这些行要拼进同一段文本里（换行在微信卡片里会保留） */
+function buildWechatContent(payload) {
+  const lines = [];
+  if (payload && payload.content) lines.push(String(payload.content));
+  if (payload && payload.host) lines.push(chrome.i18n.getMessage("wechatLineHost", [String(payload.host)]));
+  if (payload && payload.url) lines.push(chrome.i18n.getMessage("wechatLineUrl", [String(payload.url)]));
+  return lines.join("\n");
+}
+
+async function postWechat(event, payload, opts) {
+  try {
+    const settings = await getSettings();
+    /* ignoreToggle：弹窗的「发送测试消息」用。测试的意义就是"配好之前先试"，
+       所以它只看凭据是否齐，不受总开关与事件勾选约束 */
+    const forced = !!(opts && opts.ignoreToggle);
+    if (!forced && !settings.wechatEnabled) return;
+    if (!forced && !notifyEventsOf(settings).includes(event)) return;
+    const state = wechatConfigState(settings);
+    if (!state.ready) {
+      /* 开关开了但四样凭据没填全：留痕，让弹窗点名缺哪几项 */
+      await setWechatResult({ ok: false, kind: "incomplete", missing: state.missing, event });
+      return;
+    }
+    const eventLabel = chrome.i18n.getMessage(
+      WECHAT_EVENT_TITLE_KEYS[event] || "webhookEvKeyword"
+    );
+    const body = buildWechatMessage({
+      openId: settings.wechatOpenId,
+      templateId: settings.wechatTemplateId,
+      title: chrome.i18n.getMessage("wechatMsgTitle", [eventLabel]),
+      content: buildWechatContent(payload),
+      url: payload && payload.url,
+    });
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const token = await getWechatToken(settings, attempt === 2);
+      const data = await wxFetch(
+        "https://api.weixin.qq.com/cgi-bin/message/template/send?access_token=" +
+          encodeURIComponent(token),
+        body
+      );
+      const code = data && typeof data.errcode === "number" ? data.errcode : -1;
+      if (code === 0) {
+        await setWechatResult({ ok: true, event });
+        return;
+      }
+      /* 令牌失效（40001/42001）：清缓存重取一次再试——官方文档明确这两种码可重试 */
+      if (isTokenErrorCode(code) && attempt === 1) continue;
+      await setWechatResult({
+        ok: false,
+        kind: "api",
+        code,
+        errorKey: wechatErrorKey(code),
+        event,
+      });
+      return;
+    }
+  } catch (e) {
+    const code = e && typeof e.wechatCode === "number" ? e.wechatCode : null;
+    await setWechatResult({
+      ok: false,
+      kind: code === null ? "network" : "api",
+      code,
+      errorKey: code === null ? "wechatErrNetwork" : wechatErrorKey(code),
+      event,
+    });
+  }
+}
+
+/* 外发通知总入口：两个出口各推一份（webhook 未配地址就自己跳过，微信开关关就跳过）。
+   调用方必须 await —— 两条链路都是 fetch，裸甩异步会在 SW 回收时被截断 */
+async function notifyOut(event, payload) {
+  await postWebhook(event, payload);
+  await postWechat(event, payload);
 }
 
 /* 备份该主机及全部父域的 cookie；按主机独立存储；仅在与监控目标同根域且开关开启时执行 */
@@ -702,7 +893,11 @@ async function backupCookies(tabId) {
       expirationDate: c.expirationDate,
       hostOnly: c.hostOnly
     }));
-    if (cookies.length > MAX_COOKIES_PER_HOST) cookies.length = MAX_COOKIES_PER_HOST;
+    /* 超限截断先按"像登录票据的程度"排序再切（12 复审 §4）：原实现按
+       chrome.cookies.getAll 的返回顺序切尾，而该顺序未定义——若会话票据恰在尾部，
+       每次备份都会稳定缺它，且 prev/next 都缺导致 sessionLostDetected 恒判"正常"，
+       重启后看起来"备份在更新"却恢复不出登录态。正常规模不排序，避免无谓的顺序变化 */
+    const capped = capCookies(cookies, MAX_COOKIES_PER_HOST);
     const key = COOKIE_BACKUP_PREFIX + host;
     const now = Date.now();
     /* 行为通道已判定该根域掉线：证据强于状态采样，直接保护备份不被写坏 */
@@ -713,9 +908,12 @@ async function backupCookies(tabId) {
        最后有效备份时间，长期冻结的备份由 30 天 TTL 自然淘汰 */
     const prevEntry = (await chrome.storage.local.get(key))[key];
     /* 决策与落盘映射同一纯函数（04 复审 §4.4）：write=null 表示冻结且节流，什么都不写 */
-    const act = applyBackupAction(prevEntry, cookies, now);
+    const act = applyBackupAction(prevEntry, capped, now);
     if (act.write) await chrome.storage.local.set({ [key]: act.write });
-    if (act.notify) notifySessionLost(host);
+    /* 必须 await：notifySessionLost 内含 webhook/微信的 fetch，裸甩会在 SW 回收时被截断
+       ——而且丢的正是"会话掉线"这条（人不在电脑前最需要的那条）。对照 reportSessionSignal
+       里同一调用点（行为通道）本来就是 await（12 复审 §3） */
+    if (act.notify) await notifySessionLost(host);
   } catch (e) {
     try {
       const flagged = (await chrome.storage.local.get(BACKUP_WARN_KEY))[BACKUP_WARN_KEY];
@@ -833,7 +1031,7 @@ async function notifyTaskStopped(tabId, url, reason) {
     .catch(() => {}); /* 系统通知被关闭时不影响任务清理流程 */
   /* await 而非 void：postWebhook 内是 fetch，必须挂在被 await 的链路里，
      否则 SW 回收会截断请求（本批首版四处都写成 void，与函数注释自相矛盾） */
-  await postWebhook("task-stopped", {
+  await notifyOut("task-stopped", {
     content: chrome.i18n.getMessage("notifStopped"),
     host: hostOf(url) || "",
     url: url || "",
@@ -859,7 +1057,7 @@ async function notifySessionLost(host) {
       message: chrome.i18n.getMessage("notifSessionLost", [host])
     })
     .catch(() => {});
-  await postWebhook("session-lost", {
+  await notifyOut("session-lost", {
     content: chrome.i18n.getMessage("notifSessionLost", [host]),
     host,
   });
@@ -1192,6 +1390,20 @@ chrome.storage.onChanged.addListener((changes, area) => {
   const o = changes.settings.oldValue || {};
   const n = changes.settings.newValue || {};
   const touched = (k) => o[k] !== n[k];
+  /* 关掉「重启后恢复登录」要立刻清掉遗留备份（12 复审 §6）：README 明确承诺
+     "关闭状态下不备份、不恢复，遗留备份也会被自动清除"，而清理原先只发生在
+     stopTask 与启动 prune 里——用户按说明关掉开关后，含 HttpOnly 登录票据的
+     明文 cookie 仍继续躺在 chrome.storage.local，落差还偏危险方向。
+     pruneCookieBackups 在开关关闭时正是"清空全部备份"，顺带收敛无任务的探针 */
+  if (touched("cookieBackup")) {
+    void (async () => {
+      try {
+        await pruneCookieBackups(await getTasks());
+      } catch (e) {
+        /* 收敛失败不影响开关本身的生效 */
+      }
+    })();
+  }
   if (!(["keepAlive", "httpHeartbeat", "skipOnActivity", "keepAwake"].some(touched))) return;
   reconcileKeepAlive();
 });
@@ -1271,7 +1483,7 @@ async function pauseTaskAuto(tabId, reason) {
       message,
     })
     .catch(() => {});
-  await postWebhook("task-paused", {
+  await notifyOut("task-paused", {
     content: message,
     host: hostOf(task.url) || "",
     url: task.url || "",
@@ -1336,6 +1548,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           await rtSet(rtTab(RT_ACTIVITY, sender.tab.id), Date.now());
         }
         sendResponse({ ok: true });
+      } else if (msg.type === "wechat-test") {
+        /* 弹窗的「发送测试消息」：填完凭据立刻能验证，
+           不用等某个事件真的发生（也就不会"配错了自己不知道"） */
+        await postWechat(
+          "test",
+          { content: chrome.i18n.getMessage("wechatTestBody") },
+          { ignoreToggle: true }
+        );
+        const r = await chrome.storage.local.get(WX_LAST_KEY);
+        sendResponse({ ok: true, result: r[WX_LAST_KEY] || null });
       } else if (msg.type === "resume-task") {
         await resumeTaskAuto(msg.tabId);
         sendResponse({ ok: true });
