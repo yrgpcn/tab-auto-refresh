@@ -134,24 +134,21 @@
   "wechatOpenIdPlaceholder": { "message": "o 开头（关注测试号后出现在「用户列表」）" },
   "wechatTplLabel": { "message": "模板ID" },
   "wechatTplPlaceholder": { "message": "新增测试模板后生成" },
-  "wechatTplHint": { "message": "模板审核不通过或变量名不符时，微信会拒收整条消息" },
-  "wechatTplBody": { "message": "测试模板的「内容」必须一字不差写成两行：{{title.DATA}} 和 {{content.DATA}}——变量名换成别的会推出一张空白卡片。" },
+  "wechatTplHint": { "message": "变量名不符、或变量前漏了中文冒号，都会收到「有标题没正文」的空白卡片" },
+  "wechatTplBody": { "message": "模板内容要写成「标题：{{title.DATA}}」与「内容：{{content.DATA}}」两行——变量名写错、或变量前漏了中文冒号，都会推出一张空白卡片。微信还规定每个字段最多 20 个字、不能换行，扩展已按此压缩（完整页面地址点卡片打开）。" },
   "wechatTestBtn": { "message": "发送测试消息" },
   "wechatTestSending": { "message": "发送中…" },
-  "wechatTestBody": { "message": "这是一条测试消息：能收到即说明微信推送已配好。" },
+  "wechatTestBody": { "message": "能收到即说明推送已配好" },
   "wechatEvTest": { "message": "测试消息" },
-  "wechatMsgTitle": {
-    "message": "标签页定时刷新 · $EVENT$",
-    "placeholders": { "event": { "content": "$1" } }
+  "wechatTitleSep": { "message": "·" },
+  "wechatBodyKeyword": {
+    "message": "出现关键词「$KW$」",
+    "placeholders": { "kw": { "content": "$1" } }
   },
-  "wechatLineHost": {
-    "message": "网站：$HOST$",
-    "placeholders": { "host": { "content": "$1" } }
-  },
-  "wechatLineUrl": {
-    "message": "页面：$URL$",
-    "placeholders": { "url": { "content": "$1" } }
-  },
+  "wechatBodyStopped": { "message": "标签页已关闭或受限" },
+  "wechatBodyPausedCaptcha": { "message": "命中验证墙，请点卡片处理" },
+  "wechatBodyPausedError": { "message": "页面持续 5xx/404" },
+  "wechatBodySessionLost": { "message": "登录态失效，备份已冻结" },
   "wechatStateIdle": { "message": "已开启，等待首次推送" },
   "wechatStateOk": {
     "message": "上次推送成功 $TIME$",
@@ -181,15 +178,15 @@
   "guideOpenSandbox": { "message": "打开测试号页面" },
   "guideStep1Body2": { "message": "登录后在上面复制三项：appID、appsecret，以及「用户列表」里你自己那一行的 openid。" },
   "guideStep2Title": { "message": "二、建一个模板" },
-  "guideStep2Body": { "message": "在同一个页面向下找到「模板消息接口 · 测试模板」，点「新增测试模板」。标题随便填（例如「刷新通知」），内容必须一字不差写成下面两行，花括号也要保留：" },
-  "guideStep2Why": { "message": "为什么必须一字不差：扩展就是按 title 与 content 这两个变量名往里填内容的，名字写错会收到一张空白卡片。" },
+  "guideStep2Body": { "message": "在同一个页面向下找到「模板消息接口 · 测试模板」，点「新增测试模板」。标题随便填（例如「刷新通知」），内容照下面两行的样子写——每行都是「关键词 + 中文冒号 + 变量」，冒号与花括号都不能少：" },
+  "guideStep2Why": { "message": "两条规矩。① 变量名必须是 title 与 content——扩展就是往这两个名字里填内容。② 变量前必须有关键词加中文冒号：微信只认「关键词：{{变量}}」这种形式，光秃秃一行变量（例如只有 {{title.DATA}}）会被平台整行丢弃，你收到的是「有标题、没正文」的空白卡片。冒号前那几个字随便起，它只是卡片上的前缀。" },
   "guideStep2Body2": { "message": "保存后，在模板列表里把「模板ID」复制下来。" },
   "guideStep3Title": { "message": "三、填进扩展并测试" },
   "guideStep3Body": { "message": "打开扩展弹窗 → 勾上「微信直连」→ 点「配置…」→ 把四项逐个粘进去 → 点「发送测试消息」。手机上收到「测试号」推来的消息，就配好了。" },
   "guideStep4Title": { "message": "四、收不到？对号入座" },
   "guideFixFollow": { "message": "43004 / 没关注：回到测试号页面，用微信扫页面上的「二维码」关注它（微信里会出现一个叫「测试号」的服务号），再发一次。" },
   "guideFixAppId": { "message": "40013：appID 与 appsecret 粘错或填反了。" },
-  "guideFixTemplate": { "message": "40037 / 47003：模板内容与变量对不上，改回正好两行 {{title.DATA}} 与 {{content.DATA}}。" },
+  "guideFixTemplate": { "message": "40037 / 47003：模板内容与变量对不上，改回「标题：{{title.DATA}}」与「内容：{{content.DATA}}」两行，中文冒号不能漏。若卡片仍是空白，把中文冒号换成英文 : 再试一次。" },
   "guideFixIp": { "message": "40164：提示里的 IP 需要加白名单。测试号不需要；填的是正式公众号凭据时，去公众号后台「IP 白名单」把它加上。" },
   "guideFixQuota": { "message": "45009：当天推送额度用尽，次日自动恢复（测试号额度不大，日常告警够用）。" },
   "guideFixOther": { "message": "其它错误码：弹窗的微信状态行会直接显示原因；在那里重发一次测试消息即可复现。" },
@@ -197,5 +194,11 @@
   "guideSafetySync": { "message": "四项凭据存在浏览器的同步存储里，会随你的 Google 账号同步到其它登录同一账号的桌面 Chrome。其中 appsecret 相当于「以这个公众号名义发消息」的钥匙，别外传。" },
   "guideSafetyRoute": { "message": "通知由扩展直接调腾讯官方接口发出，不经第三方推送服务商、也不经中转服务器；代价是内容（页面标题、地址）会经过腾讯的服务器，并占用这个公众号/测试号的推送额度。" },
   "guideSafetyOff": { "message": "关掉「微信直连」开关即停止推送，扩展不会再向腾讯发任何请求。" },
-  "guideRisk": { "message": "测试号是官方提供的沙箱，官方保留调整接口的权利；若模板消息接口将来变动，退路是改用企业微信自建应用。" }
+  "guideRisk": { "message": "测试号是官方提供的沙箱，官方保留调整接口的权利；若模板消息接口将来变动，退路是改用企业微信自建应用。" },
+  "guideShot1Alt": { "message": "测试号页面截图：测试号信息区里的 appID 与 appsecret，以及用户列表里你自己那一行的微信号（openid）。图中凭据均为示例值。" },
+  "guideShot1Caption": { "message": "要抄的三项就在这两处：appID、appsecret，以及「用户列表」里你自己那一行的微信号（它就是 openid）。图中已用示例值替换真实凭据。" },
+  "guideShot2Alt": { "message": "测试号页面截图：模板消息接口区的新增测试模板按钮、模板列表与模板 ID 列。图中模板 ID 为示例值。" },
+  "guideShot2Caption": { "message": "在「模板消息接口」点「新增测试模板」，建好后从列表的「模板 ID」列复制一串字符。模板内容按上面那两行写，别漏掉冒号。" },
+  "guideLimit": { "message": "卡片上的字很短，有原因：微信平台自 2023-05-04 起规定，模板消息的每个字段最多 20 个字、且不能换行，超长由平台直接砍掉、连省略号都不给。扩展已按这条规则把内容压进 20 字，所以宁可少说一句，也不会让你看到半句话。" },
+  "guideLimit2": { "message": "站点名放在第一行（如「会话掉线 · example.com」），具体原因放在第二行；完整的页面地址不必挤进正文——点一下卡片就会打开它。" }
 }

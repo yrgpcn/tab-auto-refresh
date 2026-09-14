@@ -134,24 +134,21 @@
   "wechatOpenIdPlaceholder": { "message": "starts with o (appears under users after you follow)" },
   "wechatTplLabel": { "message": "Template" },
   "wechatTplPlaceholder": { "message": "generated when you add a test template" },
-  "wechatTplHint": { "message": "If the template is rejected or variable names do not match, WeChat rejects the whole message" },
-  "wechatTplBody": { "message": "The test template body must be exactly these two lines: {{title.DATA}} and {{content.DATA}} - any other variable name renders a blank card." },
+  "wechatTplHint": { "message": "A mismatched variable name, or a missing Chinese colon, gives you a blank card with no body" },
+  "wechatTplBody": { "message": "The template content must be two lines: '标题：{{title.DATA}}' and '内容：{{content.DATA}}' - a wrong variable name, or a missing Chinese colon before the variable, renders a blank card. WeChat also caps each field at 20 characters with no line breaks, so the extension compresses its text (tap the card for the full page address)." },
   "wechatTestBtn": { "message": "Send a test message" },
   "wechatTestSending": { "message": "Sending…" },
-  "wechatTestBody": { "message": "This is a test message: if you can read it, WeChat push is set up." },
+  "wechatTestBody": { "message": "Got it - push works" },
   "wechatEvTest": { "message": "test message" },
-  "wechatMsgTitle": {
-    "message": "Tab Auto Refresh · $EVENT$",
-    "placeholders": { "event": { "content": "$1" } }
+  "wechatTitleSep": { "message": "-" },
+  "wechatBodyKeyword": {
+    "message": "keyword hit: $KW$",
+    "placeholders": { "kw": { "content": "$1" } }
   },
-  "wechatLineHost": {
-    "message": "Site: $HOST$",
-    "placeholders": { "host": { "content": "$1" } }
-  },
-  "wechatLineUrl": {
-    "message": "Page: $URL$",
-    "placeholders": { "url": { "content": "$1" } }
-  },
+  "wechatBodyStopped": { "message": "tab closed or gone" },
+  "wechatBodyPausedCaptcha": { "message": "bot check, tap card" },
+  "wechatBodyPausedError": { "message": "page keeps erroring" },
+  "wechatBodySessionLost": { "message": "session expired" },
   "wechatStateIdle": { "message": "On; waiting for the first push" },
   "wechatStateOk": {
     "message": "Last push succeeded at $TIME$",
@@ -181,15 +178,15 @@
   "guideOpenSandbox": { "message": "Open the test account page" },
   "guideStep1Body2": { "message": "Then copy three things from that page: appID, appsecret, and the openid on your own row in the user list." },
   "guideStep2Title": { "message": "2. Create a template" },
-  "guideStep2Body": { "message": "Further down the same page, find 'template message interface · test template' and add one. The title is up to you (e.g. 'Refresh alert'); the content must be exactly these two lines, braces included:" },
-  "guideStep2Why": { "message": "Why exactly: the extension fills values in under the variable names title and content. A different name renders a blank card." },
+  "guideStep2Body": { "message": "Further down the same page, find 'template message interface - test template' and add one. The title is up to you (e.g. 'Refresh alert'); write the content like the two lines below - each line is a keyword, a Chinese colon, then the variable. Neither the colon nor the braces may be dropped:" },
+  "guideStep2Why": { "message": "Two rules. (1) The variable names must be title and content - that is what the extension fills in. (2) Each variable must be preceded by a keyword and a Chinese colon (：): WeChat only recognises the form \"keyword：{{var}}\", and a line holding nothing but a bare variable (say just {{title.DATA}}) is dropped whole by the platform - you then get a card with a title and no body. The keyword itself is free text; it is just the prefix shown on the card." },
   "guideStep2Body2": { "message": "After saving, copy the template ID shown in the list." },
   "guideStep3Title": { "message": "3. Paste into the extension and test" },
   "guideStep3Body": { "message": "Open the extension popup → tick 'WeChat push' → click 'Setup…' → paste the four values → click 'Send a test message'. If your phone receives a message from the test account, you are done." },
   "guideStep4Title": { "message": "4. Nothing received? Match the error" },
   "guideFixFollow": { "message": "43004 / not followed: go back to the test account page and scan its QR code to follow it (a service account named '测试号' appears in WeChat), then send again." },
   "guideFixAppId": { "message": "40013: appID and appsecret are mistyped or swapped." },
-  "guideFixTemplate": { "message": "40037 / 47003: the template content does not match the variables. Use exactly two lines, {{title.DATA}} and {{content.DATA}}." },
+  "guideFixTemplate": { "message": "40037 / 47003: the template content does not match the variables. Restore the two lines '标题：{{title.DATA}}' and '内容：{{content.DATA}}' - do not omit the Chinese colon. If the card is still blank, try an ASCII colon (:) once." },
   "guideFixIp": { "message": "40164: that IP needs to be whitelisted. Test accounts do not need this; when using a real official account, add the IP in its console." },
   "guideFixQuota": { "message": "45009: daily quota used up; it resets tomorrow (the sandbox quota is small but fine for alerts)." },
   "guideFixOther": { "message": "Other codes: the WeChat status line in the popup shows the reason directly; send a test message there to reproduce." },
@@ -197,5 +194,11 @@
   "guideSafetySync": { "message": "The four credentials live in Chrome's synced storage and follow your Google account to other desktops signed in with it. appsecret is effectively a key to send messages as this account - keep it private." },
   "guideSafetyRoute": { "message": "Notifications go straight from the extension to Tencent's official API: no third-party push provider, no relay server. The trade-off is that the content (page title, URL) passes through Tencent's servers and consumes this account's push quota." },
   "guideSafetyOff": { "message": "Turning the 'WeChat push' switch off stops everything: the extension sends no further requests to Tencent." },
-  "guideRisk": { "message": "The test account is an official sandbox and its API may change; if template messages are retired, the fallback is a self-built WeCom app." }
+  "guideRisk": { "message": "The test account is an official sandbox and its API may change; if template messages are retired, the fallback is a self-built WeCom app." },
+  "guideShot1Alt": { "message": "Screenshot of the test account page: appID and appsecret under account info, and the WeChat ID on your own row in the user list (the openid). All credentials shown are placeholders." },
+  "guideShot1Caption": { "message": "The three things to copy live in these two places: appID, appsecret, and the WeChat ID on your own row in the user list (that is the openid). Real credentials are replaced with placeholders in the screenshot." },
+  "guideShot2Alt": { "message": "Screenshot of the test account page: the add-test-template button, the template list and its template ID column. The ID shown is a placeholder." },
+  "guideShot2Caption": { "message": "Under 'template message interface', click 'add test template', then copy the string from the template ID column of the list. Write the content as the two lines above, colon included." },
+  "guideLimit": { "message": "The text on the card is short for a reason: since 4 May 2023 WeChat caps every template-message field at 20 characters and removes line breaks, trimming anything longer without even an ellipsis. The extension compresses its text to fit, so you get a complete short sentence instead of one cut off in the middle." },
+  "guideLimit2": { "message": "The site goes on the first line (session lost - example.com) and the reason on the second; the full page address does not have to fit in the text - tapping the card opens it." }
 }

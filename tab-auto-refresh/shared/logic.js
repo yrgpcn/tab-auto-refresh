@@ -311,13 +311,69 @@ export function tabShowsUrl(tab, url) {
    下面把"发什么、怎么判失败"做成纯函数，Node 单测可离线覆盖（不需要真凭据）。 */
 
 /* 模板消息只认这两个变量名，与用户在测试号后台建的模板内容一一对应：
-   {{title.DATA}} / {{content.DATA}}。写成别的名字会推出一张空白卡片 */
+   标题：{{title.DATA}} / 内容：{{content.DATA}}。名字写错会推出一张空白卡片，
+   而且**变量前必须有关键词加中文冒号**：官方运营规范要求模板内容中部是
+   「关键词名称:关键词内容参数」的组合，裸写变量（整行只有 {{title.DATA}}）
+   会被平台整行丢弃，接口却照旧返回 errcode=0 —— 用户看到的是「有标题、没正文」。
+   这两条也都写进了教程页与弹窗提示，并有门禁守着（verify-wechat-template-doc.mjs） */
 export const WECHAT_TEMPLATE_KEYS = ["title", "content"];
 
-/* 单字段长度上限（保守值）：模板变量超长整条会被拒，截断比整条失败划算 */
-export const WECHAT_FIELD_MAX = 400;
-/* 标题字段更短：微信卡片标题本身就是一行 */
-export const WECHAT_TITLE_MAX = 100;
+/* 微信平台的硬上限（2023-05-04 生效的《关于规范公众号模板消息的再次公告》）：
+   中间主内容的**单个字段不超过 20 个字、且不支持换行**，超长由平台自动去掉、
+   不留任何提示——用户看到的是半截话，还会以为是扩展发漏了（17 报告）。
+   所以按 20 字自己截：既能决定"切在哪"（要紧的放前面），也能给出省略号，
+   让"内容就这些"与"被切掉了"能区分开。另：首行（first）与尾部备注（remark）
+   会被平台整体去除，模板里不能用这两个变量名。 */
+export const WECHAT_FIELD_MAX = 20;
+export const WECHAT_TITLE_MAX = 20;
+
+/* 压成单行：平台会去掉换行。照发的话，多行内容会先被连成一串、再整段截 20 字，
+   第一行之后的信息全丢（实测真实事件就是这样把站点名丢掉的）。
+   顺带把连续空白收成一个空格，免得 20 字预算被空格吃掉 */
+export function oneLine(s) {
+  return String(s == null ? "" : s).replace(/\s+/g, " ").trim();
+}
+
+/* 单行 + 截断。超长补省略号——微信自己截是不留提示的 */
+export function clipOneLine(s, n = WECHAT_FIELD_MAX) {
+  const v = oneLine(s);
+  if (v.length <= n) return v;
+  if (n <= 1) return v.slice(0, Math.max(n, 0));
+  return v.slice(0, n - 1) + "…";
+}
+
+/* 域名超长时从左侧截：右侧（注册域 + TLD）才是"这是哪个站"的识别信息。
+   优先在 label 边界上切——整段丢子域，而不是切进 label 中间：
+   "…xample.com" 看起来就像一个**别的**域名（实测 shop.example.com 被切成这样过），
+   而 "…example.com" / "example.com" 至少还是一个真实存在的域名。
+   例：a.b.c.example.com → …example.com */
+export function clipHostTail(host, n = WECHAT_FIELD_MAX) {
+  const v = oneLine(host);
+  if (v.length <= n) return v;
+  const labels = v.split(".");
+  /* 先整段丢子域（至少保留"注册域 + TLD"两段）：比切进 label 中间可读得多 */
+  for (let i = 1; i <= labels.length - 2; i++) {
+    const tail = labels.slice(i).join(".");
+    if (tail.length <= n) return tail.length + 1 <= n ? "…" + tail : tail;
+  }
+  /* 连注册域本身都放不下（长域名，罕见）：只能硬截，保住右侧；
+     顺手去掉开头残留的 "-" / "."，免得出现 "…-domain.com" 这种别扭写法 */
+  if (n <= 1) return v.slice(-Math.max(n, 0));
+  return "…" + v.slice(-(n - 1)).replace(/^[-.]+/, "");
+}
+
+/* 卡片标题 = "事件 · 站点"。事件名（4~5 字）不可省：站点放不下时宁可只留事件，
+   也不要从右边把事件名切掉——切了就等于没说发生了什么 */
+export function wechatTitleOf({ eventLabel, host, sep = "·", max = WECHAT_TITLE_MAX } = {}) {
+  const e = clipOneLine(eventLabel, max);
+  const s = oneLine(sep) || "·";
+  const h = oneLine(host);
+  if (!h) return e;
+  /* 两个空格与分隔符本身都要占位，剩下的才留给站点 */
+  const budget = max - e.length - s.length - 2;
+  if (budget < 4) return e; /* 留给站点的位置太小，显示个"…c"没有意义 */
+  return clipOneLine(e + " " + s + " " + clipHostTail(h, budget), max);
+}
 
 /* 凭据完整性：四样缺一不可。返回缺失项（键名），让弹窗能点名而不是笼统报错 */
 export function wechatConfigState(settings) {
@@ -355,15 +411,13 @@ export function buildTokenRequest(appId, secret, force = false) {
 }
 
 /* 模板消息请求体。url 只在合法 http(s) 时带上——点击卡片跳转用，
-   非法值会让整条消息被拒，宁可不给跳转也不要整条失败 */
+   非法值会让整条消息被拒，宁可不给跳转也不要整条失败。
+   两个字段值都过 clipOneLine：单行化（平台不支持换行）并截到平台的 20 字以内，
+   免得微信那边截出半句话（这里同时也是最后一道防线：调用方万一直接塞长文本进来） */
 export function buildWechatMessage({ openId, templateId, title, content, url } = {}) {
-  const clip = (s, n) => {
-    const v = String(s == null ? "" : s);
-    return v.length <= n ? v : v.slice(0, n - 1) + "…";
-  };
   const data = {};
-  data[WECHAT_TEMPLATE_KEYS[0]] = { value: clip(title, WECHAT_TITLE_MAX) };
-  data[WECHAT_TEMPLATE_KEYS[1]] = { value: clip(content, WECHAT_FIELD_MAX) };
+  data[WECHAT_TEMPLATE_KEYS[0]] = { value: clipOneLine(title, WECHAT_TITLE_MAX) };
+  data[WECHAT_TEMPLATE_KEYS[1]] = { value: clipOneLine(content, WECHAT_FIELD_MAX) };
   const body = {
     touser: String(openId == null ? "" : openId).trim(),
     template_id: String(templateId == null ? "" : templateId).trim(),

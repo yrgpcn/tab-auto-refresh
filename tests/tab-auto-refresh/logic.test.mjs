@@ -40,11 +40,15 @@ import {
   TOKEN_REFRESH_MARGIN_MS,
   buildTokenRequest,
   buildWechatMessage,
+  clipHostTail,
+  clipOneLine,
   isTokenErrorCode,
   notifyEventsOf,
+  oneLine,
   tokenFresh,
   wechatConfigState,
   wechatErrorKey,
+  wechatTitleOf,
 } from "../../tab-auto-refresh/shared/logic.js";
 
 test("clampInterval falls back to the default for invalid input", () => {
@@ -526,4 +530,77 @@ test("capCookies leaves normal-sized backups in their original order", () => {
   /* 不改动入参，也不在未超限时排序 */
   assert.equal(cookies[0].name, "ad_1");
   assert.deepEqual(capCookies(null, 200), []);
+});
+
+/* ---- 微信卡片字段的平台硬上限（17 报告）----
+   2023-05-04 起微信规定：模板消息单个字段 ≤ 20 字、且不支持换行，
+   超长由平台直接砍掉、连省略号都不给。用户在手机上看到的那张卡片就是
+   这么被切成半句话的（实测正好停在第 20 个字）。扩展必须自己先截好：
+   截在哪、要不要给省略号，得由我们决定。 */
+test("the platform caps every WeChat field at 20 characters", () => {
+  assert.equal(WECHAT_FIELD_MAX, 20);
+  assert.equal(WECHAT_TITLE_MAX, 20);
+});
+
+test("oneLine collapses newlines, tabs and runs of spaces", () => {
+  assert.equal(oneLine("a\nb"), "a b");
+  assert.equal(oneLine("a\r\n  b\tc"), "a b c");
+  assert.equal(oneLine("  x  "), "x");
+  assert.equal(oneLine(null), "");
+  assert.equal(oneLine(undefined), "");
+});
+
+test("clipOneLine keeps a single line and marks the cut with an ellipsis", () => {
+  /* 1.8.0 发出去的那句："这是一条测试消息：能收到即说明微信推送已配好。"（23 字）
+     微信把它砍在第 20 个字（…微信推送已），用户看到的是半句话 */
+  const sent = "这是一条测试消息：能收到即说明微信推送已配好。";
+  assert.equal(sent.length, 23);
+  assert.equal(clipOneLine(sent, 20), "这是一条测试消息：能收到即说明微信推送…");
+  assert.equal(clipOneLine("短句", 20), "短句");
+  /* 换行先压平再截：否则平台会把多行连成一串后再砍，第一行之后的信息全丢 */
+  assert.equal(clipOneLine("第一行\n第二行", 20), "第一行 第二行");
+  assert.equal(clipOneLine("abcdef", 4), "abc…");
+});
+
+test("clipHostTail drops subdomains, never the registrable part", () => {
+  assert.equal(clipHostTail("example.com", 12), "example.com");
+  /* 在 label 边界上切：整段丢掉子域，而不是切进 label 中间——
+     "…xample.com" 看着就像一个别的域名了 */
+  assert.equal(clipHostTail("shop.example.com", 12), "…example.com");
+  /* 省略号放不下时（预算刚好等于域名长度）就不再前缀，只给域名本身 */
+  assert.equal(clipHostTail("shop.example.com", 11), "example.com");
+  assert.equal(clipHostTail("a.b.c.example.com", 12), "…example.com");
+  /* 注册域本身就超预算（长域名）：只剩硬截一途，保住右侧，
+     并清掉开头残留的 "-"（否则会输出 "…-domain.com"） */
+  assert.equal(clipHostTail("www.some-very-long-domain.com", 12), "…domain.com");
+  /* 完全没有点（不是域名）：只能硬截右边 */
+  assert.equal(clipHostTail("很长的中文域名测试站点", 5), "…测试站点");
+});
+
+test("wechatTitleOf always keeps the event name and fits the 20-char budget", () => {
+  /* 站点放得下：事件 · 站点 */
+  assert.equal(wechatTitleOf({ eventLabel: "会话掉线", host: "example.com", sep: "·" }), "会话掉线 · example.com");
+  /* 没有站点（如测试消息）就不留分隔符，也不会留一个孤零零的点 */
+  assert.equal(wechatTitleOf({ eventLabel: "测试消息", host: "", sep: "·" }), "测试消息");
+  /* 站点超长：从左侧截，事件名一个字都不能少 */
+  const t = wechatTitleOf({ eventLabel: "关键词命中", host: "www.some-very-long-domain.com", sep: "·" });
+  assert.ok(t.startsWith("关键词命中 · "), t);
+  assert.ok(t.endsWith("domain.com"), t);
+  assert.ok(t.length <= WECHAT_TITLE_MAX, t + " 长度 " + t.length);
+  /* 英文用 "-" 作分隔符，口径一致 */
+  assert.equal(wechatTitleOf({ eventLabel: "test", host: "x.com", sep: "-" }), "test - x.com");
+});
+
+test("buildWechatMessage never emits a newline or an over-long field", () => {
+  const body = buildWechatMessage({
+    openId: "o",
+    templateId: "t",
+    title: "会话掉线\n第二行",
+    content: "第一行\n" + "很长".repeat(30),
+  });
+  for (const k of WECHAT_TEMPLATE_KEYS) {
+    const v = body.data[k].value;
+    assert.ok(!/\n/.test(v), k + " 里不该有换行: " + JSON.stringify(v));
+    assert.ok(v.length <= 20, k + " 超过平台的 20 字上限: " + v.length);
+  }
 });

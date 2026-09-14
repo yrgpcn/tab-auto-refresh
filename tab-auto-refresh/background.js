@@ -17,6 +17,7 @@ import {
   keywordHit,
   normalizeWebhookUrl,
   notifyEventsOf,
+  oneLine,
   parseKeywords,
   pickHits,
   looksLikeLoginPage,
@@ -27,6 +28,7 @@ import {
   tokenFresh,
   wechatConfigState,
   wechatErrorKey,
+  wechatTitleOf,
   SESSION_LOST_CONFIRM_SAMPLES,
   SESSION_LOST_NOTIFY_MS,
 } from "./shared/logic.js";
@@ -777,14 +779,33 @@ async function setWechatResult(result) {
   }
 }
 
-/* 卡片正文：命中/暂停原因 + 站点 + 页面。模板只有 title/content 两个变量，
-   所以这些行要拼进同一段文本里（换行在微信卡片里会保留） */
-function buildWechatContent(payload) {
-  const lines = [];
-  if (payload && payload.content) lines.push(String(payload.content));
-  if (payload && payload.host) lines.push(chrome.i18n.getMessage("wechatLineHost", [String(payload.host)]));
-  if (payload && payload.url) lines.push(chrome.i18n.getMessage("wechatLineUrl", [String(payload.url)]));
-  return lines.join("\n");
+/* 卡片正文：按事件给"一句话结论"，每个都在平台的 20 字上限内（见 logic.js 的规则说明）。
+   刻意不复用 payload.content —— 那是系统通知与 webhook 用的完整句子（30~60 字），
+   发到微信只会被平台从中间截断，不如换一句说得完的短话。
+   站点名改走标题那一行（wechatTitleOf），页面地址走卡片的点击跳转（url），
+   两者都不再占正文的字数 */
+const WECHAT_BODY_KEYS = {
+  keyword: "wechatBodyKeyword",
+  "task-stopped": "wechatBodyStopped",
+  "session-lost": "wechatBodySessionLost",
+  test: "wechatTestBody",
+};
+
+function buildWechatContent(event, payload) {
+  const p = payload || {};
+  if (event === "keyword") {
+    return chrome.i18n.getMessage("wechatBodyKeyword", [oneLine(p.text || p.content || "")]);
+  }
+  if (event === "task-paused") {
+    return chrome.i18n.getMessage(
+      p.reason === "captcha" ? "wechatBodyPausedCaptcha" : "wechatBodyPausedError"
+    );
+  }
+  const key = WECHAT_BODY_KEYS[event];
+  /* 未登记的事件（将来新增）退回原始正文，照旧被截到 20 字——
+     宁可少说，也不要凭空编一句不对应的话 */
+  if (!key) return oneLine(p.content || "");
+  return chrome.i18n.getMessage(key);
 }
 
 async function postWechat(event, payload, opts) {
@@ -807,8 +828,14 @@ async function postWechat(event, payload, opts) {
     const body = buildWechatMessage({
       openId: settings.wechatOpenId,
       templateId: settings.wechatTemplateId,
-      title: chrome.i18n.getMessage("wechatMsgTitle", [eventLabel]),
-      content: buildWechatContent(payload),
+      /* 标题 = "事件 · 站点"。品牌名不再占位——卡片头部本来就写着模板名，
+         20 字的预算里它最不值钱，省下来给站点 */
+      title: wechatTitleOf({
+        eventLabel,
+        host: payload && payload.host,
+        sep: chrome.i18n.getMessage("wechatTitleSep"),
+      }),
+      content: buildWechatContent(event, payload),
       url: payload && payload.url,
     });
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -1550,12 +1577,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: true });
       } else if (msg.type === "wechat-test") {
         /* 弹窗的「发送测试消息」：填完凭据立刻能验证，
-           不用等某个事件真的发生（也就不会"配错了自己不知道"） */
-        await postWechat(
-          "test",
-          { content: chrome.i18n.getMessage("wechatTestBody") },
-          { ignoreToggle: true }
-        );
+           不用等某个事件真的发生（也就不会"配错了自己不知道"）。
+           载荷为空即可——测试消息的正文取自 wechatTestBody，不由调用方给句子 */
+        await postWechat("test", {}, { ignoreToggle: true });
         const r = await chrome.storage.local.get(WX_LAST_KEY);
         sendResponse({ ok: true, result: r[WX_LAST_KEY] || null });
       } else if (msg.type === "resume-task") {

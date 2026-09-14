@@ -59,3 +59,18 @@ h1 {
 .list { padding-left: 20px; }
 .list li { margin-top: 4px; }
 .list li:first-child { margin-top: 0; }
+.shot { margin: 10px 0 2px; }
+.shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fff;
+}
+.shot figcaption {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #6b7280;
+}
