@@ -120,6 +120,11 @@
 
 - 如果 GitHub 直连失败，可在本机使用 SOCKS 代理；推送示例：
   `git -c http.proxy=socks5://127.0.0.1:10808 push`
+- **推送失败的两级成因与对策（2026-09-14 实测，先看这条再看上一条）**：
+  1. 宿主会注入 `http_proxy` / `https_proxy` / `HTTP_PROXY` / `HTTPS_PROXY` 全指向 `http://127.0.0.1:51734`，而该通道到 GitHub 直接 `CONNECT tunnel failed, response 502`（此时 `curl https://github.com` 也是 `HTTP 000` 超时）。**环境变量优先级高于 git 的 `http.proxy` 配置**，所以光加 `-c http.proxy=...` 不管用，必须先把四个环境变量摘掉。
+  2. 本机自己的 SOCKS 代理在 **10808**（实测 1.8 秒拿到 HTTP 200）。可用写法：
+     `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY git -c http.proxy=socks5://127.0.0.1:10808 push origin main`
+     `fetch` / `ls-remote` 同理。症状识别：报 502 → 是环境变量那个死代理；一直挂住无输出 → 直连被墙，换 10808
 - 本机 Codex PowerShell 可能没有 `npm`；验证和测试直接使用 `node` 命令
 - `scripts/screenshot-popup.mjs` 依赖 Playwright，本机不在 Node 默认解析路径；需显式给 `NODE_PATH="C:/Users/yrgpc/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules"`，否则报 `ERR_MODULE_NOT_FOUND: playwright`
 - **判断"有没有推上去"不要看 `git status`**：本机 `origin/main` 远程跟踪引用会僵在旧 commit（实测卡在 1.6.0 的 `8b93bd7`，`git fetch` 与 `git update-ref` 均报更新成功但读回仍是旧值），于是 `git status` 会误报 `ahead N`。以 **`git ls-remote origin refs/heads/main`** 为准——它直连远端，不受本地引用影响
