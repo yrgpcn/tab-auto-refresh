@@ -333,10 +333,14 @@ test("isErrorStatus covers server faults and missing pages only", () => {
 });
 
 test("monitoring-related defaults are off-by-default / empty-by-default", () => {
-  assert.equal(DEFAULT_SETTINGS.skipOnActivity, false);
   assert.equal(DEFAULT_SETTINGS.keepAwake, false);
   assert.equal(DEFAULT_SETTINGS.webhookUrl, "");
   assert.deepEqual(DEFAULT_SETTINGS.webhookEvents, ["session-lost", "keyword", "task-stopped", "task-paused"]);
+});
+test("respecting user activity is on by default", () => {
+  /* 刻意与上一组分开：它是注入门控之一，默认值变更是有行为面影响的有意决定，
+     不该混在"默认关闭"的清单里被顺手改掉 */
+  assert.equal(DEFAULT_SETTINGS.skipOnActivity, true);
 });
 test("cookie backup is opt-in: off by default", () => {
   assert.equal(DEFAULT_SETTINGS.cookieBackup, false);

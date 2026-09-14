@@ -37,7 +37,8 @@ function fakeFavicon(color) {
 
 const browser = await chromium.launch({ executablePath: chromePath });
 const page = await browser.newPage({
-  viewport: { width: 360, height: 640 },
+  /* 与 popup.css 的 body width 一致，否则截图会被裁切 */
+  viewport: { width: 400, height: 640 },
   deviceScaleFactor: 2,
 });
 
@@ -51,6 +52,8 @@ await page.addInitScript((msgs) => {
   const settings = {
     bypassCache: true, skipDiscarded: false, cookieBackup: true,
     keepAlive: true, httpHeartbeat: true, skipOnActivity: true, keepAwake: false,
+    /* 别漏键：缺失会被 !undefined 渲染成未勾选，截图上就看不出默认值了 */
+    captchaGuard: true,
     webhookUrl: "", webhookEvents: ["session-lost", "keyword"],
   };
   const tasks = {

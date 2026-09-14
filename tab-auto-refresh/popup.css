@@ -1,39 +1,60 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  width: 360px;
+  /* Chrome 弹窗外框上限是 800x600；宽度 400px 是"双列开关"能放下的最小宽度。
+     高度不逐块算，改用 flex + max-height 兜底：内容不足 600px 时高度仍由内容决定（不会留白），
+     超出时唯一的弹性块（任务列表）自动收缩、改为内部滚动。
+     这样"平时不滚动、一出现提示行（受限页面提示 / 地址无效 / 操作结果）才滚动"这种最难查的
+     组合也被兜住——靠给列表定一个固定封顶值是兜不住的，条件行的高度是常量，压不进去 */
+  width: 400px;
+  display: flex;
+  flex-direction: column;
+  max-height: 600px;
+  overflow: hidden;
   font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
   font-size: 13px;
   background: #f5f7fb;
   color: #1f2937;
 }
+/* header / footer / 设置卡片都不参与压缩，被压的只有任务列表 */
+header, #repoFooter, .card-fixed { flex: none; }
 header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 14px 8px;
+  padding: 10px 14px 6px;
 }
 .header-right { display: flex; align-items: center; gap: 8px; }
 .brand { font-weight: 700; font-size: 14px; color: #1d4ed8; }
 .status { font-size: 11px; color: #6b7280; }
 .card {
   background: #fff;
-  margin: 0 10px 10px;
+  margin: 0 10px 8px;
   border-radius: 10px;
-  padding: 12px;
+  padding: 10px 12px;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
 }
-.tab-line { display: flex; gap: 8px; align-items: center; min-width: 0; margin-bottom: 10px; }
+/* 任务卡片是唯一的弹性块：外层被 600px 压住时由它让步（收缩后列表内部滚动），
+   min-height:0 必需——flex 子项默认 min-height:auto 不会收缩到内容高以下 */
+.card-tasks {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tab-line { display: flex; gap: 8px; align-items: center; min-width: 0; margin-bottom: 7px; }
 #tabFavicon { width: 16px; height: 16px; flex: none; border-radius: 3px; background: #eef2f7; }
 .tab-meta { min-width: 0; }
 .tab-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tab-url { color: #6b7280; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hint { color: #6b7280; font-size: 11px; margin-top: 6px; }
-.webhook-events { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 6px; }
+.hint { color: #6b7280; font-size: 11px; margin-top: 5px; }
+/* 空元素不吃上边距：否则 #msg 即使没内容也白白占 5px，在 600px 的硬预算里没有余量给它 */
+.hint:empty { margin-top: 0; }
+.webhook-events { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 5px; }
 .row-check.compact { font-size: 11px; margin: 0; }
 .hint.warn { color: #b45309; }
 .hint.error { color: #b91c1c; }
-#webhookInvalid { margin: -4px 0 8px; }
-.row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+#webhookInvalid { margin: -4px 0 6px; }
+.row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
 .row .label { flex: none; color: #374151; }
 select {
   flex: 1;
@@ -55,28 +76,66 @@ input[type="number"] {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   color: #374151;
   font-size: 12px;
   cursor: pointer;
 }
+/* 开关分组：双列网格。9 个开关单列排下来要 224px，而 Chrome 弹窗高度上限是 600px——
+   设置卡片一张的固定成本已经压到极限，再叠任务列表必然出滚动条。两列把它压成 5 行（104px）。
+   列宽必须用 minmax(0,1fr) 而不是 1fr：1fr 的隐含下限是 min-content，长标签会把列撑成
+   不等宽（实测英文下 162/237px），换成 minmax(0,1fr) 才是确定的等宽两列。
+   代价是标签必须够短——标签一律单行，改短而不是让它折行或被省略号截断（换行/截断都会让栅格错位）。
+   span 的 min-width:0 同理必需：flex 子项默认 min-width:auto 不会收缩到内容宽以下 */
+.check-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 10px;
+  row-gap: 5px;
+  margin-bottom: 7px;
+}
+.check-grid .row-check { margin-bottom: 0; }
+.check-grid .row-check > span {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 button { cursor: pointer; border: none; border-radius: 8px; font-size: 13px; font-family: inherit; }
-.primary { width: 100%; padding: 9px 0; background: #2563eb; color: #fff; font-weight: 600; }
+.primary { width: 100%; padding: 7px 0; background: #2563eb; color: #fff; font-weight: 600; }
 .primary:hover { background: #1d4ed8; }
 .primary.stop { background: #dc2626; }
 .primary.stop:hover { background: #b91c1c; }
-.list-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.list-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; flex: none; }
 .list-title { font-weight: 600; }
 .count { color: #6b7280; font-size: 11px; }
-#taskList { list-style: none; }
+/* 任务列表封顶：列表高度随任务数无界增长（5 个任务曾把弹窗顶到 876px，远超 600px 上限）。
+   超出部分在卡片内滚动，弹窗本身不再出现滚动条。108px ≈ 2 行整 + 第 3 行露头 14px。
+   "露半行"是刻意留的：Chrome 的滚动条平时不显眼，只显示整 2 行会让人以为任务丢了
+   （实测：恰好 2 行时看不出还能滚），半个标题就是"下面还有"的现成提示。
+   flex:0 1 auto + min-height:0 让它成为可被继续压缩的那个块：条件行显形把总高顶到 600px 时，
+   由它让步而不是让弹窗长出滚动条（实测过"给列表定死封顶值"的路子：英文界面 + 三个条件行
+   同时显形 = 631px，压不进去，因为条件行的高度是常量） */
+#taskList {
+  list-style: none;
+  max-height: 108px;
+  overflow-y: auto;
+  flex: 0 1 auto;
+  min-height: 0;
+}
 #taskList li {
   border-top: 1px solid #f1f5f9;
-  padding: 8px 0;
+  padding: 6px 0;
   display: flex;
   align-items: center;
   gap: 8px;
 }
 #taskList li:first-child { border-top: none; }
+/* 列表内滚动条收细：只在超过 2 个任务时出现，默认样式在 400px 宽的弹窗里太抢眼 */
+#taskList::-webkit-scrollbar { width: 8px; }
+#taskList::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; }
+#taskList::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+#taskList::-webkit-scrollbar-track { background: transparent; }
 .task-meta { flex: 1; min-width: 0; }
 .task-title {
   white-space: nowrap;
@@ -102,6 +161,6 @@ button { cursor: pointer; border: none; border-radius: 8px; font-size: 13px; fon
 .mini.danger { color: #dc2626; border-color: #fecaca; }
 .mini.danger:hover { background: #fef2f2; }
 .mini.active { color: #b45309; border-color: #fde68a; background: #fffbeb; }
-#repoFooter { text-align: center; padding: 0 0 10px; }
+#repoFooter { text-align: center; padding: 0 0 8px; }
 #repoFooter a { color: #9ca3af; font-size: 11px; text-decoration: none; }
 #repoFooter a:hover { color: #1d4ed8; text-decoration: underline; }

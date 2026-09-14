@@ -14,7 +14,7 @@
     </div>
   </header>
 
-  <section class="card">
+  <section class="card card-fixed">
     <div class="tab-line">
       <img id="tabFavicon" alt="">
       <div class="tab-meta">
@@ -32,42 +32,44 @@
       <span class="label" data-i18n="keywordLabel"></span>
       <input id="keywordInput" type="text" data-i18n-placeholder="keywordPlaceholder">
     </div>
-    <label class="row-check" data-i18n-title="keepWatchingHint">
-      <input id="keepWatchingCheck" type="checkbox">
-      <span data-i18n="keepWatchingLabel"></span>
-    </label>
-    <label class="row-check">
-      <input id="bypassCheck" type="checkbox">
-      <span data-i18n="bypassLabel"></span>
-    </label>
-    <label class="row-check" data-i18n-title="skipDiscardedHint">
-      <input id="skipDiscardedCheck" type="checkbox">
-      <span data-i18n="skipDiscardedLabel"></span>
-    </label>
-    <label class="row-check" data-i18n-title="cookieBackupHint">
-      <input id="cookieBackupCheck" type="checkbox">
-      <span data-i18n="cookieBackupLabel"></span>
-    </label>
-    <label class="row-check" data-i18n-title="keepAliveHint">
-      <input id="keepAliveCheck" type="checkbox">
-      <span data-i18n="keepAliveLabel"></span>
-    </label>
-    <label class="row-check" data-i18n-title="httpHeartbeatHint">
-      <input id="httpHeartbeatCheck" type="checkbox">
-      <span data-i18n="httpHeartbeatLabel"></span>
-    </label>
-    <label class="row-check" data-i18n-title="skipOnActivityHint">
-      <input id="skipOnActivityCheck" type="checkbox">
-      <span data-i18n="skipOnActivityLabel"></span>
-    </label>
-    <label class="row-check" data-i18n-title="keepAwakeHint">
-      <input id="keepAwakeCheck" type="checkbox">
-      <span data-i18n="keepAwakeLabel"></span>
-    </label>
-    <label class="row-check" data-i18n-title="captchaGuardHint">
-      <input id="captchaGuardCheck" type="checkbox">
-      <span data-i18n="captchaGuardLabel"></span>
-    </label>
+    <div class="check-grid">
+      <label class="row-check" data-i18n-title="keepWatchingHint">
+        <input id="keepWatchingCheck" type="checkbox">
+        <span data-i18n="keepWatchingLabel"></span>
+      </label>
+      <label class="row-check">
+        <input id="bypassCheck" type="checkbox">
+        <span data-i18n="bypassLabel"></span>
+      </label>
+      <label class="row-check" data-i18n-title="skipDiscardedHint">
+        <input id="skipDiscardedCheck" type="checkbox">
+        <span data-i18n="skipDiscardedLabel"></span>
+      </label>
+      <label class="row-check" data-i18n-title="cookieBackupHint">
+        <input id="cookieBackupCheck" type="checkbox">
+        <span data-i18n="cookieBackupLabel"></span>
+      </label>
+      <label class="row-check" data-i18n-title="keepAliveHint">
+        <input id="keepAliveCheck" type="checkbox">
+        <span data-i18n="keepAliveLabel"></span>
+      </label>
+      <label class="row-check" data-i18n-title="httpHeartbeatHint">
+        <input id="httpHeartbeatCheck" type="checkbox">
+        <span data-i18n="httpHeartbeatLabel"></span>
+      </label>
+      <label class="row-check" data-i18n-title="skipOnActivityHint">
+        <input id="skipOnActivityCheck" type="checkbox">
+        <span data-i18n="skipOnActivityLabel"></span>
+      </label>
+      <label class="row-check" data-i18n-title="keepAwakeHint">
+        <input id="keepAwakeCheck" type="checkbox">
+        <span data-i18n="keepAwakeLabel"></span>
+      </label>
+      <label class="row-check" data-i18n-title="captchaGuardHint">
+        <input id="captchaGuardCheck" type="checkbox">
+        <span data-i18n="captchaGuardLabel"></span>
+      </label>
+    </div>
     <div class="row">
       <span class="label" data-i18n="webhookLabel"></span>
       <input id="webhookUrlInput" type="text" data-i18n-placeholder="webhookPlaceholder" data-i18n-title="webhookHint">
@@ -95,7 +97,7 @@
     <div id="msg" class="hint"></div>
   </section>
 
-  <section class="card">
+  <section class="card card-tasks">
     <div class="list-head">
       <span class="list-title" data-i18n="listTitle"></span>
       <span id="taskCount" class="count"></span>
