@@ -6,6 +6,7 @@ import {
   formatCountdown,
   formatInterval,
   getTaskKeywords,
+  normalizeWebhookUrl,
   parseKeywords
 } from "./shared/logic.js";
 
@@ -287,6 +288,7 @@ async function saveSettings() {
       httpHeartbeat: $("httpHeartbeatCheck").checked,
       skipOnActivity: $("skipOnActivityCheck").checked,
       keepAwake: $("keepAwakeCheck").checked,
+      captchaGuard: $("captchaGuardCheck").checked,
       webhookUrl: $("webhookUrlInput").value.trim(),
       webhookEvents: [
         $("webhookEvSession").checked && "session-lost",
@@ -296,6 +298,13 @@ async function saveSettings() {
       ].filter(Boolean)
     }
   });
+}
+
+/* 后台对非法 webhook 地址是静默忽略的（normalizeWebhookUrl → "" → 直接 return），
+   不在这里说一声，用户会以为"配好了、在发"。纯本地校验，不发任何网络请求。 */
+function renderWebhookValidity() {
+  const raw = $("webhookUrlInput").value.trim();
+  $("webhookInvalid").hidden = !(raw && !normalizeWebhookUrl(raw));
 }
 
 async function init() {
@@ -314,7 +323,9 @@ async function init() {
   $("httpHeartbeatCheck").checked = !!settings.httpHeartbeat;
   $("skipOnActivityCheck").checked = !!settings.skipOnActivity;
   $("keepAwakeCheck").checked = !!settings.keepAwake;
+  $("captchaGuardCheck").checked = settings.captchaGuard !== false;
   $("webhookUrlInput").value = settings.webhookUrl || "";
+  renderWebhookValidity();
   {
     const evs = Array.isArray(settings.webhookEvents) ? settings.webhookEvents : [];
     $("webhookEvSession").checked = evs.includes("session-lost");
@@ -363,7 +374,11 @@ async function init() {
   $("httpHeartbeatCheck").addEventListener("change", saveSettings);
   $("skipOnActivityCheck").addEventListener("change", saveSettings);
   $("keepAwakeCheck").addEventListener("change", saveSettings);
-  $("webhookUrlInput").addEventListener("change", saveSettings);
+  $("captchaGuardCheck").addEventListener("change", saveSettings);
+  $("webhookUrlInput").addEventListener("change", () => {
+    renderWebhookValidity();
+    saveSettings();
+  });
   $("webhookEvSession").addEventListener("change", saveSettings);
   $("webhookEvKeyword").addEventListener("change", saveSettings);
   $("webhookEvStopped").addEventListener("change", saveSettings);

@@ -31,6 +31,8 @@ header {
 .webhook-events { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 6px; }
 .row-check.compact { font-size: 11px; margin: 0; }
 .hint.warn { color: #b45309; }
+.hint.error { color: #b91c1c; }
+#webhookInvalid { margin: -4px 0 8px; }
 .row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .row .label { flex: none; color: #374151; }
 select {

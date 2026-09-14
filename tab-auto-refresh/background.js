@@ -283,6 +283,9 @@ async function pruneCookieBackups(remainingTasks) {
 const KEEPALIVE_SCRIPT = "content/keepalive.js";
 /* 错误页/验证墙确认与交互跳过的参数（06 §4.3 / §4.5 吸收项） */
 const PAUSE_CONFIRM_SAMPLES = 2;
+/* 验证墙单独放宽到 3：它只看页面标题，采样节奏是刷新周期（≥30 秒），
+   而错误页有独立的 4 分钟心跳通道、且能自愈——两者的误判代价不对称（见 probeCaptcha） */
+const CAPTCHA_CONFIRM_SAMPLES = 3;
 const ACTIVITY_SKIP_MS = 60000;
 
 /* ---- 跨 SW 实例的运行时状态（chrome.storage.session）----
@@ -622,8 +625,10 @@ async function onKeywordHit(tabId, task, newly, present) {
 }
 
 /* ---- Webhook 通知（学 ARP"通知出机器"）：无新权限，常驻 host_permissions
-   已覆盖任意 http(s) 目标。载荷同时填充 content(Discord/Slack)/text(Telegram)/
-   body(通用) 三个别名 + type/url/host/ts，任何预设服务或自定义端点开箱即用。
+   已覆盖任意 http(s) 目标。载荷填充 content(Discord) / text(Slack、Telegram) /
+   body(冗余兜底) 三个别名 + type/url/host/ts，让各家认的字段都能对上。
+   注意 ntfy 不在此列：它只在根端点解析 JSON，POST 到 /<主题> 会把整个 JSON 当正文
+   存下（实测），而载荷里没有 topic 字段、也无法改填根端点 → 它收到的是原始 JSON 文本。
    调用方必须 await（四处调用点都写在 async 函数里）：fetch 必须挂在被 await 的
    链路里，否则扩展 SW 被回收时请求会被截断（Chrome 要求"持久化状态、别裸甩异步"） ---- */
 async function postWebhook(event, payload) {
@@ -1193,18 +1198,28 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 /* ---- 错误页 / 验证墙 → 任务级自动暂停（06 §4.3）----
    独立于掉线状态机（不进 sessionProbe，防污染备份冻结语义）：
-   心跳侧 5xx/404 连续 PAUSE_CONFIRM_SAMPLES 次、或页面侧验证墙特征连续命中才暂停；
-   错误页暂停后若心跳恢复 2xx 自动解除；验证墙由用户过墙后手动/自动恢复。
-   暂停期间定时器照常续跑（onAlarm 早退），恢复零重建 ---- */
+   心跳侧 5xx/404 连续 PAUSE_CONFIRM_SAMPLES 次、或页面侧验证墙特征连续
+   CAPTCHA_CONFIRM_SAMPLES 次才暂停。
+   两侧"能否自愈"不对称，这是给验证墙定更高阈值的理由：错误页暂停后由独立的心跳
+   alarm 兜着（不受暂停影响），回到 2xx 即自动解除；验证墙的解除却依赖页面再次加载
+   ——用户过墙后页面跳转即触发本探测复位并自动恢复，若墙页始终不跳转就只能手动恢复。
+   暂停期间定时器照常续跑（onAlarm 早退），恢复零重建。
+   探测受 settings.captchaGuard 控制（默认开，与 07 批次原始行为一致） ---- */
 async function probeCaptcha(tabId) {
   try {
+    if (!(await getSettings()).captchaGuard) return; /* 关闭时不注入、不判定 */
     const task = (await getTasks())[tabId];
     if (!task) return;
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
-        const s = ((document.title || "") + "\n" + ((document.body && document.body.innerText) || "")).slice(0, 4000).toLowerCase();
-        let hit = /(captcha|verify you are human|just a moment|attention required|access denied|pardon our interruption|human verification|安全验证|验证码|人机验证)/.test(s);
+        /* 只认"整页就是验证墙"的信号：文档标题，以及挑战域名的 iframe/script。
+           刻意不扫正文——正文里出现"验证码 / access denied"这类日常词（登录框提示、
+           帮助文案、页脚）会把正常页误判成墙；而误暂停后刷新循环停下 → 页面不再加载
+           → 本探测也不再运行，任务就一直卡在暂停态。标题是墙页最稳的特征。
+           401/403 的"登录墙"语义另走掉线通道（reportSessionSignal），此处不重复判定 */
+        const s = (document.title || "").slice(0, 300).toLowerCase();
+        let hit = /(captcha|verify you are human|human verification|just a moment|attention required|pardon our interruption|安全验证|人机验证|验证码)/.test(s);
         if (!hit) {
           for (const el of document.querySelectorAll("iframe, frame, script[src]")) {
             const u = el.getAttribute("src") || "";
@@ -1225,7 +1240,7 @@ async function probeCaptcha(tabId) {
     /* 连击计数同样存会话态：验证墙随刷新周期（≥30 秒）探一次，SW 早被回收，
        内存计数永远到不了阈值（见 RT_* 注释与 verify-sw-restart-state.mjs） */
     const s = await rtBump(rtTab(RT_CAPTCHA, tabId));
-    if (s >= PAUSE_CONFIRM_SAMPLES) await pauseTaskAuto(tabId, "captcha");
+    if (s >= CAPTCHA_CONFIRM_SAMPLES) await pauseTaskAuto(tabId, "captcha");
   } catch (e) {
     /* 注入失败（权限/时序）：忽略，下个周期再探 */
   }

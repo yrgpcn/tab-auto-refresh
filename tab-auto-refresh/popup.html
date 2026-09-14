@@ -64,10 +64,15 @@
       <input id="keepAwakeCheck" type="checkbox">
       <span data-i18n="keepAwakeLabel"></span>
     </label>
+    <label class="row-check" data-i18n-title="captchaGuardHint">
+      <input id="captchaGuardCheck" type="checkbox">
+      <span data-i18n="captchaGuardLabel"></span>
+    </label>
     <div class="row">
       <span class="label" data-i18n="webhookLabel"></span>
       <input id="webhookUrlInput" type="text" data-i18n-placeholder="webhookPlaceholder" data-i18n-title="webhookHint">
     </div>
+    <div id="webhookInvalid" class="hint error" hidden data-i18n="webhookInvalid"></div>
     <div class="row webhook-events">
       <label class="row-check compact">
         <input id="webhookEvSession" type="checkbox">
