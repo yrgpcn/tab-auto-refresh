@@ -1,5 +1,5 @@
 /* 微信直连配置教程页：与弹窗同一套配色（#f5f7fb 底 / #fff 卡片 / #1d4ed8 主色），
-   但按"整页阅读"排版——弹窗那套 400px 定宽与 600px 限高在这里都不适用 */
+   但按"整页阅读"排版，弹窗那套 400px 定宽与 600px 限高在这里都不适用 */
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
   background: #f5f7fb;

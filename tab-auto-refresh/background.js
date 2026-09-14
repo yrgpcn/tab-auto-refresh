@@ -44,7 +44,7 @@ const MAX_COOKIES_PER_HOST = 200;
 const PROBE_KEY = "sessionProbe";
 /* 静默 HTTP 心跳周期（分钟）：只刷"按最后请求计时"的服务器端会话，不重载页面 */
 const HEARTBEAT_MINUTES = 4;
-/* 重启恢复时等待页面自行到位的窗口（学 tab-reloader：救"先 SSO 跳转才到位"的页面） */
+/* 重启恢复时等待页面自行到位的窗口，救"先跳 SSO 才到位"的页面 */
 const RECLAIM_WATCH_MS = 20000;
 /* 备份失败（如触顶 storage 配额）只告警一次；落存储持久化，SW 重启不重置 */
 const BACKUP_WARN_KEY = "cookieBackupWarnedOnce";
@@ -79,10 +79,9 @@ async function ensureTaskTabIds() {
   return taskTabIdSet;
 }
 
-/* 存盘设置 → 生效设置。除补默认值外还承接键改名：
-   1.7.0 的通知事件清单叫 webhookEvents，1.8.0 起叫 notifyEvents（webhook 与微信共用）。
-   必须在 Object.assign 之前判断"存盘里有没有新键"——合并之后新键总在（默认值注入），
-   老用户的选择会被默认值悄悄覆盖成全选 */
+/* 存盘设置 → 生效设置。除补默认值外还承接键改名：1.7.0 的事件清单叫 webhookEvents，
+   1.8.0 起叫 notifyEvents。判断"存盘里有没有新键"必须在 Object.assign 之前做，
+   因为合并之后新键总在（默认值注入），老用户的选择会被默认值覆盖成全选 */
 function normalizeStoredSettings(stored) {
   const s = Object.assign({}, DEFAULT_SETTINGS, stored || {});
   if (!Array.isArray((stored || {}).notifyEvents) && Array.isArray((stored || {}).webhookEvents)) {
@@ -123,13 +122,12 @@ function withTaskLock(fn) {
   return run;
 }
 
-/* ---- 掉线探测·行为通道（学 staying_alive 的"看服务器行为"路线） ----
-   与备份层的"状态通道"（decideBackupWrite：会话票据从有到无）互补：本通道把
-   任务页落在登录页 URL、HTTP 心跳被重定向到登录页 / 返回 401/403 计为疑似，
-   连续 SESSION_LOST_CONFIRM_SAMPLES 次确认、一次正常即恢复（各自独立计数）。
-   确认后：角标变红、系统通知（节流）、backupCookies 拒绝写坏备份。
-   注意：本函数不经 withTaskLock——它会被已在锁内的 backupCookies 调用，锁不可重入；
-   探针写入碰撞的最坏后果只是计数偏差 1，可接受。 ---- */
+/* 掉线探测的行为通道（思路与 staying_alive 一致）：任务页落在登录页 URL、
+   心跳被重定向到登录页或返回 401/403，都计为疑似，连续
+   SESSION_LOST_CONFIRM_SAMPLES 次确认，一次正常信号即恢复，与状态通道各自独立计数。
+   确认后角标变红、发通知（按 6 小时节流），并让 backupCookies 拒绝写入坏备份。
+   本函数不经 withTaskLock：它会被已在锁内的 backupCookies 调用，而锁不可重入。
+   探针写入碰撞的后果只是计数偏差 1，可以接受 */
 async function reportSessionSignal(root, host, suspect) {
   try {
     if (!root) return;
@@ -151,11 +149,11 @@ async function reportSessionSignal(root, host, suspect) {
         notify = true;
       }
     } else {
-      p.lastNotifiedAt = 0; /* 恢复=新故障周期起点：否则 6h 内二次独立掉线不再通知（05 §3.2） */
+      p.lastNotifiedAt = 0; /* 恢复即新故障周期的起点：否则 6 小时内二次独立掉线不再通知 */
       p.sus = 0;
       p.lost = false;
     }
-    /* 值没变就不写盘、不刷角标（04 复审 §4.2）：30 秒任务的每次页面加载都会打到这里 */
+    /* 值没变就不写盘、不刷角标：30 秒任务的每次页面加载都会打到这里 */
     if (stamp() !== before) {
       all[root] = p;
       await chrome.storage.local.set({ [PROBE_KEY]: all });
@@ -230,9 +228,9 @@ function stopTask(tabId) {
   });
 }
 
-/* ---- 调度：一次性 when（带 ±15% 抖动）+ 周期 period 兜底的双保险模式
-   （学 tab-reloader）：秒级精度靠 when，周期 alarm 只防漏；每次触发后重新 arm，
-   抖动让多任务不再同拍齐刷，也更不像机器行为 ---- */
+/* 调度用"一次性 when + 周期 period"双保险（思路与 tab-reloader 一致）：
+   秒级精度靠 when，周期 alarm 只防漏；每次触发后重新 arm。
+   ±15% 抖动让多任务不同拍，也更不像机器行为 */
 async function armRefresh(tabId, intervalSec) {
   const when = Date.now() + jitteredDelayMs(intervalSec);
   await chrome.alarms.create(alarmName(tabId), {
@@ -241,8 +239,8 @@ async function armRefresh(tabId, intervalSec) {
   });
 }
 
-/* 系统从睡眠唤醒后自愈（学 tab-reloader）：过期刷新 alarm 重走完整周期+抖动，
-   过期心跳 alarm 打散 0~60 秒重建（与 ensureHeartbeat 的随机相位同一节奏） */
+/* 睡眠唤醒后自愈：过期的刷新 alarm 重走完整周期加抖动，
+   过期的心跳 alarm 打散 0~60 秒重建 */
 chrome.idle.onStateChanged.addListener(async (state) => {
   if (state !== "active") return;
   try {
@@ -267,14 +265,12 @@ chrome.idle.onStateChanged.addListener(async (state) => {
   }
 });
 
-/* 掉线探针按"仍被任务引用的根域"收敛（12 复审 §5）：
-   站点掉线 → 探针 lost=true → 用户停掉该站任务 → 探针却留在存储里没有任何清理路径，
-   只有"一次正常信号"才会复位。于是稍后在同一站点重建任务时，startTask 里那次
-   `await backupCookies(tabId)` 会被 isProbeLost 静默跳过——而它正是"防首次刷新前
-   关浏览器"的那次备份。角标只读当前任务涉及的根域（updateBadge 按 tasks 过滤），
-   所以删掉无任务引用的探针不影响任何判定，顺带止住探针条目的无界增长。
-   注意探针不只服务备份：行为通道（登录页/401）与掉线通知也写它，所以开关关闭时
-   同样要收敛，不能塞进 cookieBackup 分支里。 */
+/* 按"仍被任务引用的根域"收敛掉线探针。站点掉线后探针 lost=true，用户停掉该站任务时
+   探针没有任何清理路径，只有一次正常信号才会复位；于是稍后在同一站点重建任务，
+   startTask 里那次备份会被 isProbeLost 跳过，而它正是"首次刷新前关掉浏览器"的兜底。
+   角标只读当前任务涉及的根域，删掉无引用的探针不影响判定，也止住了条目的无界增长。
+   探针不只服务备份（行为通道与掉线通知也写它），所以开关关闭时同样要收敛，
+   不能塞进 cookieBackup 分支 */
 async function pruneStaleProbes(roots) {
   const data = await chrome.storage.local.get(PROBE_KEY);
   const all = data[PROBE_KEY];
@@ -288,8 +284,8 @@ async function pruneStaleProbes(roots) {
   if (dropped > 0) await chrome.storage.local.set({ [PROBE_KEY]: kept });
 }
 
-/* 备份清理三条件：站点不再被任何任务使用 / 超过 TTL / 超过站点数上限（按时间留新）；
-   备份功能关闭时不留死数据，清空全部备份 */
+/* 备份清理三条件：站点不再被任何任务使用、超过 30 天 TTL、超过 20 站上限（按时间留新）。
+   备份功能关闭时不留死数据，直接清空全部备份 */
 async function pruneCookieBackups(remainingTasks) {
   const roots = new Set();
   for (const t of Object.values(remainingTasks || {})) {
@@ -320,31 +316,26 @@ async function pruneCookieBackups(remainingTasks) {
   if (stale.length > 0) await chrome.storage.local.remove(stale);
 }
 
-/* ---- 后台保活：默认开启的合成活动注入（对抗"按用户交互计时"的服务器端会话过期）
-   注入是标签页级：startTask 即时注入 + tabs.onUpdated 对任务页每次加载完成补注入。
-   不用 registerContentScripts：matches 是站点级会溢出到同站无关标签页，
-   且站点注册 id 与任务 id 语义分裂，重启后停止任务清不掉注册。 ---- */
+/* 后台保活：默认开启的合成活动注入，对抗按用户交互计时的服务器端会话过期。
+   注入是标签页级：startTask 即时注入一次，tabs.onUpdated 对任务页每次加载完成补注入。
+   不用 registerContentScripts：它的 matches 是站点级，会溢出到同站无关标签页，
+   而且站点注册 id 与任务 id 语义分裂，重启后停任务清不掉注册 */
 const KEEPALIVE_SCRIPT = "content/keepalive.js";
-/* 错误页/验证墙确认与交互跳过的参数（06 §4.3 / §4.5 吸收项） */
+/* 错误页与验证墙的确认次数、以及"用户操作后跳过刷新"的窗口 */
 const PAUSE_CONFIRM_SAMPLES = 2;
-/* 验证墙单独放宽到 3：它只看页面标题，采样节奏是刷新周期（≥30 秒），
-   而错误页有独立的 4 分钟心跳通道、且能自愈——两者的误判代价不对称（见 probeCaptcha） */
+/* 验证墙的阈值单独放宽到 3：它只看页面标题，采样节奏跟着刷新周期（≥30 秒），
+   而错误页有独立的 4 分钟心跳通道且能自愈，两者误判的代价不对称（见 probeCaptcha） */
 const CAPTCHA_CONFIRM_SAMPLES = 3;
 const ACTIVITY_SKIP_MS = 60000;
 
-/* ---- 跨 SW 实例的运行时状态（chrome.storage.session）----
-   Chrome 官方：MV3 的 service worker「闲置 30 秒即终止（收事件或调扩展 API 会重置计时器）」，
-   且明确要求「为意外终止做好准备：持久化状态」。下面三种状态的两端间隔都是分钟级，
-   放在内存变量里必然被清零——本批首版就是内存 Map，实测三个功能全废：
-     ① 异常连击（error/captcha）：心跳 4 分钟一次、验证墙随刷新周期探一次，
-        两次采样落在两个 SW 实例 → 计数每次从 0 起，"连续 2 次才暂停"退化成永不暂停
-        （与复审 §2 的 sessionLostStreak 同类缺陷；那次是靠把计数写进备份条目修的）；
-     ② 真人活动时间戳：SW 一回收即丢 → 60 秒跳过窗口失效；
-     ③ keepAwake 持锁标记：回收后误判"未持锁" → 关开关时不再 release，系统一直不睡。
-   chrome.storage.session 的语义正好：跨 SW 回收存活、随浏览器会话结束清空（与 power
-   请求的真实生命周期一致），不落磁盘、不需要新权限（storage 已声明）。
-   验证脚本：`_code-review/verify-sw-restart-state.mjs`（用二次 import 模拟 SW 重启，
-   同一场景对修复前/后两份源码各跑一次）。 */
+/* 跨 SW 实例的运行时状态统一放 chrome.storage.session。
+   MV3 的 service worker 闲置 30 秒即终止（收到事件或调扩展 API 会重置计时器），
+   官方要求为意外终止做好准备。下面这些状态两端间隔都是分钟级，放内存必然被清零：
+   异常连击（心跳 4 分钟一次、验证墙随刷新周期一次，两次采样落在两个 SW 实例，
+   计数每次从 0 起，"连续 N 次才暂停"退化成永不暂停）、真人活动时间戳（回收即丢，
+   60 秒跳过窗口失效）、keepAwake 持锁标记（回收后误判未持锁，关开关时不再释放）。
+   session 的语义正好：跨 SW 回收存活、随浏览器会话结束清空（与 chrome.power 请求的
+   生命周期一致），不落磁盘、不需要新权限。回归脚本 verify-sw-restart-state.mjs */
 const RT_ACTIVITY = "rt:activity";
 const RT_ERROR = "rt:error";
 const RT_CAPTCHA = "rt:captcha";
@@ -352,7 +343,7 @@ const RT_AWAKE = "rt:awake";
 const rtTab = (base, tabId) => base + ":" + tabId;
 
 /* 读写走独立串行队列：与 tasks 的 withTaskLock 无关（在锁内再入队会死锁），
-   但同一键的"读-改-写"必须串起来，否则并发 +1 会丢计数 */
+   但同一键的读-改-写必须串起来，否则并发加一会丢计数 */
 let rtQueue = Promise.resolve();
 function rt(run) {
   const job = () => Promise.resolve().then(run).catch(() => {});
@@ -392,9 +383,8 @@ async function keepAliveInject(tabId) {
   }
 }
 
-/* 防系统休眠（学 ARP 的 chrome.power）：有任务且开关开启时持 system 级锁（屏幕可灭、
-   系统不睡）；任务清空/开关关闭即释放。updateBadge 是所有任务增删路径的必经点，
-   锁的收敛就挂在那里 */
+/* 防系统休眠（用 chrome.power）：有任务且开关开启时持 system 级锁（屏幕可灭、系统不睡），
+   任务清空或开关关闭即释放。updateBadge 是所有任务增删路径的必经点，收敛挂在那里 */
 async function applyKeepAwake() {
   try {
     if (!chrome.power) return;
@@ -407,9 +397,9 @@ async function applyKeepAwake() {
         await rtSet(RT_AWAKE, true);
       }
     } else {
-      /* 无条件 release：锁挂在扩展上、跨 SW 回收存活，而持锁标记只在会话态——
-         若靠标记判断，SW 回收后就会漏掉这次释放，系统一直不睡（实测见
-         `_code-review/verify-sw-restart-state.mjs` S3）。未持锁时 release 无副作用。 */
+      /* 无条件释放：锁挂在扩展上、跨 SW 回收存活，而持锁标记只在会话态，
+         靠标记判断会漏掉 SW 回收后的这次释放，系统一直不睡。
+         未持锁时 release 无副作用 */
       chrome.power.releaseKeepAwake();
       if (await rtGet(RT_AWAKE)) await rtSet(RT_AWAKE, false);
     }
@@ -418,8 +408,8 @@ async function applyKeepAwake() {
   }
 }
 
-/* 注入门控解耦（08 §3.1 裁定）：heartbeat 与 activityWatch 各有开关，任一开启即注入，
-   配置经 query 拉取 / config 推送双通道热更新——关保活不再连坐其他注入功能 */
+/* heartbeat 与 activityWatch 各有开关，任一开启即注入，配置经 query 拉取与
+   config 推送两条通道热更新：关保活不再连坐其他注入功能 */
 async function syncKeepAliveConfig(tabId) {
   const settings = await getSettings();
   const heartbeat = !!settings.keepAlive;
@@ -435,9 +425,9 @@ function stopKeepAlive(tabId) {
   chrome.tabs.sendMessage(tabId, { type: "keepalive-off" }).catch(() => {});
 }
 
-/* ---- 静默 HTTP 心跳（学 staying_alive 的行为路线，救"按最后请求计时"的会话）：
-   分钟级向监控地址发带 cookie 的 GET，不重载页面、不打扰用户；
-   响应落登录页 / 401 / 403 → 疑似掉线信号，正常 2xx → 恢复信号 ---- */
+/* 静默 HTTP 心跳（思路与 staying_alive 一致），救"按最后请求计时"的会话：
+   分钟级向监控地址发带 cookie 的 GET，不重载页面、不打扰用户。
+   响应落在登录页或返回 401/403 视为疑似掉线，正常 2xx 视为恢复 */
 async function ensureHeartbeat(tabId) {
   try {
     const [settings, tasks] = await Promise.all([getSettings(), getTasks()]);
@@ -446,7 +436,7 @@ async function ensureHeartbeat(tabId) {
       await chrome.alarms.clear(hbName(tabId));
       return;
     }
-    /* 随机初始相位（1 秒~一个周期，05 复审 §3.4 下限防首拍立即触发）：多任务心跳不再同拍 */
+    /* 随机初始相位（1 秒到一个周期，下限防止首拍立即触发）：多任务心跳不再同拍 */
     await chrome.alarms.create(hbName(tabId), {
       when: Date.now() + 1000 + Math.round(Math.random() * (HEARTBEAT_MINUTES * 60 * 1000 - 1000)),
       periodInMinutes: HEARTBEAT_MINUTES
@@ -474,19 +464,18 @@ async function doHeartbeat(tabId) {
         headers: useRange ? { Range: "bytes=0-1023" } : undefined,
       }).finally(() => clearTimeout(timer));
     };
-    /* Range 截断到 1KB：请求到达即完成会话续期，正文无人消费；
-       bytes=数字-数字 属 CORS 安全名单请求头值形式，不会引入预检（05 复审 §3.3 核实）；
-       站点忽略 Range 时回退整页 200，判定逻辑不受影响（206 同在 ok 区间） */
+    /* Range 截断到 1KB：请求到达即完成会话续期，正文没人消费。
+       bytes=数字-数字 是 CORS 安全名单里的请求头值形式，不会引入预检；
+       站点忽略 Range 时回退整页 200，206 也在 ok 区间，判定不受影响 */
     let res = await send(true);
-    /* 416 = 站点拒收该 Range（实现不规范）：去 Range 重试一次，
-       避免该站点的心跳通道静默失效（05 复审 §3.3） */
+    /* 416 = 站点拒收这个 Range（实现不规范）：去掉 Range 重试一次，
+       免得该站点的心跳通道静默失效 */
     if (res.status === 416) res = await send(false);
     const root = siteRoot(hostOf(task.url));
     const landed = res.url || task.url;
-    /* 错误页通道：5xx/404 连续命中 → 任务自动暂停；恢复 2xx 自动解除（06 §4.3）
-       连击计数存会话态（跨 SW 回收存活），否则两次心跳隔着 4 分钟、SW 早已回收，
-       计数每次从 0 起 → 阈值永远到不了（见 RT_* 注释与 verify-sw-restart-state.mjs）
-       与掉线通道并行且互不污染：不进 sessionProbe，不影响备份冻结 */
+    /* 错误页通道：5xx/404 连续命中就暂停任务，回到 2xx 自动解除。
+       连击计数存会话态，否则两次心跳隔 4 分钟、SW 早已回收，计数每次从 0 起，
+       阈值永远到不了。与掉线通道并行且互不污染：不进 sessionProbe，不影响备份冻结 */
     if (isErrorStatus(res.status)) {
       const s = await rtBump(rtTab(RT_ERROR, tabId));
       if (s >= PAUSE_CONFIRM_SAMPLES) await pauseTaskAuto(tabId, "error-page");
@@ -562,12 +551,11 @@ async function reloadTab(tabId) {
   await chrome.tabs.reload(tabId, { bypassCache: !!settings.bypassCache });
 }
 
-/* ---- 关键词检测链（08 裁定方案 C：全在后台，不碰注入通道，
-   与 keepAlive 门控零耦合）。每次页面 complete 起一条链：立即查一次，
-   未命中再于 3s / 10s 有界重采样——专治 SPA/迟渲染在 complete 时刻正文
-   未就位的漏检；正文与上次相同则提前结束。新链起链即作废旧链（Map 里换
-   token），杜绝并发链重复通知/竞态停任务。SW 中途回收丢链可接受，
-   下个 complete 或刷新周期自动重建 ---- */
+/* 关键词检测链：全在后台，不碰注入通道，与保活门控零耦合。
+   每次页面加载完成起一条链，立即查一次，未命中再于 3 秒、10 秒重采样
+   （SPA 或迟渲染的页面在 complete 时刻正文还没就位）；正文与上次相同就提前结束。
+   新链起链即作废旧链，避免并发链重复通知或竞态停任务。
+   SW 中途回收丢链可以接受，下个加载完成或刷新周期会自动重建 */
 const detectChains = new Map();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -668,13 +656,12 @@ async function onKeywordHit(tabId, task, newly, present) {
   }
 }
 
-/* ---- Webhook 通知（学 ARP"通知出机器"）：无新权限，常驻 host_permissions
-   已覆盖任意 http(s) 目标。载荷填充 content(Discord) / text(Slack、Telegram) /
-   body(冗余兜底) 三个别名 + type/url/host/ts，让各家认的字段都能对上。
-   注意 ntfy 不在此列：它只在根端点解析 JSON，POST 到 /<主题> 会把整个 JSON 当正文
-   存下（实测），而载荷里没有 topic 字段、也无法改填根端点 → 它收到的是原始 JSON 文本。
-   调用方必须 await（四处调用点都写在 async 函数里）：fetch 必须挂在被 await 的
-   链路里，否则扩展 SW 被回收时请求会被截断（Chrome 要求"持久化状态、别裸甩异步"） ---- */
+/* Webhook 通知。不需要新权限，常驻的 host_permissions 已覆盖任意 http(s) 目标。
+   载荷填 content（Discord）、text（Slack、Telegram）、body（冗余兜底）三个别名，
+   外加 type/url/host/ts，让各家认的字段都能对上。
+   ntfy 不在此列：它只在根端点解析 JSON，POST 到 /<主题> 会把整个 JSON 当正文存下，
+   而载荷里没有 topic 字段、也改不了填根端点，所以它收到的是原始 JSON 文本。
+   调用方必须 await：fetch 要挂在被 await 的链路上，否则 SW 被回收时请求会被截断 */
 async function postWebhook(event, payload) {
   try {
     const settings = await getSettings();
@@ -703,24 +690,24 @@ async function postWebhook(event, payload) {
   }
 }
 
-/* ---- 微信直连（不经任何中继，扩展 SW 直接调 api.weixin.qq.com）----
+/* 微信直连：扩展 SW 直接调 api.weixin.qq.com 推模板消息，不经中继。
    与 webhook 并列的第二个外发出口，两者共用 notifyEvents 事件清单、各有独立开关。
-   可行性依据（13 报告，实测对照）：网页语境 fetch 微信接口被 CORS 拦（Failed to fetch），
-   而扩展 SW 语境 HTTP 200 —— 微信不返回 CORS 头对扩展不构成障碍，manifest 的
-   <all_urls> 已覆盖，无需新增权限（也就不会触发商店重审）。
+   可行性的依据是实测对照：网页语境 fetch 微信接口被 CORS 拦（Failed to fetch），
+   扩展 SW 语境返回 200：微信不返回 CORS 头对扩展不构成障碍，
+   manifest 的 <all_urls> 已覆盖，不需要新增权限。
 
-   令牌缓存必须落 chrome.storage.session：MV3 SW 闲置 30 秒就被回收，内存缓存等于没有；
-   session 不同步、关浏览器即清，正适合这种短期令牌。
-   推送结果落 chrome.storage.local（本机可见反馈）——静默失败必须留痕，
-   否则用户会以为"配好了、在发"。 */
+   令牌缓存必须落 chrome.storage.session：SW 闲置 30 秒就被回收，内存缓存等于没有；
+   session 不同步、关浏览器即清，正适合短期令牌。
+   推送结果落 chrome.storage.local，静默失败要留痕，否则用户以为配好了在发 */
 const WX_TOKEN_KEY = "wechatToken";
 const WX_LAST_KEY = "wechatLastResult";
 const WX_FETCH_TIMEOUT_MS = 15000;
-/* 事件 → 卡片标题用的文案键。**卡片标题另用一套短名，不复用弹窗的复选框标签**
-   （20 报告 §2）：复选框标签是给 400px 宽的弹窗看的，可以长（英文 "task auto-stopped"
-   17 字符）；卡片标题要和站点挤在平台的 20 字里，英文那套长标签会把预算吃光，
-   站点名要么被硬截成 "…e.com"、要么整段消失。所以 zh 用 4~5 字、en 用 6~7 字符。
-   test 是「发送测试消息」按钮专用的伪事件——它只要求凭据填全，
+/* 事件到卡片标题的文案键。卡片标题另用一套短名，不复用弹窗的复选框标签：
+   复选框标签是给 400px 宽的弹窗看的，可以长（英文 "task auto-stopped" 有 17 个字符）；
+   卡片标题要和站点一起挤在平台的 20 字里，用长标签会把预算吃光，
+   站点名要么被截成 "…e.com" 这样的碎片、要么整段消失。
+   所以中文 4~5 字、英文 6~7 字符。
+   test 是"发送测试消息"按钮专用的伪事件：只要求凭据填全，
    不受总开关与事件勾选约束（配好之前就得能试） */
 const WECHAT_EVENT_TITLE_KEYS = {
   keyword: "wechatEvKeywordShort",
@@ -746,7 +733,7 @@ async function wxFetch(url, body, timeoutMs = WX_FETCH_TIMEOUT_MS) {
   }
 }
 
-/* 取 access_token：优先缓存，force 时强制刷新（官方 stable_token 的 force_refresh）。
+/* 取 access_token：优先用缓存，force 时强制刷新（stable_token 的 force_refresh）。
    失败时把微信的错误码挂在 error.wechatCode 上，让调用方能给出可读提示 */
 async function getWechatToken(settings, force) {
   const now = Date.now();
@@ -782,11 +769,10 @@ async function setWechatResult(result) {
   }
 }
 
-/* 卡片正文：按事件给"一句话结论"，每个都在平台的 20 字上限内（见 logic.js 的规则说明）。
-   刻意不复用 payload.content —— 那是系统通知与 webhook 用的完整句子（30~60 字），
-   发到微信只会被平台从中间截断，不如换一句说得完的短话。
-   站点名改走标题那一行（wechatTitleOf），页面地址走卡片的点击跳转（url），
-   两者都不再占正文的字数 */
+/* 卡片正文：按事件给一句结论，都在平台的 20 字以内（规则见 logic.js）。
+   刻意不复用 payload.content：那是系统通知与 webhook 用的完整句子（30~60 字），
+   发到微信只会被平台从中间截断。站点名走标题那一行，页面地址走卡片的点击跳转，
+   两者都不占正文的字数 */
 const WECHAT_BODY_KEYS = {
   keyword: "wechatBodyKeyword",
   "task-stopped": "wechatBodyStopped",
@@ -805,7 +791,7 @@ function buildWechatContent(event, payload) {
     );
   }
   const key = WECHAT_BODY_KEYS[event];
-  /* 未登记的事件（将来新增）退回原始正文，照旧被截到 20 字——
+  /* 未登记的事件（将来新增的）退回原始正文，照旧截到 20 字：
      宁可少说，也不要凭空编一句不对应的话 */
   if (!key) return oneLine(p.content || "");
   return chrome.i18n.getMessage(key);
@@ -814,7 +800,7 @@ function buildWechatContent(event, payload) {
 async function postWechat(event, payload, opts) {
   try {
     const settings = await getSettings();
-    /* ignoreToggle：弹窗的「发送测试消息」用。测试的意义就是"配好之前先试"，
+    /* ignoreToggle 给弹窗的"发送测试消息"用：测试的意义就是配好之前先试，
        所以它只看凭据是否齐，不受总开关与事件勾选约束 */
     const forced = !!(opts && opts.ignoreToggle);
     if (!forced && !settings.wechatEnabled) return;
@@ -831,7 +817,7 @@ async function postWechat(event, payload, opts) {
     const body = buildWechatMessage({
       openId: settings.wechatOpenId,
       templateId: settings.wechatTemplateId,
-      /* 标题 = "事件 · 站点"。品牌名不再占位——卡片头部本来就写着模板名，
+      /* 标题 = "事件 · 站点"。品牌名不占位：卡片头部本来就写着模板名，
          20 字的预算里它最不值钱，省下来给站点 */
       title: wechatTitleOf({
         eventLabel,
@@ -853,7 +839,7 @@ async function postWechat(event, payload, opts) {
         await setWechatResult({ ok: true, event });
         return;
       }
-      /* 令牌失效（40001/42001）：清缓存重取一次再试——官方文档明确这两种码可重试 */
+      /* 令牌失效（40001/42001）：清缓存重取一次再试，官方文档说这两种码可重试 */
       if (isTokenErrorCode(code) && attempt === 1) continue;
       await setWechatResult({
         ok: false,
@@ -876,8 +862,8 @@ async function postWechat(event, payload, opts) {
   }
 }
 
-/* 外发通知总入口：两个出口各推一份（webhook 未配地址就自己跳过，微信开关关就跳过）。
-   调用方必须 await —— 两条链路都是 fetch，裸甩异步会在 SW 回收时被截断 */
+/* 外发通知总入口：两个出口各推一份（webhook 没配地址会自己跳过，微信关着也跳过）。
+   调用方必须 await：两条链路都是 fetch，裸甩异步会在 SW 回收时被截断 */
 async function notifyOut(event, payload) {
   await postWebhook(event, payload);
   await postWechat(event, payload);
@@ -923,26 +909,24 @@ async function backupCookies(tabId) {
       expirationDate: c.expirationDate,
       hostOnly: c.hostOnly
     }));
-    /* 超限截断先按"像登录票据的程度"排序再切（12 复审 §4）：原实现按
-       chrome.cookies.getAll 的返回顺序切尾，而该顺序未定义——若会话票据恰在尾部，
-       每次备份都会稳定缺它，且 prev/next 都缺导致 sessionLostDetected 恒判"正常"，
-       重启后看起来"备份在更新"却恢复不出登录态。正常规模不排序，避免无谓的顺序变化 */
+    /* 超限截断前先按"像登录票据的程度"排序再切。原实现按 chrome.cookies.getAll 的
+       返回顺序切尾，而这个顺序未定义：会话票据恰在尾部时每次备份都稳定缺它，
+       且前后样本都缺，sessionLostDetected 恒判正常，表现为备份时间戳一直在更新、
+       重启后却恢复不出登录态。正常规模不排序，避免无谓的顺序变化 */
     const capped = capCookies(cookies, MAX_COOKIES_PER_HOST);
     const key = COOKIE_BACKUP_PREFIX + host;
     const now = Date.now();
     /* 行为通道已判定该根域掉线：证据强于状态采样，直接保护备份不被写坏 */
     if (await isProbeLost(task.url)) return;
-    /* 掉线确认窗口（复审§2 修复）：疑似采样只累加计数（MERGE），绝不把坏样本
-       写进 cookies——否则下一轮 prev 里没有会话票据，streak 恒被清零，
-       确认窗口不可达且最后一次好备份在第 2 次采样就被污染。timestamp 保持
-       最后有效备份时间，长期冻结的备份由 30 天 TTL 自然淘汰 */
+    /* 掉线确认窗口：疑似采样只累加计数，绝不把坏样本写进 cookies。否则下一轮 prev 里
+       没有会话票据，streak 恒被清零，确认窗口永远到不了，最后一次好备份也会在第 2 次
+       采样就被污染。timestamp 保持最后有效备份时间，长期冻结的备份由 30 天 TTL 淘汰 */
     const prevEntry = (await chrome.storage.local.get(key))[key];
-    /* 决策与落盘映射同一纯函数（04 复审 §4.4）：write=null 表示冻结且节流，什么都不写 */
+    /* 决策与写盘映射是同一个纯函数：write=null 表示冻结且处于通知节流期，什么都不写 */
     const act = applyBackupAction(prevEntry, capped, now);
     if (act.write) await chrome.storage.local.set({ [key]: act.write });
-    /* 必须 await：notifySessionLost 内含 webhook/微信的 fetch，裸甩会在 SW 回收时被截断
-       ——而且丢的正是"会话掉线"这条（人不在电脑前最需要的那条）。对照 reportSessionSignal
-       里同一调用点（行为通道）本来就是 await（12 复审 §3） */
+    /* 必须 await：notifySessionLost 里含 webhook 与微信的 fetch，裸甩会在 SW 回收时
+       被截断，丢的正是"会话掉线"这条。行为通道里同一调用点本来就是 await */
     if (act.notify) await notifySessionLost(host);
   } catch (e) {
     try {
@@ -997,10 +981,10 @@ async function restoreCookies(host) {
         expirationDate: c.expirationDate || undefined
       };
       /* hostOnly === true：主机专属 cookie，省略 domain 让 Chrome 从 url 推导
-         （带 domain 写入会失败或扩大作用域，__Host- 票据尤其致命）；
-         === false：域 cookie 按备份的 domain 写入；
-         缺失（v1 旧备份）：无法判定主机/域，保持旧行为统一传 domain，
-         至少比直接丢弃更接近升级前的表现 */
+         （带 domain 写入会失败或扩大作用域，__Host- 票据尤其致命）。
+         === false：域 cookie，按备份的 domain 写入。
+         缺失（v1 旧备份）：无法判定，保持旧行为统一传 domain，比直接丢弃更接近
+         升级前的表现 */
       try {
         if (c.hostOnly === true) {
           await chrome.cookies.set(base);
@@ -1019,8 +1003,7 @@ async function restoreCookies(host) {
   }
 }
 
-/* 工具栏角标四态（学 tab-reloader 的集中切换）：
-   掉线待重登 "!" 红 > 全局暂停 "‖" 灰 > 监控数量 蓝 > 无任务空 */
+/* 角标四态集中在这里切换：掉线待重登 "!" 红 > 全局暂停 "‖" 灰 > 监控数量 蓝 > 无任务空 */
 async function updateBadge() {
   void applyKeepAwake(); /* 任务增删/暂停的所有路径都经过这里 */
   try {
@@ -1059,8 +1042,8 @@ async function notifyTaskStopped(tabId, url, reason) {
       message: chrome.i18n.getMessage("notifStopped")
     })
     .catch(() => {}); /* 系统通知被关闭时不影响任务清理流程 */
-  /* await 而非 void：postWebhook 内是 fetch，必须挂在被 await 的链路里，
-     否则 SW 回收会截断请求（本批首版四处都写成 void，与函数注释自相矛盾） */
+  /* await 而不是 void：postWebhook 里是 fetch，要挂在被 await 的链路上，
+     否则 SW 回收会截断请求 */
   await notifyOut("task-stopped", {
     content: chrome.i18n.getMessage("notifStopped"),
     host: hostOf(url) || "",
@@ -1069,7 +1052,7 @@ async function notifyTaskStopped(tabId, url, reason) {
   });
 }
 
-/* 08 复审 §3.6：URL 必须在 stopTask 之前取——任务记录删除后就拿不到了 */
+/* URL 必须在 stopTask 之前取：任务记录删掉之后就拿不到了 */
 async function stopTaskWithNotice(tabId, reason) {
   const task = (await getTasks())[tabId];
   const url = (task && task.url) || "";
@@ -1111,16 +1094,16 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (paused) return; /* 暂停期间跳过，恢复后按原周期继续 */
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   /* 标签页不存在优先于自动暂停判定：否则"被自动暂停的任务 + 用户关掉标签页"
-     永远等不到清理（旧行为是关掉即停任务并通知），会留下静默僵尸任务 */
+     永远等不到清理，会留下僵尸任务 */
   if (!tab) {
     await stopTaskWithNotice(tabId, "tab-gone");
     return;
   }
   if (tasks[tabId].autoPaused) return; /* 错误页/验证墙自动暂停：alarm 已由 armRefresh 续跑，等恢复 */
   const settings = await getSettings();
-  /* 真人 60 秒内在该页操作过则跳过本次刷新（isTrusted 过滤，保活合成事件不会误报，06 §4.5）
-     策略是"跳过"而非"重置计时"：重置会被用户操作无限期推迟，违背盯变化的用途；
-     时间戳存会话态——SW 回收后仍记得，否则该开关基本无效（见 RT_* 注释） */
+  /* 真人 60 秒内在该页操作过就跳过本次刷新（合成事件 isTrusted 为 false，不会误报）。
+     是跳过而不是重置计时：重置会被用户操作无限期推迟，违背盯变化的用途。
+     时间戳存会话态，否则 SW 回收后该开关基本无效 */
   if (settings.skipOnActivity) {
     const last = Number(await rtGet(rtTab(RT_ACTIVITY, tabId))) || 0;
     if (Date.now() - last < ACTIVITY_SKIP_MS) return;
@@ -1142,15 +1125,15 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   const tasks = await getTasks();
   const task = tasks[tabId];
   if (!task) return; /* 快照与存储有竞态时以存储为准 */
-  /* 掉线行为信号：任务页最终落在登录页 URL = 服务器把你重定向去登录了；
-     监控对象本身就是登录页时此信号不适用（永远命中会误报） */
+  /* 掉线行为信号：任务页最终落在登录页 URL，说明服务器把你重定向去登录了。
+     监控对象本身就是登录页时此信号不适用（会永远命中） */
   const cur = changeInfo.url || (await chrome.tabs.get(tabId).catch(() => null))?.url || "";
   const loginSuspect = looksLikeLoginPage(cur) && !looksLikeLoginPage(task.url);
   await reportSessionSignal(siteRoot(hostOf(task.url)), hostOf(task.url), loginSuspect);
   await backupCookies(tabId);
   await refreshTaskUrl(tabId);
   void startDetectChain(tabId); /* 关键词检测链（立即 + 3s + 10s 有界重采样） */
-  /* 保活/活动监听：每次加载完成同步注入与配置（门控解耦见 08 §3.1） */
+  /* 保活与活动监听：每次加载完成同步注入与配置 */
   await syncKeepAliveConfig(tabId);
   await probeCaptcha(tabId); /* 验证墙探测：连续命中自动暂停，见 probeCaptcha 注释 */
 });
@@ -1195,8 +1178,8 @@ async function cleanupInvalidTasks() {
   await updateBadge();
 }
 
-/* 延迟认领窗口（学 tab-reloader）：等 RECLAIM_WATCH_MS，期间任何标签页导航到
-   目标网址即认领成功；救"会话恢复晚到 / 先跳 SSO 才到位"的页面，避免无谓重开 */
+/* 延迟认领窗口：等 RECLAIM_WATCH_MS，期间任何标签页导航到目标网址即认领成功，
+   救"会话恢复晚到"或"先跳 SSO 才到位"的页面，避免无谓重开 */
 function watchForUrl(url, excludeIds) {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
@@ -1216,10 +1199,11 @@ function watchForUrl(url, excludeIds) {
   });
 }
 
-/* 浏览器启动/扩展安装时：恢复 cookie → 任务重新挂接到会话恢复的标签页 → 失效任务兜底重开
-   adoptLegacyUrls：仅扩展安装/更新时为真，此时浏览器未重启、tabId 仍有效，可为 v1.4.3
-   及更早（任务里只有间隔与创建时间、没有网址）的旧任务补记当前标签页网址；
-   浏览器重启后 tabId 已重新分配，旧 ID 会撞上无关标签页，无法辨认目标只能淘汰 */
+/* 浏览器启动或扩展安装时：恢复 cookie → 把任务重新挂接到会话恢复出来的标签页 →
+   失效任务兜底重开。
+   adoptLegacyUrls 仅在扩展安装/更新时为真：那时浏览器没重启、tabId 仍有效，
+   可以给 v1.4.3 及更早（任务里只有间隔和创建时间、没有网址）的旧任务补记当前网址；
+   浏览器重启后 tabId 已重新分配，旧 ID 会撞上无关标签页，无法辨认目标，只能淘汰 */
 async function prune(adoptLegacyUrls = false) {
   /* 等待会话恢复的标签页出现，避免误判失效或重复打开 */
   await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -1229,8 +1213,8 @@ async function prune(adoptLegacyUrls = false) {
 
   const settings = await getSettings();
 
-  /* 按注册域恢复所有备份主机（含 SSO 登录所在的兄弟子域），不再只按任务网址的精确主机；
-     开关关闭时跳过，pruneCookieBackups 会在下方锁内清掉遗留备份 */
+  /* 按注册域恢复所有备份主机（含 SSO 登录所在的兄弟子域），不再只按任务网址的精确主机。
+     开关关闭时跳过，遗留备份由下方锁内的 pruneCookieBackups 清掉 */
   const initial = await getTasks();
   const taskRoots = new Set();
   for (const task of Object.values(initial)) {
@@ -1255,15 +1239,15 @@ async function prune(adoptLegacyUrls = false) {
     const openTabs = await chrome.tabs.query({});
     const openById = new Map(openTabs.map((t) => [t.id, t]));
     /* 预扫描认领：ID 仍被占用不代表挂接正确（重启后 tabId 会重新分配，旧任务 ID
-       可能撞上无关的新标签页），只有网址一致才保留；无网址的旧任务按
-       adoptLegacyUrls 决定补记网址（扩展更新，tabId 仍有效）还是淘汰（浏览器重启） */
+       可能撞上无关的新标签页），只有网址一致才保留。无网址的旧任务按
+       adoptLegacyUrls 决定补记网址还是淘汰 */
     const claimed = new Set();
-    /* 未认领任务的旧 alarm 先记账、setTasks 落盘后再清（04 复审 §4.1）：
+    /* 未认领任务的旧 alarm 先记账、setTasks 落盘之后再清：
        SW 中途回收时宁可留"有 alarm 没任务"（onAlarm 找不到任务会自清），
-       也不能留"有任务没 alarm"的静默僵尸 */
+       也不能留"有任务没 alarm"的僵尸 */
     const staleAlarms = [];
-    /* 待处理集合（复审§3.1 修复）：认领写入 tasks[match.id] 前必须确认该 id
-       不再是别的未处理任务的键，否则两个任务撞同一页时后者被覆盖静默丢失 */
+    /* 待处理集合：认领写入 tasks[match.id] 之前必须确认该 id 不再是别的未处理任务的键，
+       否则两个任务撞同一页时，后者会被覆盖而静默丢失 */
     const pending = new Set(Object.keys(tasks).map(Number));
     let dirty = false;
     for (const key of Object.keys(tasks)) {
@@ -1291,8 +1275,8 @@ async function prune(adoptLegacyUrls = false) {
       if (claimed.has(tabId)) continue;
       pending.delete(tabId);
       const task = tasks[tabId];
-      /* 未认领的任务重映射时跳过已被其他任务认领 / 仍是其他未处理任务键的页面：
-         同一网址开在多个标签页时，一个页面只会被一个任务挂接，认领不到的走下方重开 */
+      /* 重映射时跳过已被其他任务认领、或仍是其他未处理任务键的页面：
+         同一网址开在多个标签页时，一个页面只挂一个任务，认领不到的走下方重开 */
       let match =
         openTabs.find((t) => !claimed.has(t.id) && !pending.has(t.id) && tabShowsUrl(t, task.url)) || null;
       delete tasks[tabId];
@@ -1333,9 +1317,9 @@ async function prune(adoptLegacyUrls = false) {
     }
     if (dirty) await setTasks(tasks);
     const liveIds = new Set(Object.keys(tasks)); /* 落盘后的最终键：被重挂接/重开占用的 id 不能清 */
-    /* 05 复审 §2 回归修复：延后清理若不看最终键集合，会把本轮刚 arm 的 alarm
-       （id 恰好曾是其他任务的键：tabId 互换 / watch 等回原 id / Chrome 复用 id）
-       一并清掉，产出"任务在、永不刷新"的僵尸——正是这次修复要消灭的状态 */
+    /* 清理时对照落盘后的最终键集合：延后清理若不看最终键集合，会把本轮刚 arm 的 alarm
+       （id 恰好曾是别的任务的键：tabId 互换、watch 等回原 id、Chrome 复用 id）
+       一并清掉，产出"任务在、永不刷新"的僵尸 */
     for (const name of staleAlarms) {
       const id = name.startsWith(HB_PREFIX) ? name.slice(HB_PREFIX.length) : name.slice(PREFIX.length);
       if (liveIds.has(id)) continue;
@@ -1348,8 +1332,8 @@ async function prune(adoptLegacyUrls = false) {
   await updateBadge();
 }
 
-/* 显式传参而非直接 addListener(prune)：onInstalled 会把事件详情对象作为首个实参传入，
-   会被 adoptLegacyUrls 误判为真值 */
+/* 显式传参而不是直接 addListener(prune)：onInstalled 会把事件详情对象当第一个实参传进来，
+   会被 adoptLegacyUrls 当成真值 */
 chrome.runtime.onStartup.addListener(async () => { await prune(false); await reconcileKeepAlive(); });
 chrome.runtime.onInstalled.addListener(async () => { await prune(true); await reconcileKeepAlive(); });
 
@@ -1413,18 +1397,18 @@ chrome.commands.onCommand.addListener(async (command) => {
   }
 });
 
-/* 设置变化后按需收敛（复审§3.2）：只在保活/心跳开关真变化时跑，
-   否则 rememberLastInterval 等无关写盘会引发全站任务页心跳重置风暴 */
+/* 设置变化后按需收敛：只在保活、心跳、活动监听、防休眠这几个开关真变化时跑，
+   否则 rememberLastInterval 这类无关写盘会引发任务页心跳重置风暴 */
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "sync" || !changes.settings) return;
   const o = changes.settings.oldValue || {};
   const n = changes.settings.newValue || {};
   const touched = (k) => o[k] !== n[k];
-  /* 关掉「重启后恢复登录」要立刻清掉遗留备份（12 复审 §6）：README 明确承诺
-     "关闭状态下不备份、不恢复，遗留备份也会被自动清除"，而清理原先只发生在
-     stopTask 与启动 prune 里——用户按说明关掉开关后，含 HttpOnly 登录票据的
-     明文 cookie 仍继续躺在 chrome.storage.local，落差还偏危险方向。
-     pruneCookieBackups 在开关关闭时正是"清空全部备份"，顺带收敛无任务的探针 */
+  /* 关掉"重启后恢复登录"要立刻清掉遗留备份：README 承诺"关闭状态下不备份、不恢复，
+     遗留备份也会被自动清除"，而清理原先只发生在 stopTask 与启动 prune 里。
+     用户按说明关掉开关后，含 HttpOnly 登录票据的明文 cookie 仍躺在
+     chrome.storage.local，落差偏危险方向。pruneCookieBackups 在开关关闭时正是清空全部
+     备份，顺带收敛没有任务的探针 */
   if (touched("cookieBackup")) {
     void (async () => {
       try {
@@ -1438,15 +1422,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
   reconcileKeepAlive();
 });
 
-/* ---- 错误页 / 验证墙 → 任务级自动暂停（06 §4.3）----
-   独立于掉线状态机（不进 sessionProbe，防污染备份冻结语义）：
-   心跳侧 5xx/404 连续 PAUSE_CONFIRM_SAMPLES 次、或页面侧验证墙特征连续
-   CAPTCHA_CONFIRM_SAMPLES 次才暂停。
-   两侧"能否自愈"不对称，这是给验证墙定更高阈值的理由：错误页暂停后由独立的心跳
-   alarm 兜着（不受暂停影响），回到 2xx 即自动解除；验证墙的解除却依赖页面再次加载
-   ——用户过墙后页面跳转即触发本探测复位并自动恢复，若墙页始终不跳转就只能手动恢复。
+/* 错误页与验证墙都让任务级自动暂停。独立于掉线状态机：不进 sessionProbe，
+   不污染备份冻结语义。心跳侧 5xx/404 连续 PAUSE_CONFIRM_SAMPLES 次、
+   页面侧验证墙特征连续 CAPTCHA_CONFIRM_SAMPLES 次才暂停。
+   两侧能否自愈不一样，这是给验证墙定更高阈值的理由：错误页暂停后有独立的心跳 alarm
+   兜着（不受暂停影响），回到 2xx 自动解除；验证墙的解除依赖页面再次加载：
+   用户过墙后页面跳转即触发本探测复位，若墙页始终不跳转就只能手动恢复。
    暂停期间定时器照常续跑（onAlarm 早退），恢复零重建。
-   探测受 settings.captchaGuard 控制（默认开，与 07 批次原始行为一致） ---- */
+   探测受 settings.captchaGuard 控制，默认开 */
 async function probeCaptcha(tabId) {
   try {
     if (!(await getSettings()).captchaGuard) return; /* 关闭时不注入、不判定 */
@@ -1456,10 +1439,10 @@ async function probeCaptcha(tabId) {
       target: { tabId },
       func: () => {
         /* 只认"整页就是验证墙"的信号：文档标题，以及挑战域名的 iframe/script。
-           刻意不扫正文——正文里出现"验证码 / access denied"这类日常词（登录框提示、
-           帮助文案、页脚）会把正常页误判成墙；而误暂停后刷新循环停下 → 页面不再加载
-           → 本探测也不再运行，任务就一直卡在暂停态。标题是墙页最稳的特征。
-           401/403 的"登录墙"语义另走掉线通道（reportSessionSignal），此处不重复判定 */
+           刻意不扫正文：正文里出现"验证码""access denied"这类日常词（登录框提示、
+           帮助文案、页脚）会把正常页误判成墙，而误暂停后刷新循环停下、页面不再加载、
+           本探测也不再运行，任务就一直卡在暂停态。标题是墙页最稳定的特征。
+           401/403 的登录墙语义另走掉线通道，这里不重复判定 */
         const s = (document.title || "").slice(0, 300).toLowerCase();
         let hit = /(captcha|verify you are human|human verification|just a moment|attention required|pardon our interruption|安全验证|人机验证|验证码)/.test(s);
         if (!hit) {
@@ -1479,8 +1462,8 @@ async function probeCaptcha(tabId) {
       if (cur.autoPaused && cur.autoPaused.reason === "captcha") await resumeTaskAuto(tabId);
       return;
     }
-    /* 连击计数同样存会话态：验证墙随刷新周期（≥30 秒）探一次，SW 早被回收，
-       内存计数永远到不了阈值（见 RT_* 注释与 verify-sw-restart-state.mjs） */
+    /* 连击计数同样存会话态：验证墙随刷新周期（≥30 秒）才探一次，SW 早被回收，
+       内存计数永远到不了阈值 */
     const s = await rtBump(rtTab(RT_CAPTCHA, tabId));
     if (s >= CAPTCHA_CONFIRM_SAMPLES) await pauseTaskAuto(tabId, "captcha");
   } catch (e) {
@@ -1579,9 +1562,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         sendResponse({ ok: true });
       } else if (msg.type === "wechat-test") {
-        /* 弹窗的「发送测试消息」：填完凭据立刻能验证，
-           不用等某个事件真的发生（也就不会"配错了自己不知道"）。
-           载荷为空即可——测试消息的正文取自 wechatTestBody，不由调用方给句子 */
+        /* 弹窗的"发送测试消息"：填完凭据立刻能验证，不用等某个事件真的发生。
+           载荷为空即可，测试消息的正文取自 wechatTestBody，不由调用方给句子 */
         await postWechat("test", {}, { ignoreToggle: true });
         const r = await chrome.storage.local.get(WX_LAST_KEY);
         sendResponse({ ok: true, result: r[WX_LAST_KEY] || null });

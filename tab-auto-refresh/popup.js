@@ -183,14 +183,14 @@ function buildTaskItem(tabId, task, tab) {
   } else {
     sub.textContent = base;
   }
-  /* skipDiscarded 命中是唯一的静默跳过（03 报告 §2.4c 可解释性）：行内标注原因 */
+  /* 休眠跳过是唯一不声不响的跳过，行内标出原因 */
   if (settings.skipDiscarded && tab && tab.discarded) {
     const dsp = document.createElement("span");
     dsp.className = "next";
     dsp.textContent = msg("discardedHint");
     sub.appendChild(dsp);
   }
-  /* 自动暂停（错误页/验证墙）：行内标原因 + 恢复按钮（08 §3.5 可解释性要求） */
+  /* 自动暂停（错误页或验证墙）：行内标原因，并给一个恢复按钮 */
   if (task.autoPaused) {
     const ap = document.createElement("span");
     ap.className = "invalid";
@@ -285,12 +285,12 @@ async function renderAll() {
   renderCountdowns();
 }
 
-/* 预设下拉与秒数框是"同一个间隔"的两个入口，必须互斥（12 复审 §2）：
-   原实现两边都没有 change/input 监听，于是"先在秒数框填 90，再从下拉选每 5 分钟"
-   会静默按 90 跑——下拉显示 5 分钟、实际生效 90 秒，只有 4 秒后就消失的提示行
-   里能看到真值。现在任何时刻只有一个入口持有值：
-     选具体预设 → 清空秒数框；秒数框一有数字 → 下拉切到「自定义」；
-     秒数框被清空 → 回落默认预设。界面即事实，不存在"两个都说自己算数" */
+/* 预设下拉和秒数框是同一个间隔的两个入口，必须互斥。
+   原实现两边都没有 change/input 监听，先在秒数框填 90、再从下拉选每 5 分钟，
+   就会按 90 跑：下拉显示 5 分钟、实际生效 90 秒，只有 4 秒后就消失的提示行里能看到真值。
+   现在任何时刻只有一个入口持有值：
+     选具体预设就清空秒数框；秒数框一有数字，下拉就切到"自定义"；
+     秒数框被清空则回落到默认预设 */
 function initPresetSelect() {
   const sel = $("presetSelect");
   for (const p of PRESETS) {
@@ -323,17 +323,17 @@ function bindIntervalInputs() {
       box.value = ""; /* 选了具体预设：以预设为准 */
       return;
     }
-    /* 选「自定义」：预填当前生效值，避免出现"选了自定义却没填"的第三种状态，
-       也让下面的读取逻辑只需要面对"框里有数"这一种情况 */
+    /* 选"自定义"时预填当前生效值，免得出现"选了自定义却没填"的第三种状态，
+       下面的读取逻辑也就只需要处理"框里有数"这一种情况 */
     if (box.value.trim() === "") box.value = String(clampInterval(settings.lastIntervalSec).seconds);
     box.focus();
   });
   box.addEventListener("input", () => {
     if (box.value.trim() !== "") {
-      sel.value = ""; /* 秒数框里有数字：以它为准，下拉显示「自定义」 */
+      sel.value = ""; /* 框里有数字就以它为准，下拉显示"自定义" */
       return;
     }
-    /* 秒数框被清空 → 回落默认预设（不留"两个都说自己算数"的状态）。
+    /* 框被清空就回落默认预设，不留"两个都说自己算数"的状态。
        sel.value 赋一个不存在的选项会变成空串，用这一点兜底 */
     sel.value = String(DEFAULT_INTERVAL_SEC);
     if (sel.value !== String(DEFAULT_INTERVAL_SEC)) sel.value = String(PRESETS[0].seconds);
@@ -448,9 +448,9 @@ async function init() {
       await send({ type: "stop", tabId: currentTab.id });
       setMsg(msg("msgStopped"));
     } else {
-      /* 自定义优先：下拉停在「自定义」（value=""）或秒数框里有数，都以秒数框为准。
-         两者已被 bindIntervalInputs 做成互斥显示，所以"下拉显示某预设、实际按秒数框跑"
-         这种静默不一致不会再出现 */
+      /* 自定义优先：下拉停在"自定义"（value 为空）或框里有数，都以框为准。
+         两者已经被 bindIntervalInputs 做成互斥显示，"下拉显示某个预设、实际按框里的值跑"
+         这种不一致不会再出现 */
       const presetVal = $("presetSelect").value;
       const custom = parseInt($("customInput").value, 10);
       let seconds;
@@ -519,12 +519,11 @@ async function init() {
     const btn = $("wechatTestBtn");
     btn.disabled = true;
     btn.textContent = msg("wechatTestSending");
-    /* 先落盘再测试（20 报告 §3）：凭据输入框走 change（失焦）保存，而点这个按钮
-       必然先让输入框失焦 → 弹窗先发出 save-settings。两条消息在后台各自独立异步执行，
-       而 save-settings 自己也要先 await 一次 getSettings() 才能写盘，于是
-       wechat-test 的 getSettings() 排在它前面落地、读到旧值 —— 用户刚填完凭据点测试，
-       得到的是"还缺：appID、密钥、openid、模板ID"，实际发出的微信请求数是 0。
-       必须在这里 await，把"保存"与"测试"串成一条链。 */
+    /* 先保存再测试：凭据输入框是失焦（change）保存的，点这个按钮必然先让输入框失焦，
+       所以弹窗会先发 save-settings。两条消息在后台各自独立执行，而 save-settings 自己
+       也要先 await 一次 getSettings() 才能写盘，于是 wechat-test 的 getSettings() 排在
+       它前面落地、读到旧值：刚填完凭据点测试，得到的是"还缺 appID、密钥、openid、模板ID"，
+       而实际发出去的微信请求数是 0。必须在这里 await，把保存和测试串成一条链 */
     await saveSettings();
     const res = await send({ type: "wechat-test" });
     btn.disabled = false;
@@ -550,7 +549,7 @@ async function init() {
 
   /* 只在任务 / 暂停 / 设置变化时重绘；cookie 备份等高频键的写入不触发全量刷新 */
   chrome.storage.onChanged.addListener(async (changes) => {
-    /* 推送结果也要跟着刷新——不然弹窗开着时状态永远是打开那一刻的 */
+    /* 推送结果也要跟着刷新，否则弹窗开着时状态永远停在打开那一刻 */
     if (changes.wechatLastResult) {
       wechatLast = changes.wechatLastResult.newValue || null;
       renderWechat();

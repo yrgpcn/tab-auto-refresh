@@ -4,7 +4,7 @@
       已知边界：校验 event.isTrusted 的站点无效；document.hidden 时暂停心跳的站点无效；
       挂在 document.body 或具体元素上的监听器覆盖不到（冒泡不向下）。
    2. activityWatch（设置 skipOnActivity）：监听 isTrusted===true 的真人操作并节流上报，
-      后台据此在 60 秒内跳过该页刷新。与 heartbeat 正交——合成事件 isTrusted 恒为 false，
+      后台据此在 60 秒内跳过该页刷新。与 heartbeat 互不依赖：合成事件 isTrusted 恒为 false，
       不会被误判成真人；真人操作也不依赖心跳是否在跑。
    配置来自启动时 keepalive-query 一问一答 + 后续 keepalive-config 推送；
    keepalive-off（任务停止）无条件全停。 */

@@ -14,33 +14,32 @@ export const DEFAULT_SETTINGS = {
   cookieBackup: false,
   keepAlive: true,
   httpHeartbeat: true,
-  /* 尊重用户操作：真人 60 秒内在该页操作过就跳过本次刷新。默认开启——刷新意图是"盯变化"，
-     用户自己正在看这个页面时再把它重载掉只会打断他，跳一轮的代价远小于打断。
-     行为面影响（默认值变更审查）：它同时是内容脚本注入门控之一（keepAlive || skipOnActivity
-     任一开启即注入），所以默认开启意味着默认会向被监控页注入 activityWatch 监听
-     （isTrusted 过滤 + 5 秒节流上报，合成事件不会被误判为真人）。
-     对已有安装不追溯：存盘的 settings 优先于默认值（background.js 的 getSettings 是
-     Object.assign(DEFAULT_SETTINGS, 已存值)），只有新装或未存过该键时才会取到这里的 true */
+  /* 尊重用户操作：真人 60 秒内在该页操作过就跳过本次刷新。默认开启，因为刷新是为了
+     盯变化，用户正在看这个页面时再把它重载掉只会打断他，跳一轮的代价小得多。
+     注意它同时是内容脚本注入的开关之一（keepAlive 或 skipOnActivity 任一开启即注入），
+     所以默认开启也意味着默认会向被监控页注入活动监听（isTrusted 过滤加 5 秒节流上报，
+     合成事件不会被当成真人）。
+     对已有安装不追溯：存盘值优先于默认值，只有新装或从没存过这个键时才会取到 true */
   skipOnActivity: true,
   keepAwake: false,
-  /* 验证墙探测（页面侧）。默认开启以维持既有行为（07 批次的原始设计），由用户在弹窗显式关闭。
-     匹配面刻意只取标题与挑战域名 iframe——误判的代价很高：一旦误暂停，刷新循环随之停下
-     → 页面不再加载 → 探测也不再运行，任务会一直卡在暂停态，只能手动恢复。 */
+  /* 验证墙探测（页面侧）。默认开启，由用户在弹窗里显式关闭。
+     匹配面只取标题与挑战域名 iframe：误判代价很高，一旦误暂停，刷新循环就停下，
+     页面不再加载，探测也不再运行，任务会一直卡在暂停态只能手动恢复 */
   captchaGuard: true,
-  /* Webhook：载荷会向所配 URL 披露被监控站点，敏感面——默认空=彻底关闭 */
+  /* Webhook：载荷会披露被监控站点，属敏感面，默认空即彻底关闭 */
   webhookUrl: "",
-  /* 外发通知的事件清单（webhook 与微信直连共用）。1.7.0 的键名是 webhookEvents，
-     旧值由 logic.notifyEventsOf 兼容接续，不在这里留兼容分支 */
+  /* 外发通知的事件清单，webhook 与微信直连共用。1.7.0 的键名是 webhookEvents，
+     旧值由 logic.notifyEventsOf 接续，这里不留兼容分支 */
   notifyEvents: NOTIFY_EVENTS.slice(),
   /* 微信直连：扩展 SW 直接调腾讯官方接口（api.weixin.qq.com）推模板消息，
-     不经任何中继、也不用第三方推送服务商。默认关=彻底关闭。
+     不经任何中继、也不用第三方推送服务商。默认关即彻底关闭。
 
-     凭据敏感面：这四项存 chrome.storage.sync，会随该 Google 账号同步到其它
-     登录了同一账号的桌面 Chrome（用户已知情并接受）。手机端 Chrome 不支持扩展，
-     不构成暴露面。appsecret 是唯一一把"能以此公众号名义发消息"的钥匙。
+     这四项凭据存在 chrome.storage.sync，会随 Google 账号同步到其它登录了同一账号的
+     桌面 Chrome；appsecret 是唯一一把能以此公众号名义发消息的钥匙，README 里有说明。
+     手机端 Chrome 不支持扩展，不构成暴露面。
 
-     注意：改了默认值不影响已装用户（getSettings 是 Object.assign(DEFAULT, 已存值)），
-     新增键才会从默认里补上——所以这里给的是"首次出现时"的取值。 */
+     改默认值不影响已装用户（getSettings 是 Object.assign(DEFAULT, 已存值)），
+     只有新增的键才会从默认里补上，所以这里给的是"首次出现时"的取值 */
   wechatEnabled: false,
   wechatAppId: "",
   wechatAppSecret: "",

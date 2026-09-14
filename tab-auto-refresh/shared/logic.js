@@ -3,9 +3,9 @@
 export const MIN_INTERVAL_SEC = 30;
 export const DEFAULT_INTERVAL_SEC = 300;
 
-/* 外发通知的事件清单（单一事实源）：webhook 与微信直连共用同一份"要通知哪些事件"。
-   1.7.0 只在 webhook 上用（键名 webhookEvents），1.8.0 起键名 notifyEvents，
-   旧键由 notifyEventsOf 兼容接续——两处各写一份兼容必然分叉 */
+/* 外发通知的事件清单，webhook 与微信直连共用一份。
+   1.7.0 只在 webhook 上用，键名是 webhookEvents；1.8.0 起叫 notifyEvents，
+   旧键由 notifyEventsOf 接续 */
 export const NOTIFY_EVENTS = ["session-lost", "keyword", "task-stopped", "task-paused"];
 
 /* 兜底刷新间隔：无效输入与过小值都按最小间隔处理（30 秒起步） */
@@ -118,14 +118,11 @@ export function sessionLostDetected(prevCookies, nextCookies) {
   return hasSessionCookie(prevCookies) && !hasSessionCookie(nextCookies);
 }
 
-/**
- * 掉线确认状态机（纯函数）：把“疑似 → 确认 → 恢复”的决策从备份流程里拆出来便于测试。
- * @param {object|null} prevEntry 上一份备份记录
- * @param {number} streak 连续缺失采样计数（含本次；0 = 本次采样正常）
- * @param {number} now 当前毫秒时间戳
- * @returns {{lost?: boolean, notify?: boolean, entry?: object}} lost=冻结备份；
- *   notify=本次要弹通知（按 SESSION_LOST_NOTIFY_MS 节流）；entry=需并入备份记录的字段
- */
+/* 掉线确认状态机（纯函数）：把"疑似、确认、恢复"的决策从备份流程里拆出来便于测试。
+   prevEntry 上一份备份记录；streak 连续缺失采样计数（含本次，0 表示本次正常）；
+   now 当前毫秒时间戳。
+   返回 { lost, notify, entry }：lost 表示冻结备份，notify 表示本次要弹通知
+   （按 SESSION_LOST_NOTIFY_MS 节流），entry 是需并入备份记录的字段 */
 export function nextBackupState(prevEntry, streak, now) {
   if (!streak) return { lost: false };
   if (streak >= SESSION_LOST_CONFIRM_SAMPLES) {
@@ -135,11 +132,11 @@ export function nextBackupState(prevEntry, streak, now) {
   return { lost: false, entry: { sessionLostStreak: streak } };
 }
 
-/* 备份写入决策（纯函数，复审§2 修复的核心）：把"上一份备份 + 本次采样"映射为
-   对存储的写入动作。与 nextBackupState 的区别：streak 从 prevEntry 内部推导，
-   且疑似未确认时动作是 MERGE（只并入计数字段、保留旧 cookies 与 timestamp），
-   绝不用坏样本覆盖最后一次在线备份——否则下一轮 prev 里没有会话票据，
-   suspect 恒假、streak 永远到不了确认值（复审报告实证的死代码 bug）。 */
+/* 备份写入决策（纯函数）：把"上一份备份 + 本次采样"映射成对存储的写入动作。
+   与 nextBackupState 的区别是 streak 从 prevEntry 内部推导，且疑似未确认时的动作是
+   MERGE（只并入计数字段，保留旧 cookies 与 timestamp）。这一点不能省：一旦用坏样本
+   覆盖了最后一次在线备份，下一轮 prev 里就没有会话票据，suspect 恒假、streak 永远
+   到不了确认值，确认窗口形同不存在 */
 export const BACKUP_ACT = { OVERWRITE: "overwrite", MERGE: "merge", FREEZE: "freeze" };
 
 export function decideBackupWrite(prevEntry, nextCookies, now) {
@@ -152,9 +149,9 @@ export function decideBackupWrite(prevEntry, nextCookies, now) {
   return { action: BACKUP_ACT.MERGE, streak, entry: { sessionLostStreak: streak }, notify: false };
 }
 
-/* 决策 + 落盘映射二合一（04 复审 §4.4）：后台写入与回归测试共用这一个实现，
-   杜绝"测试复刻一遍映射、后台另写一遍"的契约两半漂移——死代码 bug 即此类。
-   返回 { write, notify }：write=null 表示本次什么都不写（冻结且通知处于节流期） */
+/* 决策与写盘映射合在一处：后台写入和回归测试共用这一个实现，避免"测试复刻一遍映射、
+   后台另写一遍"两半漂移（之前那个死代码 bug 就是这么来的）。
+   返回 { write, notify }，write=null 表示本次什么都不写（冻结且处于通知节流期） */
 export function applyBackupAction(prevEntry, nextCookies, now) {
   const d = decideBackupWrite(prevEntry, nextCookies, now);
   if (d.action === BACKUP_ACT.FREEZE) {
@@ -166,12 +163,12 @@ export function applyBackupAction(prevEntry, nextCookies, now) {
   return { write: { cookies: nextCookies, timestamp: now, schemaVersion: 2 }, notify: false };
 }
 
-/* cookie 的"登录票据"得分（12 复审 §4）：备份超限需要截断时，先用它决定留谁。
+/* cookie 的"登录票据"得分：备份超限需要截断时用它决定留谁。
    判据取自各家会话 cookie 的通行写法，从强到弱：
      httpOnly（脚本不可读，登录票据几乎都带）
-     > 无 expirationDate（会话票，随浏览器关闭失效，正是「重启后恢复登录」要保的）
-     > __Host- / __Secure- 前缀（站点显式标记的关键票据）
-     > path=/（作用域最广） */
+     无 expirationDate（会话票，随浏览器关闭失效，正是"重启后恢复登录"要保的）
+     __Host- / __Secure- 前缀（站点显式标记的关键票据）
+     path=/（作用域最广） */
 export function cookieTicketScore(c) {
   if (!c) return 0;
   let score = 0;
@@ -182,8 +179,8 @@ export function cookieTicketScore(c) {
   return score;
 }
 
-/* 同分时的稳定次序：域越短越可能是父域 SSO 票据（先），最后按 name 兜底——
-   总要有全序，否则同一份 cookie 集合两次排序可能给出不同结果 */
+/* 同分时的次序：域越短越可能是父域 SSO 票据，最后按 name 兜底。
+   必须构成全序，否则同一份 cookie 集合两次排序可能给出不同结果 */
 export function compareCookiePriority(a, b) {
   const byScore = cookieTicketScore(b) - cookieTicketScore(a);
   if (byScore) return byScore;
@@ -192,10 +189,10 @@ export function compareCookiePriority(a, b) {
   return String((a && a.name) || "").localeCompare(String((b && b.name) || ""));
 }
 
-/* 备份条目数封顶。关键点：只在**超限时**排序切尾，正常规模原样返回——
-   否则每次备份的 cookie 顺序都会变，白白制造内容差异。
-   原实现直接 `cookies.length = max`（按 getAll 的返回顺序切尾，顺序未定义），
-   若票据落在尾部就是"每次备份都稳定缺它"的静默失效（12 复审 §4） */
+/* 备份条目数封顶。只在超限时排序切尾，正常规模原样返回，否则每次备份的 cookie 顺序
+   都会变，白白制造内容差异。
+   原来的写法是 `cookies.length = max`，按 getAll 的返回顺序切尾，而这个顺序未定义：
+   票据落在尾部时每次备份都稳定缺它，而且前后样本都缺，掉线检测也判不出来 */
 export function capCookies(cookies, max) {
   const list = Array.isArray(cookies) ? cookies.slice() : [];
   if (!(max > 0) || list.length <= max) return list;
@@ -204,7 +201,7 @@ export function capCookies(cookies, max) {
   return list;
 }
 
-/* 错误页判定：服务器故障或页面失踪——心跳连续命中则自动暂停任务（06 §4.3） */
+/* 错误页判定：服务器故障或页面失踪，心跳连续命中则自动暂停任务 */
 export function isErrorStatus(status) {
   return status >= 500 || status === 404;
 }
@@ -276,9 +273,8 @@ export function keywordHit(text, keyword) {
   return String(text == null ? "" : text).toLowerCase().includes(k);
 }
 
-/* 刷新间隔抖动：±pct%（rand 注入以便测试），下限 minMs（30 秒 alarms 红线）。
-   基准已贴地板（30 秒档）时对称抖动约一半样本会被地板抬平（04 复审 §4.5），
-   该档改为只正向抖动，保住去相关幅度 */
+/* 刷新间隔抖动：±pct%（rand 注入以便测试），下限 minMs（alarms 的 30 秒红线）。
+   30 秒档的基准已经贴在地板上，对称抖动会有一半样本被抬回原值，所以那一档只正向抖 */
 export function jitteredDelayMs(seconds, pct = 15, rand = Math.random, minMs = 30000) {
   const base = Math.max(Number(seconds) || 0, 30) * 1000;
   const p = Math.max(0, Math.min(50, pct)) / 100;
@@ -305,38 +301,38 @@ export function tabShowsUrl(tab, url) {
 }
 
 /* ================= 微信直连（公众号模板消息）纯逻辑 =================
-   为什么有这块：扩展的 Service Worker 带 <all_urls> 主机权限即可跨源 fetch，
-   实测能直连 api.weixin.qq.com（微信不返回 CORS 头，网页语境会 Failed to fetch，
-   扩展 SW 语境 HTTP 200）。所以"不经任何第三方服务商、也不用自建中继"是可行的。
-   下面把"发什么、怎么判失败"做成纯函数，Node 单测可离线覆盖（不需要真凭据）。 */
+   扩展的 Service Worker 带 <all_urls> 主机权限就能跨源 fetch，可以直连
+   api.weixin.qq.com（微信不返回 CORS 头，网页语境会被拦，扩展 SW 语境返回 200）。
+   所以不需要第三方推送服务商，也不用自建中继。
+   下面把"发什么、怎么判失败"做成纯函数，Node 单测离线可覆盖，不需要真凭据。 */
 
-/* 模板消息只认这两个变量名，与用户在测试号后台建的模板内容一一对应：
-   标题：{{title.DATA}} / 内容：{{content.DATA}}。名字写错会推出一张空白卡片，
-   而且**变量前必须有关键词加中文冒号**：官方运营规范要求模板内容中部是
-   「关键词名称:关键词内容参数」的组合，裸写变量（整行只有 {{title.DATA}}）
-   会被平台整行丢弃，接口却照旧返回 errcode=0 —— 用户看到的是「有标题、没正文」。
-   这两条也都写进了教程页与弹窗提示，并有门禁守着（verify-wechat-template-doc.mjs） */
+/* 模板消息只认这两个变量名，与用户在测试号后台建的模板一一对应：
+   {{title.DATA}} 与 {{content.DATA}}。两条规矩必须同时满足，否则用户收到的是
+   一张空白卡片，而接口照旧返回 errcode=0：
+     1. 变量名不能写错；
+     2. 变量前必须有关键词加中文冒号，写成"关键词：{{变量}}"。裸写变量（整行只有
+        {{title.DATA}}）会被平台整行丢弃。
+   这两条也写在教程页和弹窗提示里，有门禁 verify-wechat-template-doc.mjs 守着 */
 export const WECHAT_TEMPLATE_KEYS = ["title", "content"];
 
 /* 微信平台的硬上限（2023-05-04 生效的《关于规范公众号模板消息的再次公告》）：
-   中间主内容的**单个字段不超过 20 个字、且不支持换行**，超长由平台自动去掉、
-   不留任何提示——用户看到的是半截话，还会以为是扩展发漏了（17 报告）。
-   所以按 20 字自己截：既能决定"切在哪"（要紧的放前面），也能给出省略号，
-   让"内容就这些"与"被切掉了"能区分开。另：首行（first）与尾部备注（remark）
-   会被平台整体去除，模板里不能用这两个变量名。 */
+   中间主内容的单个字段不超过 20 个字，且不支持换行，超长由平台直接去掉、不留提示，
+   用户看到的是半截话。所以自己按 20 字截：既决定切在哪（要紧的放前面），
+   也由我们给出省略号，让"内容就这些"和"被切掉了"能区分开。
+   另外首行（first）与尾部备注（remark）会被平台整体去除，模板里不能用这两个变量名 */
 export const WECHAT_FIELD_MAX = 20;
 export const WECHAT_TITLE_MAX = 20;
 
-/* 压成单行：平台会去掉换行。照发的话，多行内容会先被连成一串、再整段截 20 字，
-   第一行之后的信息全丢（实测真实事件就是这样把站点名丢掉的）。
+/* 压成单行：平台会去掉换行。照原样发的话，多行内容会先被连成一串、再整段截 20 字，
+   第一行之后的信息全丢（真实事件就是这样把站点名丢掉的）。
    顺带把连续空白收成一个空格，免得 20 字预算被空格吃掉 */
 export function oneLine(s) {
   return String(s == null ? "" : s).replace(/\s+/g, " ").trim();
 }
 
-/* 单行 + 截断。超长补省略号——微信自己截是不留提示的。
-   按**码点**而不是 UTF-16 码元截（20 报告 §8）：按码元切会把 emoji 切成孤立代理，
-   卡片上显示成一个乱码方块。平台数的是"字"，码点数才是对的账 */
+/* 单行 + 截断，超长补省略号（微信自己截是不留提示的）。
+   按码点而不是 UTF-16 码元截：按码元切会把 emoji 切成孤立代理，卡片上显示成乱码方块。
+   平台数的是"字"，码点数才是对的账 */
 export function clipOneLine(s, n = WECHAT_FIELD_MAX) {
   const v = oneLine(s);
   const cps = Array.from(v);
@@ -346,16 +342,14 @@ export function clipOneLine(s, n = WECHAT_FIELD_MAX) {
 }
 
 /* 域名超长时从左侧截：右侧（注册域 + TLD）才是"这是哪个站"的识别信息。
-   优先在 label 边界上切——整段丢子域，而不是切进 label 中间：
-   "…xample.com" 看起来就像一个**别的**域名（实测 shop.example.com 被切成这样过），
-   而 "…example.com" / "example.com" 至少还是一个真实存在的域名。
+   优先在 label 边界上切，整段丢子域，而不是切进 label 中间：
+   "…xample.com" 看起来像一个别的域名，而 "…example.com" 至少还是真实存在的域名。
    例：a.b.c.example.com → …example.com
 
-   **放不下时返回 null**（20 报告 §2）：原先这里会硬截出一个 label 内部的碎片
-   （预算 5 → "…com"，预算 6 → "…e.com"），正是上面明令禁止的形态；而英文界面的事件名
-   长达 11~17 字符、把 20 字预算吃到只剩 0~6，于是**每一条英文卡片都命中这条硬截**。
-   现在由调用方决定"整段丢掉站点"，绝不给出"看着像另一个域名"的碎片。
-   例外：无点主机（内网名 / 单段域名）没有 label 边界可谈，从左侧截是唯一选择 */
+   放不下时返回 null，由调用方决定整段丢掉站点。这里不能硬截：预算 5 会截出 "…com"、
+   预算 6 会截出 "…e.com"，正是上面要避免的形态；而英文的事件名有 11~17 字符，
+   把 20 字预算吃到只剩 0~6，硬截会让每一条英文卡片都变成碎片。
+   例外：无点主机（内网名、单段域名）没有 label 边界可谈，从左侧截是唯一选择 */
 export function clipHostTail(host, n = WECHAT_FIELD_MAX) {
   const v = oneLine(host);
   if (v.length <= n) return v;
@@ -375,16 +369,16 @@ export function clipHostTail(host, n = WECHAT_FIELD_MAX) {
   return null;
 }
 
-/* 卡片标题 = "事件<分隔符>站点"。事件名不可省：站点放不下时宁可只留事件，
-   也不要从右边把事件名切掉——切了就等于没说发生了什么。
+/* 卡片标题 = "事件 + 分隔符 + 站点"。事件名不可省：站点放不下时宁可只留事件，
+   也不要从右边把事件名切掉，切了就等于没说发生了什么。
 
-   `sep` 由语言包给，**自带它需要的空格**（zh " · " / en "·"）：分隔符占几个字符是排版
-   决定，写死在代码里会让"20 字预算怎么分"没法按语言调（英文事件名长，必须把空格省掉
-   才放得下注册域）。预算 = max − 事件名 − 分隔符，剩下的全给站点；站点放不下完整域名
-   就整段不要（见 clipHostTail）。长度一律按码点算，与 clipOneLine 的账一致 */
+   sep 由语言包给，并且自带需要的空格（zh " · "、en "·"）：分隔符占几个字符是排版决定，
+   写死在代码里就没法按语言调预算（英文事件名长，必须把空格省掉才放得下注册域）。
+   预算 = max 减事件名减分隔符，剩下的全给站点；站点放不下完整域名就整段不要。
+   长度一律按码点算，与 clipOneLine 的账一致 */
 export function wechatTitleOf({ eventLabel, host, sep = " · ", max = WECHAT_TITLE_MAX } = {}) {
   const e = clipOneLine(eventLabel, max);
-  /* 分隔符**不做 trim**：它前后的空格是排版的一部分（zh " · " / en "·"）。
+  /* 分隔符不做 trim：它前后的空格是排版的一部分（zh " · "、en "·"）。
      只压平换行与连续空白，免得语言包里带进一个换行把 20 字预算搞乱 */
   const s = String(sep == null ? " · " : sep).replace(/\s+/g, " ") || "·";
   const h = oneLine(host);
@@ -431,7 +425,7 @@ export function buildTokenRequest(appId, secret, force = false) {
   };
 }
 
-/* 模板消息请求体。url 只在合法 http(s) 时带上——点击卡片跳转用，
+/* 模板消息请求体。url 只在合法 http(s) 时带上，用于点击卡片跳转，
    非法值会让整条消息被拒，宁可不给跳转也不要整条失败。
    两个字段值都过 clipOneLine：单行化（平台不支持换行）并截到平台的 20 字以内，
    免得微信那边截出半句话（这里同时也是最后一道防线：调用方万一直接塞长文本进来） */

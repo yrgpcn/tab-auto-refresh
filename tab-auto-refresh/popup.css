@@ -1,15 +1,15 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
-/* hidden 属性走的是浏览器默认样式（display:none），而作者样式里的任何 display 都会压过它——
-   同特异性下作者样式优先。这里栽过一次：#wechatRow 是 .row（display:flex），
-   于是 hidden 完全失效、开关关着那行也照样占高度（高度门禁的"总高≤600"看不出来，
-   只能靠"开/关两态高度必须不同"抓到）。显式声明一次，别让每个新增元素各踩一遍 */
+/* hidden 属性走的是浏览器默认样式（display:none），而作者样式里的任何 display 都会压过它，
+   同特异性下作者样式优先。这里栽过一次：#wechatRow 是 .row（display:flex），于是 hidden
+   完全失效，开关关着那行也照样占高度，而高度门禁只看"总高不超过 600"发现不了，
+   得靠"开、关两态高度必须不同"才抓得到。显式声明一次，省得每个新增元素各踩一遍 */
 [hidden] { display: none !important; }
 body {
-  /* Chrome 弹窗外框上限是 800x600；宽度 400px 是"双列开关"能放下的最小宽度。
-     高度不逐块算，改用 flex + max-height 兜底：内容不足 600px 时高度仍由内容决定（不会留白），
+  /* Chrome 弹窗外框上限是 800x600，宽度 400px 是"双列开关"能放下的最小宽度。
+     高度不逐块算，改用 flex 加 max-height 兜底：内容不足 600px 时高度仍由内容决定，
      超出时唯一的弹性块（任务列表）自动收缩、改为内部滚动。
-     这样"平时不滚动、一出现提示行（受限页面提示 / 地址无效 / 操作结果）才滚动"这种最难查的
-     组合也被兜住——靠给列表定一个固定封顶值是兜不住的，条件行的高度是常量，压不进去 */
+     这样"平时不滚动，一出现提示行（受限页面提示、地址无效、操作结果）才滚动"这种最难查的
+     组合也兜得住，靠给列表定一个固定封顶值是兜不住的，条件行的高度是常量，压不进去 */
   width: 400px;
   display: flex;
   flex-direction: column;
@@ -38,8 +38,8 @@ header {
   padding: 10px 12px;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
 }
-/* 任务卡片是唯一的弹性块：外层被 600px 压住时由它让步（收缩后列表内部滚动），
-   min-height:0 必需——flex 子项默认 min-height:auto 不会收缩到内容高以下 */
+/* 任务卡片是唯一的弹性块：外层被 600px 压住时由它让步，收缩后列表内部滚动。
+   min-height:0 必需，flex 子项默认 min-height:auto，不会收缩到内容高以下 */
 .card-tasks {
   flex: 0 1 auto;
   min-height: 0;
@@ -86,12 +86,12 @@ input[type="number"] {
   font-size: 12px;
   cursor: pointer;
 }
-/* 开关分组：双列网格。9 个开关单列排下来要 224px，而 Chrome 弹窗高度上限是 600px——
-   设置卡片一张的固定成本已经压到极限，再叠任务列表必然出滚动条。两列把它压成 5 行（104px）。
+/* 开关分组：双列网格。10 个开关单列排下来要 240px 左右，而 Chrome 弹窗高度上限是 600px，
+   设置卡片一张的固定成本已经压到极限，再叠任务列表必然出滚动条。两列把它压成 5 行。
    列宽必须用 minmax(0,1fr) 而不是 1fr：1fr 的隐含下限是 min-content，长标签会把列撑成
    不等宽（实测英文下 162/237px），换成 minmax(0,1fr) 才是确定的等宽两列。
-   代价是标签必须够短——标签一律单行，改短而不是让它折行或被省略号截断（换行/截断都会让栅格错位）。
-   span 的 min-width:0 同理必需：flex 子项默认 min-width:auto 不会收缩到内容宽以下 */
+   代价是标签必须够短且一律单行，改短而不是让它折行或被省略号截断，换行和截断都会让栅格错位。
+   span 的 min-width:0 同理必需，flex 子项默认 min-width:auto，不会收缩到内容宽以下 */
 .check-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -178,15 +178,15 @@ button { cursor: pointer; border: none; border-radius: 8px; font-size: 13px; fon
 .wx-state.ok { color: #059669; }
 
 /* 二级视图：四行输入框直接铺在主视图里必然顶破 600px 上限，所以整页切换。
-   用 display 而不是 hidden 属性控制——`#wechatView{display:block}` 的 id 特异性会盖过
-   [hidden] 的 display:none，用 hidden 会变成"永远看得见" */
+   这里用 display 而不是 hidden 属性控制：#wechatView 的 id 特异性会盖过 [hidden] 的
+   display:none，用 hidden 会变成永远看得见 */
 #wechatView { display: none; }
 body.wx-mode > *:not(#wechatView) { display: none; }
 body.wx-mode #wechatView { display: block; }
 .wx-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px 6px; }
 .wx-title { font-weight: 700; font-size: 14px; color: #1d4ed8; }
 .wx-intro { font-size: 11px; color: #6b7280; line-height: 1.55; margin-bottom: 8px; }
-/* 教程入口：摆在四个输入框之前——需要教程的正是还没拿到凭据、正要问"这四项去哪找"的人 */
+/* 教程入口：摆在四个输入框之前，因为需要教程的正是还没拿到凭据的人 */
 .wx-guide { display: inline-block; font-size: 12px; color: #1d4ed8; margin-bottom: 8px; }
 .wx-guide:hover { text-decoration: underline; }
 /* 模板内容写错是最常见的"推了但空白"，单独用警示色标出来 */

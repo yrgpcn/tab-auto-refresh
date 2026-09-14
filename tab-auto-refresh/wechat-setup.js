@@ -8,7 +8,7 @@ document.documentElement.lang = chrome.i18n.getUILanguage();
 for (const el of document.querySelectorAll("[data-i18n]")) {
   el.textContent = msg(el.dataset.i18n);
 }
-/* 插图的 alt 也走语言包（data-i18n-alt）—— 写死在 HTML 里的话，
+/* 插图的 alt 也走语言包（data-i18n-alt），写死在 HTML 里的话，
    英文界面会读出一段中文 */
 for (const el of document.querySelectorAll("[data-i18n-alt]")) {
   el.alt = msg(el.dataset.i18nAlt);
