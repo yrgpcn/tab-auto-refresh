@@ -140,7 +140,11 @@
   "wechatTestSending": { "message": "发送中…" },
   "wechatTestBody": { "message": "能收到即说明推送已配好" },
   "wechatEvTest": { "message": "测试消息" },
-  "wechatTitleSep": { "message": "·" },
+  "wechatEvKeywordShort": { "message": "关键词命中" },
+  "wechatEvStoppedShort": { "message": "任务停止" },
+  "wechatEvPausedShort": { "message": "任务暂停" },
+  "wechatEvSessionShort": { "message": "会话掉线" },
+  "wechatTitleSep": { "message": " · " },
   "wechatBodyKeyword": {
     "message": "出现关键词「$KW$」",
     "placeholders": { "kw": { "content": "$1" } }

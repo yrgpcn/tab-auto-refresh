@@ -560,6 +560,12 @@ test("clipOneLine keeps a single line and marks the cut with an ellipsis", () =>
   /* 换行先压平再截：否则平台会把多行连成一串后再砍，第一行之后的信息全丢 */
   assert.equal(clipOneLine("第一行\n第二行", 20), "第一行 第二行");
   assert.equal(clipOneLine("abcdef", 4), "abc…");
+  /* 按码点而不是 UTF-16 码元截（20 报告 §8）：emoji 是两个码元，
+     按码元切会留下一个孤立代理，卡片上显示成乱码方块 */
+  const emoji = clipOneLine("出现关键词「abcdefghijkl🔥」", 20);
+  assert.equal(Array.from(emoji).length, 20);
+  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/.test(emoji),
+    "不该切出孤立代理: " + JSON.stringify(emoji));
 });
 
 test("clipHostTail drops subdomains, never the registrable part", () => {
@@ -570,25 +576,62 @@ test("clipHostTail drops subdomains, never the registrable part", () => {
   /* 省略号放不下时（预算刚好等于域名长度）就不再前缀，只给域名本身 */
   assert.equal(clipHostTail("shop.example.com", 11), "example.com");
   assert.equal(clipHostTail("a.b.c.example.com", 12), "…example.com");
-  /* 注册域本身就超预算（长域名）：只剩硬截一途，保住右侧，
-     并清掉开头残留的 "-"（否则会输出 "…-domain.com"） */
-  assert.equal(clipHostTail("www.some-very-long-domain.com", 12), "…domain.com");
-  /* 完全没有点（不是域名）：只能硬截右边 */
+  /* 注册域本身就超预算（长域名）：**返回 null，由调用方整段丢掉站点**（20 报告 §2）。
+     旧实现会硬截出 "…domain.com" ——那不是这个站点的域名，看着像另一个站 */
+  assert.equal(clipHostTail("www.some-very-long-domain.com", 12), null);
+  assert.equal(clipHostTail("shop.example.com", 6), null);
+  assert.equal(clipHostTail("shop.example.com", 5), null);
+  /* 完全没有点（不是域名）：没有 label 边界可谈，只能硬截右边 */
   assert.equal(clipHostTail("很长的中文域名测试站点", 5), "…测试站点");
 });
 
+/* label 边界后缀判定（20 报告 §2 的回归断言用） */
+function isLabelBoundarySuffix(host, fragment) {
+  const bare = fragment.replace(/^…/, "");
+  const labels = host.split(".");
+  for (let i = 0; i < labels.length; i++) {
+    if (labels.slice(i).join(".") === bare) return true;
+  }
+  return false;
+}
+
 test("wechatTitleOf always keeps the event name and fits the 20-char budget", () => {
-  /* 站点放得下：事件 · 站点 */
-  assert.equal(wechatTitleOf({ eventLabel: "会话掉线", host: "example.com", sep: "·" }), "会话掉线 · example.com");
+  /* 站点放得下：事件 + 分隔符 + 站点（分隔符自带空格，zh 是 " · "） */
+  assert.equal(wechatTitleOf({ eventLabel: "会话掉线", host: "example.com", sep: " · " }), "会话掉线 · example.com");
   /* 没有站点（如测试消息）就不留分隔符，也不会留一个孤零零的点 */
-  assert.equal(wechatTitleOf({ eventLabel: "测试消息", host: "", sep: "·" }), "测试消息");
-  /* 站点超长：从左侧截，事件名一个字都不能少 */
-  const t = wechatTitleOf({ eventLabel: "关键词命中", host: "www.some-very-long-domain.com", sep: "·" });
-  assert.ok(t.startsWith("关键词命中 · "), t);
-  assert.ok(t.endsWith("domain.com"), t);
-  assert.ok(t.length <= WECHAT_TITLE_MAX, t + " 长度 " + t.length);
-  /* 英文用 "-" 作分隔符，口径一致 */
-  assert.equal(wechatTitleOf({ eventLabel: "test", host: "x.com", sep: "-" }), "test - x.com");
+  assert.equal(wechatTitleOf({ eventLabel: "测试消息", host: "", sep: " · " }), "测试消息");
+  /* 站点超长：从左侧截到 label 边界，事件名一个字都不能少 */
+  const t = wechatTitleOf({ eventLabel: "关键词命中", host: "a.b.c.example.com", sep: " · " });
+  assert.equal(t, "关键词命中 · …example.com");
+  assert.ok(Array.from(t).length <= WECHAT_TITLE_MAX, t + " 长度 " + Array.from(t).length);
+  /* 英文用更短的分隔符（"·"）才放得下注册域：事件名长，空格必须省掉 */
+  assert.equal(wechatTitleOf({ eventLabel: "test", host: "x.com", sep: "·" }), "test·x.com");
+});
+
+test("wechatTitleOf never emits a mid-label host fragment, at any budget", () => {
+  /* 20 报告 §2 的回归：英文事件名 11~17 字符，把 20 字预算吃到只剩 0~6，
+     旧实现（以及旧测试只用 11~12 的预算）因此完全没暴露这条路径——
+     实际发出的是 "keyword hit - …e.com" 这种"看着像另一个域名"的结果。
+     不变量：站点部分要么是 label 边界上的后缀，要么整段不出现，绝不给碎片 */
+  const hosts = ["x.io", "shop.example.com", "news.example.org.cn", "a.b.c.example.com", "www.some-very-long-domain.com"];
+  const labels = ["keyword", "stopped", "paused", "session", "test message", "关键词命中", "任务自动停止", "会话掉线"];
+  let withSite = 0;
+  for (const label of labels) {
+    for (const sep of ["·", " · ", "-"]) {
+      for (const host of hosts) {
+        const title = wechatTitleOf({ eventLabel: label, host, sep });
+        assert.ok(Array.from(title).length <= WECHAT_TITLE_MAX,
+          "超长: " + JSON.stringify(title) + " (" + Array.from(title).length + ")");
+        if (title === label) continue; /* 站点放不下 → 整段不要，允许 */
+        withSite++;
+        const fragment = title.slice(label.length + sep.length);
+        assert.ok(isLabelBoundarySuffix(host, fragment),
+          "切进了 label 中间: " + JSON.stringify(title) + "（源 " + host + "）");
+      }
+    }
+  }
+  /* 空跑守卫：必须真跑过"带站点"的分支，否则上面全是 continue，等于没测 */
+  assert.ok(withSite > 0, "没有任何用例真正带上站点，断言失去判别力");
 });
 
 test("buildWechatMessage never emits a newline or an over-long field", () => {

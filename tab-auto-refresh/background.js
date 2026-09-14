@@ -716,14 +716,17 @@ async function postWebhook(event, payload) {
 const WX_TOKEN_KEY = "wechatToken";
 const WX_LAST_KEY = "wechatLastResult";
 const WX_FETCH_TIMEOUT_MS = 15000;
-/* 事件 → 卡片标题用的文案键。前四个复用弹窗里的事件标签（不再新增一套同义键）；
+/* 事件 → 卡片标题用的文案键。**卡片标题另用一套短名，不复用弹窗的复选框标签**
+   （20 报告 §2）：复选框标签是给 400px 宽的弹窗看的，可以长（英文 "task auto-stopped"
+   17 字符）；卡片标题要和站点挤在平台的 20 字里，英文那套长标签会把预算吃光，
+   站点名要么被硬截成 "…e.com"、要么整段消失。所以 zh 用 4~5 字、en 用 6~7 字符。
    test 是「发送测试消息」按钮专用的伪事件——它只要求凭据填全，
    不受总开关与事件勾选约束（配好之前就得能试） */
 const WECHAT_EVENT_TITLE_KEYS = {
-  keyword: "webhookEvKeyword",
-  "task-stopped": "webhookEvStopped",
-  "task-paused": "webhookEvPaused",
-  "session-lost": "webhookEvSession",
+  keyword: "wechatEvKeywordShort",
+  "task-stopped": "wechatEvStoppedShort",
+  "task-paused": "wechatEvPausedShort",
+  "session-lost": "wechatEvSessionShort",
   test: "wechatEvTest",
 };
 
@@ -823,7 +826,7 @@ async function postWechat(event, payload, opts) {
       return;
     }
     const eventLabel = chrome.i18n.getMessage(
-      WECHAT_EVENT_TITLE_KEYS[event] || "webhookEvKeyword"
+      WECHAT_EVENT_TITLE_KEYS[event] || "wechatEvKeywordShort"
     );
     const body = buildWechatMessage({
       openId: settings.wechatOpenId,

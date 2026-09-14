@@ -334,19 +334,28 @@ export function oneLine(s) {
   return String(s == null ? "" : s).replace(/\s+/g, " ").trim();
 }
 
-/* 单行 + 截断。超长补省略号——微信自己截是不留提示的 */
+/* 单行 + 截断。超长补省略号——微信自己截是不留提示的。
+   按**码点**而不是 UTF-16 码元截（20 报告 §8）：按码元切会把 emoji 切成孤立代理，
+   卡片上显示成一个乱码方块。平台数的是"字"，码点数才是对的账 */
 export function clipOneLine(s, n = WECHAT_FIELD_MAX) {
   const v = oneLine(s);
-  if (v.length <= n) return v;
-  if (n <= 1) return v.slice(0, Math.max(n, 0));
-  return v.slice(0, n - 1) + "…";
+  const cps = Array.from(v);
+  if (cps.length <= n) return v;
+  if (n <= 1) return cps.slice(0, Math.max(n, 0)).join("");
+  return cps.slice(0, n - 1).join("") + "…";
 }
 
 /* 域名超长时从左侧截：右侧（注册域 + TLD）才是"这是哪个站"的识别信息。
    优先在 label 边界上切——整段丢子域，而不是切进 label 中间：
    "…xample.com" 看起来就像一个**别的**域名（实测 shop.example.com 被切成这样过），
    而 "…example.com" / "example.com" 至少还是一个真实存在的域名。
-   例：a.b.c.example.com → …example.com */
+   例：a.b.c.example.com → …example.com
+
+   **放不下时返回 null**（20 报告 §2）：原先这里会硬截出一个 label 内部的碎片
+   （预算 5 → "…com"，预算 6 → "…e.com"），正是上面明令禁止的形态；而英文界面的事件名
+   长达 11~17 字符、把 20 字预算吃到只剩 0~6，于是**每一条英文卡片都命中这条硬截**。
+   现在由调用方决定"整段丢掉站点"，绝不给出"看着像另一个域名"的碎片。
+   例外：无点主机（内网名 / 单段域名）没有 label 边界可谈，从左侧截是唯一选择 */
 export function clipHostTail(host, n = WECHAT_FIELD_MAX) {
   const v = oneLine(host);
   if (v.length <= n) return v;
@@ -356,23 +365,35 @@ export function clipHostTail(host, n = WECHAT_FIELD_MAX) {
     const tail = labels.slice(i).join(".");
     if (tail.length <= n) return tail.length + 1 <= n ? "…" + tail : tail;
   }
-  /* 连注册域本身都放不下（长域名，罕见）：只能硬截，保住右侧；
-     顺手去掉开头残留的 "-" / "."，免得出现 "…-domain.com" 这种别扭写法 */
-  if (n <= 1) return v.slice(-Math.max(n, 0));
-  return "…" + v.slice(-(n - 1)).replace(/^[-.]+/, "");
+  if (labels.length === 1) {
+    /* 无点主机：硬截左侧是唯一选择；顺手去掉开头残留的 "-" / "."，
+       免得出现 "…-domain.com" 这种别扭写法 */
+    if (n <= 1) return v.slice(-Math.max(n, 0));
+    return "…" + v.slice(-(n - 1)).replace(/^[-.]+/, "");
+  }
+  /* 有 label 边界、却连"注册域 + TLD"两段都放不下 → 交给调用方丢弃站点 */
+  return null;
 }
 
-/* 卡片标题 = "事件 · 站点"。事件名（4~5 字）不可省：站点放不下时宁可只留事件，
-   也不要从右边把事件名切掉——切了就等于没说发生了什么 */
-export function wechatTitleOf({ eventLabel, host, sep = "·", max = WECHAT_TITLE_MAX } = {}) {
+/* 卡片标题 = "事件<分隔符>站点"。事件名不可省：站点放不下时宁可只留事件，
+   也不要从右边把事件名切掉——切了就等于没说发生了什么。
+
+   `sep` 由语言包给，**自带它需要的空格**（zh " · " / en "·"）：分隔符占几个字符是排版
+   决定，写死在代码里会让"20 字预算怎么分"没法按语言调（英文事件名长，必须把空格省掉
+   才放得下注册域）。预算 = max − 事件名 − 分隔符，剩下的全给站点；站点放不下完整域名
+   就整段不要（见 clipHostTail）。长度一律按码点算，与 clipOneLine 的账一致 */
+export function wechatTitleOf({ eventLabel, host, sep = " · ", max = WECHAT_TITLE_MAX } = {}) {
   const e = clipOneLine(eventLabel, max);
-  const s = oneLine(sep) || "·";
+  /* 分隔符**不做 trim**：它前后的空格是排版的一部分（zh " · " / en "·"）。
+     只压平换行与连续空白，免得语言包里带进一个换行把 20 字预算搞乱 */
+  const s = String(sep == null ? " · " : sep).replace(/\s+/g, " ") || "·";
   const h = oneLine(host);
   if (!h) return e;
-  /* 两个空格与分隔符本身都要占位，剩下的才留给站点 */
-  const budget = max - e.length - s.length - 2;
+  const budget = max - Array.from(e).length - Array.from(s).length;
   if (budget < 4) return e; /* 留给站点的位置太小，显示个"…c"没有意义 */
-  return clipOneLine(e + " " + s + " " + clipHostTail(h, budget), max);
+  const tail = clipHostTail(h, budget);
+  if (!tail) return e; /* 放不下完整域名：只留事件，不给碎片 */
+  return clipOneLine(e + s + tail, max);
 }
 
 /* 凭据完整性：四样缺一不可。返回缺失项（键名），让弹窗能点名而不是笼统报错 */

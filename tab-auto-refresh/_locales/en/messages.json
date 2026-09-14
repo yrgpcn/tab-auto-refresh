@@ -140,7 +140,11 @@
   "wechatTestSending": { "message": "Sending…" },
   "wechatTestBody": { "message": "Got it - push works" },
   "wechatEvTest": { "message": "test message" },
-  "wechatTitleSep": { "message": "-" },
+  "wechatEvKeywordShort": { "message": "keyword" },
+  "wechatEvStoppedShort": { "message": "stopped" },
+  "wechatEvPausedShort": { "message": "paused" },
+  "wechatEvSessionShort": { "message": "session" },
+  "wechatTitleSep": { "message": "·" },
   "wechatBodyKeyword": {
     "message": "keyword hit: $KW$",
     "placeholders": { "kw": { "content": "$1" } }

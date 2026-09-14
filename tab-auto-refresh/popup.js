@@ -519,6 +519,13 @@ async function init() {
     const btn = $("wechatTestBtn");
     btn.disabled = true;
     btn.textContent = msg("wechatTestSending");
+    /* 先落盘再测试（20 报告 §3）：凭据输入框走 change（失焦）保存，而点这个按钮
+       必然先让输入框失焦 → 弹窗先发出 save-settings。两条消息在后台各自独立异步执行，
+       而 save-settings 自己也要先 await 一次 getSettings() 才能写盘，于是
+       wechat-test 的 getSettings() 排在它前面落地、读到旧值 —— 用户刚填完凭据点测试，
+       得到的是"还缺：appID、密钥、openid、模板ID"，实际发出的微信请求数是 0。
+       必须在这里 await，把"保存"与"测试"串成一条链。 */
+    await saveSettings();
     const res = await send({ type: "wechat-test" });
     btn.disabled = false;
     btn.textContent = msg("wechatTestBtn");
