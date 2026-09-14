@@ -58,6 +58,9 @@ function applyI18n() {
   for (const el of document.querySelectorAll("[data-i18n-placeholder]")) {
     el.placeholder = msg(el.dataset.i18nPlaceholder);
   }
+  for (const el of document.querySelectorAll("[data-i18n-title]")) {
+    el.title = msg(el.dataset.i18nTitle);
+  }
 }
 
 async function syncAlarms() {

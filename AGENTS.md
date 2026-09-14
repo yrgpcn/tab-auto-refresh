@@ -43,7 +43,7 @@
 - alarm 命名：刷新 `refresh-<tabId>`、静默心跳 `hb-<tabId>`；`PREFIX` / `HB_PREFIX` / `PRESETS` 定义在 `shared/config.js`，后台与弹窗共用（service worker 是 ES module）。刷新采用"一次性 when（jitteredDelayMs 在原周期上 ±15% 抖动、下限 30 秒；**30 秒档因贴地板改为只正向抖动**，否则约一半样本被抬回 30000、去相关失效）+ periodInMinutes 兜底"的双保险调度，每次 onAlarm 触发后重新 arm；心跳 alarm 带随机初始相位（1 秒~一个周期，下限防首拍立即触发）避免多任务同拍；`chrome.idle` 回到 active 时把过期刷新 alarm 重走完整周期、过期心跳打散 0~60 秒重建（睡眠漂移自愈）
 - 纯逻辑（间隔兜底、格式化、域名/URL 匹配、掉线决策 `decideBackupWrite` + 落盘映射 `applyBackupAction`、登录页探测 `looksLikeLoginPage`、关键词命中 `keywordHit`、抖动 `jitteredDelayMs`、关键词解析/读取 `parseKeywords`/`getTaskKeywords`、在场与新增命中划分 `pickHits`、webhook 地址校验 `normalizeWebhookUrl`、错误状态判定 `isErrorStatus`）在 `shared/logic.js`，被 `tests/tab-auto-refresh/logic.test.mjs` 覆盖。**关键**：`backupCookies` 写盘与测试都走同一个 `applyBackupAction`（决策+落盘二合一，返回 `{write, notify}`，write=null 即冻结且节流不写）——04 复审 §4.4 指出"测试复刻一遍映射、后台另写一遍"是契约两半漂移的温床（当初死代码 bug 即此类），共用纯函数后测试与实现不可能悄悄分家
 - 右键菜单 contexts 为 `["tab", "page"]`；快捷键 `toggle-refresh` 默认 `Alt+Shift+R`
-- 国际化：`_locales/zh_CN` 与 `_locales/en` 全量文案，popup HTML 通过 `data-i18n` / `data-i18n-placeholder` 注入；manifest 的 `name` / `description` / `action.default_title` / 命令 `description` 均引用 i18n 键
+- 国际化：`_locales/zh_CN` 与 `_locales/en` 全量文案，popup HTML 通过 `data-i18n` / `data-i18n-placeholder` / `data-i18n-title` 注入（`title` 这条通道专门用来把开关的长解释挪出可见版面、只留悬停可见，2026-09-14 弹窗精简时引入）；manifest 的 `name` / `description` / `action.default_title` / 命令 `description` 均引用 i18n 键
 - 后台对 `tasks` 的读改写必须经过 `withTaskLock` 串行队列，防止弹窗 / 右键菜单 / 定时器并发覆盖
 - 弹窗每秒重新拉取 alarm 列表再重绘倒计时：alarm 周期触发不会触发 `storage.onChanged`，只重绘文本会让倒计时停在 00:00
 - 后台保存设置时合并既有 `settings`，避免只更新复选框时丢失 `lastIntervalSec`
@@ -99,7 +99,8 @@
   - `verify-sw-restart-state.mjs` — 跨 SW 实例的运行时状态（二次 `import` 模拟 SW 重启 + 共享 storage 桩）；配套 `对照-修复前_内存计数/` 冻结修复前源码做红→绿对照，退出码可直接判定
   - `verify-prune-order.mjs` — `prune` 重挂接/清理顺序（05 §2"把刚 arm 的 alarm 反手清成僵尸"的回归场景）；配套 `对照-修复前(73a8be6)-prune顺序.mjs`
   - `verify-streak.mjs` — 掉线探测的采样序列
-  - `_check_i18n.mjs` — 语言包完整性（zh/en 键位对齐、`data-i18n*` 与 `getMessage` 引用无悬空、manifest `__MSG__` 可达）
+  - `_check_i18n.mjs` — 语言包完整性（zh/en 键位对齐、`data-i18n*`（含 `-title`）与 `getMessage`/`msg` 引用无悬空、manifest `__MSG__` 可达）
+  - `verify-popup-titles.mjs` — 弹窗悬停文案是否真的渲染（`data-i18n-title` 通道；与语言包逐字比对 + 空跑守卫）。堵的盲区：i18n 检查器只验"键存在"，截图只覆盖 `applyI18n` 前四步，`title` 循环被删掉时两者都照常通过、提示却静默变空。需本机 Chrome + playwright
   - `_gen_prune_harness.mjs` / `_extract_text.mjs` — 取源工具：顺序类缺陷用"从仓库源码原样切片"而非手写复刻；抓网页一律 `curl -sL`（不跟 301 只会拿到跳转壳）
 - **方法学红线（踩过坑）**：若验证脚本连"修复前源码"也判过，先怀疑**桩件监听器数组跨实例累积**——chrome 桩的 `addListener` 共用同一数组、新实例的监听器在末尾，必须取 `listeners.x.at(-1)`；取 `[0]` 读到的是上个实例的处理器，会让基线假绿
 - **待决（08 §3.8 路线 B）**：`verify-prune-order.mjs` / `_gen_prune_harness.mjs` 实为测试资产而非审核笔记，可考虑挪进 `tests/` 并挂 CI，使上述引用真正成立；未获批前维持本地
@@ -108,7 +109,7 @@
 
 1. `node scripts/validate.mjs`：JSON/manifest/语言包/JS 语法一键校验（等价旧手工步骤 1-2）。注意它会遍历**整个仓库根**做 JS 语法检查，故 `_code-review/` 里的脚本语法错同样会让本地校验 exit=1
 2. `node --test "tests/**/*.test.mjs"`：纯逻辑单元测试（引号必需，避免 shell 提前展开。glob 形式在 Node 24 与较新的 Node 22（本机 22.22.2 实测可用）均可；Node 22 早期如 22.14 不支持、报找不到文件，该环境下改用显式路径 `node --test tests/tab-auto-refresh/logic.test.mjs`）
-3. 常驻回归（改动心跳 / 掉线探测 / 自动暂停 / 保活 / `prune` 时必跑，脚本在本地归档目录）：`node _code-review/verify-sw-restart-state.mjs`、`node _code-review/verify-prune-order.mjs`、`node _code-review/verify-streak.mjs`；语言包改动另跑 `node _code-review/_check_i18n.mjs`
+3. 常驻回归（改动心跳 / 掉线探测 / 自动暂停 / 保活 / `prune` 时必跑，脚本在本地归档目录）：`node _code-review/verify-sw-restart-state.mjs`、`node _code-review/verify-prune-order.mjs`、`node _code-review/verify-streak.mjs`；语言包或弹窗文案改动另跑 `node _code-review/_check_i18n.mjs` 与 `_code-review/verify-popup-titles.mjs`（后者需 playwright 的 `NODE_PATH`）
 4. UI 改动后可用 `scripts/screenshot-popup.mjs` 重新生成 `docs/tab-auto-refresh/popup.png`
 5. `chrome://extensions` 开发者模式加载插件文件夹，验证：设置/停止、倒计时归零后继续、右键菜单（页面+标签页）、立即刷新、角标计数、暂停/恢复全部、快捷键记住上次间隔、自动清理通知；1.7.0 新增：点「开始」**不弹任何授权框**一次成任务、30 秒任务下 12~20 秒能看到注入的心跳事件（DevTools 里断点或加 listener 观察）、同站另开无关标签页无心跳、同页停任务再启心跳恢复、关键词命中弹通知并停任务、模拟掉线（清服务端会话）后角标变红并通知、睡眠唤醒后过期 alarm 被重建
 
