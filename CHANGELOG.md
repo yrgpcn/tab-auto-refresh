@@ -2,7 +2,9 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
-## [tab-auto-refresh 1.8.0] - 2026-09-14
+## [tab-auto-refresh 2.0.0] - 2026-09-15
+
+> 1.7.0 与 1.8.0 曾作为开发版本号存在，均未单独打 tag 发布；本 2.0.0 是首次包含两者全部内容的发布版本。
 
 ### Added
 - 微信直连通知（默认关闭）：扩展的 service worker 直接调用腾讯官方接口（`api.weixin.qq.com`）把通知推成微信模板消息，不经任何中继服务器、也不用第三方推送服务商，手机上不需要装任何 App。填入四项凭据（appID、appsecret、openid、模板 ID，来自微信"公众平台接口测试账号"，扫码即申请、免资质、免费）即可，与 Webhook 共用"通知哪些事件"的勾选，两者可以同时开启
@@ -32,6 +34,9 @@
 - `sessionProbe` 增加收敛。站点掉线后探针 `lost=true`，用户停掉该站任务时探针没有任何清理路径，于是稍后在同一站点重建任务时，`startTask` 里那次"首次刷新前关掉浏览器"的备份会被 `isProbeLost` 跳过。现在 `pruneCookieBackups` 按"仍被任务引用的根域"收敛探针，顺带止住条目的无界增长
 - 关掉"重启后恢复登录"时立即清掉遗留备份。README 承诺"关闭状态下不备份、不恢复，遗留备份也会被自动清除"，而清理原先只发生在 `stopTask` 与启动 `prune` 里，用户读完安全说明关掉开关后，含 HttpOnly 登录票据的明文 cookie 仍躺在 `chrome.storage.local`。现在 `storage.onChanged` 把 `cookieBackup` 一并纳入收敛条件
 - CHANGELOG 1.7.0 的 Added 条目恢复到收窄后的口径：同版本 Added 写着"标题/正文关键词"，而 Fixed 写着"不再扫 `document.body.innerText`"，自相矛盾。另把"测试号…无时间限制"这一无法核实的说法改为"免资质、免费"
+
+- 微信直连教程页与弹窗里的模板内容示范，原先写成裸变量一行（`{{title.DATA}} {{content.DATA}}`），不符合微信平台对模板内容的解析规则——变量前必须是「关键词名称：关键词内容参数」（中文冒号）的组合，裸变量整行会被平台丢弃、且接口照常返回成功，照抄示范的用户会得到只有模板标题的空白卡片且没有任何错误码可查。已改为「标题：{{title.DATA}}」/「内容：{{content.DATA}}」两行，弹窗常驻提示与悬停提示同步修正，并新增门禁 `verify-wechat-template-doc.mjs` 盯住"给用户看的模板示范必须合规"
+- README 的弹窗截图更新为当前版本实拍：原图摄于微信直连上线前（9 个开关、无「微信直连」一格），与实际界面不符；现以真实加载的扩展实拍替换，并新增微信开启态的第二张截图（`docs/tab-auto-refresh/popup-wechat.png`）
 
 ## [tab-auto-refresh 1.7.0] - 2026-09-11
 
