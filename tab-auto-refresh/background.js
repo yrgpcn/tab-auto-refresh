@@ -15,6 +15,7 @@ import {
   jitteredDelayMs,
   getTaskKeywords,
   keywordHit,
+  normalizeStoredSettings,
   normalizeWebhookUrl,
   notifyEventsOf,
   oneLine,
@@ -79,16 +80,7 @@ async function ensureTaskTabIds() {
   return taskTabIdSet;
 }
 
-/* 存盘设置 → 生效设置。除补默认值外还承接键改名：1.7.0 的事件清单叫 webhookEvents，
-   1.8.0 起叫 notifyEvents。判断"存盘里有没有新键"必须在 Object.assign 之前做，
-   因为合并之后新键总在（默认值注入），老用户的选择会被默认值覆盖成全选 */
-function normalizeStoredSettings(stored) {
-  const s = Object.assign({}, DEFAULT_SETTINGS, stored || {});
-  if (!Array.isArray((stored || {}).notifyEvents) && Array.isArray((stored || {}).webhookEvents)) {
-    s.notifyEvents = stored.webhookEvents;
-  }
-  return s;
-}
+/* 存盘设置 → 生效设置：共用 normalizeStoredSettings（shared/logic.js），弹窗同款 */
 
 /* 偏好设置存 chrome.storage.sync 跨设备同步；旧版本留在 local 的设置自动迁移 */
 async function getSettings() {
@@ -97,15 +89,15 @@ async function getSettings() {
     chrome.storage.local.get("settings"),
   ]);
   if (syncData.settings) {
-    return normalizeStoredSettings(syncData.settings);
+    return normalizeStoredSettings(syncData.settings, DEFAULT_SETTINGS);
   }
   if (localData.settings) {
-    const migrated = normalizeStoredSettings(localData.settings);
+    const migrated = normalizeStoredSettings(localData.settings, DEFAULT_SETTINGS);
     await chrome.storage.sync.set({ settings: migrated });
     await chrome.storage.local.remove("settings");
     return migrated;
   }
-  return normalizeStoredSettings(null);
+  return normalizeStoredSettings(null, DEFAULT_SETTINGS);
 }
 
 /* 全局暂停是本机状态，跟随任务一起存 chrome.storage.local */

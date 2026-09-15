@@ -8,6 +8,20 @@ export const DEFAULT_INTERVAL_SEC = 300;
    旧键由 notifyEventsOf 接续 */
 export const NOTIFY_EVENTS = ["session-lost", "keyword", "task-stopped", "task-paused"];
 
+/* 存盘设置 → 生效设置（后台与弹窗共用一份，避免兼容逻辑各写一份后分叉）：
+   补默认值 + 承接键改名。1.7.0 的事件清单叫 webhookEvents，1.8.0 起叫 notifyEvents。
+   判断"存盘里有没有新键"必须按原始 stored 在合并默认值之前做——合并之后新键总在
+   （默认值注入），老用户的勾选会被默认值悄悄覆盖成全选。
+   返回值不携带旧键：调用方把返回值写回存盘即顺手完成迁移清理 */
+export function normalizeStoredSettings(stored, defaults) {
+  const s = Object.assign({}, defaults || {}, stored || {});
+  if (!Array.isArray((stored || {}).notifyEvents) && Array.isArray((stored || {}).webhookEvents)) {
+    s.notifyEvents = stored.webhookEvents;
+  }
+  delete s.webhookEvents;
+  return s;
+}
+
 /* 兜底刷新间隔：无效输入与过小值都按最小间隔处理（30 秒起步） */
 export function clampInterval(seconds, min = MIN_INTERVAL_SEC) {
   const n = Math.floor(Number(seconds));

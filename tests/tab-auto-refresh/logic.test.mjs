@@ -20,6 +20,7 @@ import {
   getTaskKeywords,
   pickHits,
   normalizeWebhookUrl,
+  normalizeStoredSettings,
   isErrorStatus,
   decideBackupWrite,
   BACKUP_ACT,
@@ -406,6 +407,22 @@ test("notifyEventsOf reads the new key and keeps the 1.7.0 webhookEvents value",
     ["keyword"]
   );
   assert.deepEqual(notifyEventsOf({}), NOTIFY_EVENTS);
+});
+
+test("normalizeStoredSettings merges defaults, migrates the old key and drops it", () => {
+  const d = { notifyEvents: ["session-lost"], keepAlive: true, webhookTemplateId: "" };
+  /* 老安装只存了 webhookEvents：勾选接续进新键，且旧键从返回值中删除（写回存盘即完成迁移） */
+  const old = normalizeStoredSettings({ webhookEvents: ["keyword"] }, d);
+  assert.deepEqual(old.notifyEvents, ["keyword"]);
+  assert.equal("webhookEvents" in old, false);
+  assert.equal(old.keepAlive, true);
+  /* 新键存在时以它为准，不被默认值覆盖 */
+  const fresh = normalizeStoredSettings({ notifyEvents: ["task-stopped"] }, d);
+  assert.deepEqual(fresh.notifyEvents, ["task-stopped"]);
+  assert.equal("webhookEvents" in fresh, false);
+  /* 空 stored → 默认值原样回来；且不会因 defaults 缺省而抛错 */
+  assert.deepEqual(normalizeStoredSettings(null, d), d);
+  assert.deepEqual(normalizeStoredSettings({ webhookEvents: ["keyword"] }), { notifyEvents: ["keyword"] });
 });
 
 test("buildTokenRequest follows the stable_token contract", () => {

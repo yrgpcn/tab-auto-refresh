@@ -6,6 +6,7 @@ import {
   formatCountdown,
   formatInterval,
   getTaskKeywords,
+  normalizeStoredSettings,
   normalizeWebhookUrl,
   notifyEventsOf,
   parseKeywords,
@@ -103,12 +104,9 @@ async function refreshState() {
   const local = await chrome.storage.local.get(["tasks", "pausedAll", "wechatLastResult"]);
   tasks = local.tasks || {};
   const stored = data.settings || {};
-  settings = Object.assign({}, DEFAULT_SETTINGS, stored);
-  /* 1.7.0 的事件清单键名是 webhookEvents：必须在合并默认值之后按"原始存储里有没有新键"
-     再定夺一次，否则默认值会把老用户的勾选悄悄覆盖成全选（后台同处理） */
-  if (!Array.isArray(stored.notifyEvents) && Array.isArray(stored.webhookEvents)) {
-    settings.notifyEvents = stored.webhookEvents;
-  }
+  /* 与后台共用同一份兼容逻辑（shared/logic.js）：1.7.0 的 webhookEvents 勾选
+     接续进 notifyEvents，返回值已不带旧键，写回存盘即完成迁移清理 */
+  settings = normalizeStoredSettings(stored, DEFAULT_SETTINGS);
   pausedAll = !!local.pausedAll;
   wechatLast = local.wechatLastResult || null;
   await syncAlarms();

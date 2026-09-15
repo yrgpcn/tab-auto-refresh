@@ -2,6 +2,14 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## [Unreleased]
+
+### Changed
+- 「`webhookEvents` → `notifyEvents`」的兼容判断合并为 `shared/logic.js` 的 `normalizeStoredSettings`，后台与弹窗共用一份（原先各写一份，后续容易分叉）；且返回值不再携带旧键——设置写回存盘时顺手清掉遗留的 `webhookEvents`，不再随 `storage.sync` 在各设备间空转
+
+### Fixed
+- README 的「全局暂停」补明确语义：暂停只停自动刷新，静默心跳与后台保活继续维持登录会话。暂停不停心跳是有意设计——停了反而可能让登录过期，此前文档容易读成"全部后台活动都停"
+
 ## [tab-auto-refresh 2.0.0] - 2026-09-15
 
 > 1.7.0 与 1.8.0 曾作为开发版本号存在，均未单独打 tag 发布；本 2.0.0 是首次包含两者全部内容的发布版本。
