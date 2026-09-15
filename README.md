@@ -4,7 +4,9 @@
 
 [![CI](https://github.com/yrgpcn/tab-auto-refresh/actions/workflows/ci.yml/badge.svg)](https://github.com/yrgpcn/tab-auto-refresh/actions/workflows/ci.yml)
 
-![弹窗截图](./docs/tab-auto-refresh/popup.png)
+![弹窗截图（真实扩展实拍）](./docs/tab-auto-refresh/popup.png)
+
+![微信直连开启后：出现「配置…」入口](./docs/tab-auto-refresh/popup-wechat.png)
 
 ## 功能特性
 
