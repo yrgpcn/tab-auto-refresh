@@ -49,6 +49,21 @@ const RECLAIM_WATCH_MS = 20000;
 /* 备份失败（如触顶 storage 配额）只告警一次；落存储持久化，SW 重启不重置 */
 const BACKUP_WARN_KEY = "cookieBackupWarnedOnce";
 
+/* 系统通知的 ID 一律由这里生成。两个原因：Chrome 按 ID 去重与替换，而"点通知跳到对应
+   标签页"和"情况解决了就把通知收掉"都要能从 ID 反解出对象；原先四处字符串字面量各写
+   一份，改一处就会让另一处反解失败，而且是静默失败。
+   session-lost 带的是注册域而不是 tabId：同一站点开几个标签页都只该有一条掉线通知，
+   点击时再按根域反查在监控它的哪个标签页 */
+const NOTIF_ID = {
+  keywordHit: (tabId) => "keyword-hit-" + tabId,
+  taskStopped: (tabId) => "refresh-stopped-" + tabId,
+  taskPaused: (tabId) => "task-paused-" + tabId,
+  sessionLost: (root) => "session-lost-" + root
+};
+/* ID 里直接带 tabId 的前缀，点击跳转按这张表反解 */
+const NOTIF_TAB_PREFIXES = ["keyword-hit-", "refresh-stopped-", "task-paused-"];
+const NOTIF_SESSION_PREFIX = "session-lost-";
+
 function alarmName(tabId) {
   return PREFIX + tabId;
 }
@@ -161,6 +176,7 @@ async function reportSessionSignal(root, host, suspect) {
     const p = all[root] || { sus: 0, lost: false, lastNotifiedAt: 0 };
     const stamp = () => (p.sus || 0) + "|" + (p.lost ? 1 : 0) + "|" + (p.lastNotifiedAt || 0);
     const before = stamp();
+    const wasLost = !!p.lost;
     let notify = false;
     const now = Date.now();
     if (suspect) {
@@ -182,6 +198,9 @@ async function reportSessionSignal(root, host, suspect) {
     if (stamp() !== before) {
       all[root] = p;
       await chrome.storage.local.set({ [PROBE_KEY]: all });
+      /* 重新登录成功就把"待重登"那条通知收掉：角标已经变回蓝色，通知中心里留着
+         是让人去登一个已经登录上的站点。只在从 lost 翻回正常的那一刻清一次 */
+      if (wasLost && !p.lost) clearNotice(NOTIF_ID.sessionLost(root));
       await updateBadge();
     }
     if (notify) await notifySessionLost(host);
@@ -218,6 +237,12 @@ function startTask(tabId, seconds, keyword, keepWatching) {
       if (keepWatching) tasks[tabId].onHit = "continue";
     }
     await setTasks(tasks);
+    /* 重新开始就是新的一轮：这个标签页上旧的命中/停止/暂停通知都已经不成立，
+       留着等于让用户对着上个周期的结论做判断。
+       不清 session-lost：那是站点级状态，与本标签页重不重启无关 */
+    clearNotice(NOTIF_ID.keywordHit(tabId));
+    clearNotice(NOTIF_ID.taskStopped(tabId));
+    clearNotice(NOTIF_ID.taskPaused(tabId));
     /* 开启任务时立即备份一次，避免首次刷新前关闭浏览器导致无备份可恢复 */
     await backupCookies(tabId);
     await armRefresh(tabId, safe);
@@ -236,6 +261,10 @@ function stopTask(tabId) {
     if (!tasks[tabId]) return;
     stopKeepAlive(tabId);
     detectChains.delete(tabId); /* 终止该页在飞的关键词检测链 */
+    /* 只清"自动暂停"那条：任务都没了，暂停中的提示留着也无法处理。
+       不清 keyword-hit 与 task-stopped：前者往往是 stopTask 的起因（命中即停是默认行为），
+       在这里清等于把用户刚收到的那条通知立刻撤回；后者正是这次停止本身的通知 */
+    clearNotice(NOTIF_ID.taskPaused(tabId));
     /* 运行时状态一并清（会话态）：真假人活动时间戳与错误/验证墙连击都归属该标签页 */
     await rt(() =>
       chrome.storage.session.remove([
@@ -301,12 +330,17 @@ async function pruneStaleProbes(roots) {
   const all = data[PROBE_KEY];
   if (!all) return;
   const kept = {};
-  let dropped = 0;
-  for (const [root, value] of Object.entries(all)) {
-    if (roots.has(root)) kept[root] = value;
-    else dropped++;
+  const dropped = [];
+  for (const root of Object.keys(all)) {
+    if (roots.has(root)) kept[root] = all[root];
+    else dropped.push(root);
   }
-  if (dropped > 0) await chrome.storage.local.set({ [PROBE_KEY]: kept });
+  if (dropped.length > 0) {
+    await chrome.storage.local.set({ [PROBE_KEY]: kept });
+    /* 站点不再被任何任务监控，它的"待重登"通知已经没有落点：按根域生成的 ID
+       不随任务消失，只能在这里跟着探针一起收掉 */
+    for (const root of dropped) clearNotice(NOTIF_ID.sessionLost(root));
+  }
 }
 
 /* 备份清理三条件：站点不再被任何任务使用、超过 30 天 TTL、超过 20 站上限（按时间留新）。
@@ -677,7 +711,7 @@ async function onKeywordHit(tabId, task, newly, present) {
   const label = newly.join(", ");
   const message = chrome.i18n.getMessage("notifKeywordHits", [label]);
   chrome.notifications
-    .create("keyword-hit-" + tabId, {
+    .create(NOTIF_ID.keywordHit(tabId), {
       type: "basic",
       iconUrl: "icons/icon48.png",
       title: chrome.i18n.getMessage("notifTitle"),
@@ -1081,9 +1115,60 @@ async function updateBadge() {
   }
 }
 
+/* 收通知的唯一入口。什么时候收哪一条，写在各自的调用点上（startTask / stopTask /
+   resumeTaskAuto / reportSessionSignal / pruneStaleProbes），判据都是"这条通知还成不成立"
+   而不是"任务还存不存在"。ID 已不存在时 Chrome 返回 false，不抛错 */
+function clearNotice(id) {
+  try {
+    Promise.resolve(chrome.notifications.clear(id)).catch(() => {});
+  } catch (e) {
+    /* 系统通知整体不可用：没有可清理的东西，也不需要上报 */
+  }
+}
+
+function notifTabId(id) {
+  for (const p of NOTIF_TAB_PREFIXES) {
+    if (id.startsWith(p)) {
+      const n = Number(id.slice(p.length));
+      return Number.isInteger(n) && n >= 0 ? n : null;
+    }
+  }
+  return null;
+}
+
+/* 把某个标签页带到前台。通知点开的用途就是"人过去了，接着处理"，
+   所以跳转失败（标签页早就关了）只要不抛错即可，不给任何提示 */
+async function focusTab(tabId) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab || typeof tab.id !== "number") return;
+  await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+  if (typeof tab.windowId === "number") {
+    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+  }
+}
+
+chrome.notifications.onClicked.addListener(async (id) => {
+  try {
+    clearNotice(id); /* 点过就算处理过了，不留到用户手动划掉 */
+    const tabId = notifTabId(id);
+    if (tabId !== null) {
+      await focusTab(tabId);
+      return;
+    }
+    if (!id.startsWith(NOTIF_SESSION_PREFIX)) return;
+    /* 掉线通知的 ID 带的是注册域：跳到正在监控这个站点的任一标签页，让用户去重新登录 */
+    const root = id.slice(NOTIF_SESSION_PREFIX.length);
+    const tasks = await getTasks();
+    const hit = Object.keys(tasks).find((k) => siteRoot(hostOf(tasks[k].url)) === root);
+    if (hit) await focusTab(Number(hit));
+  } catch (e) {
+    /* 点击跳转是锦上添花，绝不能在监听器里抛未处理拒绝 */
+  }
+});
+
 async function notifyTaskStopped(tabId, url, reason) {
   chrome.notifications
-    .create("refresh-stopped-" + tabId, {
+    .create(NOTIF_ID.taskStopped(tabId), {
       type: "basic",
       iconUrl: "icons/icon48.png",
       title: chrome.i18n.getMessage("notifTitle"),
@@ -1108,10 +1193,14 @@ async function stopTaskWithNotice(tabId, reason) {
   await notifyTaskStopped(tabId, url, reason);
 }
 
-/* 服务器端会话失效提醒：cookie 备份只能恢复票据，救不回已注销的会话 */
+/* 服务器端会话失效提醒：cookie 备份只能恢复票据，救不回已注销的会话。
+   通知 ID 一律归一到注册域：调用方可能给整页主机名（www.example.com）也可能给根域，
+   不归一的话一次掉线会因为 SSO 在兄弟子域上而发出两条几乎一样的通知，
+   而点击跳转与恢复时的清理都按根域反查，对不上就是静默失效。正文照旧显示调用方给的主机 */
 async function notifySessionLost(host) {
+  const root = siteRoot(host) || host;
   chrome.notifications
-    .create("session-lost-" + host, {
+    .create(NOTIF_ID.sessionLost(root), {
       type: "basic",
       iconUrl: "icons/icon48.png",
       title: chrome.i18n.getMessage("notifTitle"),
@@ -1540,7 +1629,7 @@ async function pauseTaskAuto(tabId, reason) {
     reason === "captcha" ? "notifTaskPausedCaptcha" : "notifTaskPausedError"
   );
   chrome.notifications
-    .create("task-paused-" + tabId, {
+    .create(NOTIF_ID.taskPaused(tabId), {
       type: "basic",
       iconUrl: "icons/icon48.png",
       title: chrome.i18n.getMessage("notifTitle"),
@@ -1570,7 +1659,10 @@ async function resumeTaskAuto(tabId) {
   /* 恢复即清连击：避免"过墙后残留计数"让下一次同因暂停来得过早 */
   await rtSet(rtTab(RT_ERROR, tabId), 0);
   await rtSet(rtTab(RT_CAPTCHA, tabId), 0);
-  if (done) await updateBadge();
+  if (done) {
+    clearNotice(NOTIF_ID.taskPaused(tabId)); /* 暂停的原因已经消失，通知跟着作废 */
+    await updateBadge();
+  }
 }
 
 /* 与弹窗通信 */

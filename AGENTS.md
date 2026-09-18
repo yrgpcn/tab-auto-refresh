@@ -112,6 +112,13 @@
 - 失败要留痕：错误码经 `wechatErrorKey` 翻成"该去哪改"的提示，最近一次结果写 `chrome.storage.local` 的 `wechatLastResult`，弹窗显示
 - 凭据四项存在 `settings`（即 `chrome.storage.sync`），会随 Google 账号同步到其它桌面 Chrome，README 有说明
 
+### 系统通知
+
+- 四类通知的 ID 一律由 `background.js` 的 `NOTIF_ID` 生成，`NOTIF_TAB_PREFIXES` 是点击反查用的清单，新增一类通知要同时进这两处，否则"清理"与"点开跳转"会静默对不上（`tests/tab-auto-refresh/notifications.test.mjs` 有一条扫源码的守卫）
+- `session-lost` 的 ID 用注册域而不是整页主机名：SSO 常落在兄弟子域，按主机名会为同一次掉线发出两条。收掉的时机是探针从 `lost` 翻回正常，以及站点不再被任何任务监控（`pruneStaleProbes`）
+- 清理按时机分，不按"任务还存不存在"一刀切：`startTask` 清该标签页的 keyword-hit / task-stopped / task-paused（上一轮的结论已作废）；`stopTask` 只清 task-paused（keyword-hit 往往正是命中即停的产物，在 `stopTask` 里清等于当场撤回用户刚收到的通知）；`resumeTaskAuto` 只在真恢复了才清
+- 点通知 = 把对应标签页带到前台并聚焦它的窗口，然后自动收掉。`chrome.windows` 不需要新权限（`tabs` 已给到 `windowId`）；标签页早就不在了就什么都不做
+
 ### 弹窗
 
 - Chrome 弹窗外框上限 800×600，整页高度必须留在 600px 内。宽度 400px，10 个开关用 `repeat(2, minmax(0,1fr))` 双列网格（不能写成 `1fr`，`1fr` 的隐含下限是 `min-content`，长标签会把列撑成不等宽），所以标签必须短且一律单行
