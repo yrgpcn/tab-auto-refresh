@@ -2,7 +2,7 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
-## [Unreleased]
+## [tab-auto-refresh 2.1.0] - 2026-09-18
 
 ### Added
 - 系统通知可以点开了。点「关键词命中」「任务已停止」「自动暂停」「站点待重登」任一条，会把对应标签页带到前台并聚焦它所在的窗口，通知随之收掉；标签页早就关了就不做事后提示。不需要新权限：`tabs` 已经给到 `windowId`，`chrome.windows` 随 `tabs` 可用
