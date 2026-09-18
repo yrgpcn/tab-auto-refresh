@@ -1,6 +1,7 @@
 # AGENTS.md
 
 项目记忆：给在本仓库工作的 AI 助手和协作者。版本历史看 `CHANGELOG.md`，
+还没修的账看 `BACKLOG.md`（2026-09-19 起，逐条带源码位置，修完移进 CHANGELOG 不算删掉），
 审核过程与回归脚本清单看 `_code-review/README.md`（本地目录，见下）。
 
 ## 仓库
