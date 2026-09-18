@@ -44,6 +44,7 @@
 - `chrome.storage.local`：`tasks`（tabId → `{intervalSec, createdAt, url, keywords?, onHit?, notifiedKeys?, autoPaused?}`，旧数据的单串 `keyword` 由 `getTaskKeywords` 兼容读取，后台与弹窗共用这一个入口）、`pausedAll`、`sessionProbe`（根域 → `{sus, lost, lastNotifiedAt}`）、`cookieBackup:<host>`、`cookieBackupWarnedOnce`、`wechatLastResult`
 - `chrome.storage.session`：跨 SW 回收要活下来的运行时计数与标记，即 `rt:error:<tabId>` / `rt:captcha:<tabId>` / `rt:activity:<tabId>` / `rt:awake` / `wechatToken`。判断标准是要活过 SW 回收放这里，要活过浏览器重启才放 local
 - `chrome.storage.sync`：`settings`。默认值集中在 `shared/config.js` 的 `DEFAULT_SETTINGS`，弹窗与后台共用；sync 为空时会从 local 迁移旧设置
+- 后台的 `getSettings()` 带内存快照（`settingsCache` / `settingsLoading` / `settingsEpoch`）：一次任务页加载周期里它被调 5~7 次，原先每次都发两笔存储读。**任何新增的 `chrome.storage.sync` 写入点都必须显式 `invalidateSettings()`，读写两头各一次**，否则会把用户这次没碰的开关按旧值合并回去。失效点与契约由 `tests/tab-auto-refresh/settings-cache.test.mjs` 钉住，文件末尾记着红→绿对照的做法
 - 当前默认开：`bypassCache`、`keepAlive`、`httpHeartbeat`、`skipOnActivity`、`captchaGuard`；默认关：`skipDiscarded`、`cookieBackup`、`keepAwake`、`wechatEnabled`；`webhookUrl` 默认空即关闭
 - 改 `DEFAULT_SETTINGS` 只影响新装：`getSettings()` 是 `Object.assign({}, DEFAULT_SETTINGS, 已存值)`，老用户的存盘值优先。想让老用户也吃到新默认必须写迁移
 
@@ -89,8 +90,9 @@
 ### 关键词监控
 
 - 任务字段 `keywords[]`，每条 ≤100 字、上限 10 个；旧 `keyword` 单串由 `getTaskKeywords` 兼容
-- 检测链全在后台，不碰注入通道：每次页面加载完成起一条链，立即查一次，未命中再于 3 秒、10 秒重采样，正文与上次相同就提前结束。新链起链即作废旧链，避免并发链重复通知或竞态停任务
-- 用 `executeScript` 取 `body.innerText`（300KB 截断）跑 `pickHits`。命中后按 `onHit` 决定停任务（默认）还是继续盯守，继续时把在场集回写 `notifiedKeys`，关键词消失后再出现会重新通知
+- 检测链全在后台，不碰保活注入通道：每次页面加载完成起一条链，立即查一次，未命中再于 3 秒、10 秒重采样。新链起链即作废旧链，避免并发链重复通知或竞态停任务
+- 匹配在页面里做：`executeScript({func: matchInPage, args: [keywords]})` 只回传命中的关键词，正文不跨上下文序列化，因此没有早先"截 300KB、之后的内容永远检不到"的盲区。`matchInPage` 必须自包含（executeScript 是 `toString()` 注入的，引用模块作用域会在页面里变 undefined 并被 catch 吞掉），所以判定逻辑与 `logic.js` 的 `presentOf` 是两份实现，由 `tests/tab-auto-refresh/keyword-inpage.test.mjs` 切真实源码执行、逐条比对钉住。取文本一律 `innerText`，换 `textContent` 会把 `<script>` 源码和 `display:none` 的隐藏文字算进正文
+- 命中后按 `onHit` 决定停任务（默认）还是继续盯守，继续时把在场集回写 `notifiedKeys`，关键词消失后再出现会重新通知。原先"正文与上次相同就提前结束"的早停已删（回传的不再是要比较的正文）
 
 ### 自动暂停
 

@@ -18,7 +18,8 @@ import {
   cookieTicketScore,
   parseKeywords,
   getTaskKeywords,
-  pickHits,
+  newlyOf,
+  presentOf,
   normalizeWebhookUrl,
   normalizeStoredSettings,
   isErrorStatus,
@@ -322,18 +323,17 @@ test("getTaskKeywords prefers keywords[] and falls back to legacy keyword string
   assert.deepEqual(getTaskKeywords(null), []);
 });
 
-test("pickHits separates present/newly/notified for continuous watching", () => {
+test("presentOf and newlyOf split hits for continuous watching", () => {
   const text = "NOW IN STOCK and available";
-  const a = pickHits(text, ["in stock", "available"], []);
-  assert.deepEqual(a.present, ["in stock", "available"]);
-  assert.deepEqual(a.newly, ["in stock", "available"]);
+  const keywords = ["in stock", "available"];
+  assert.deepEqual(presentOf(text, keywords), keywords);
+  assert.deepEqual(newlyOf(presentOf(text, keywords), []), keywords);
   /* 已通知（大小写不同也算已通知）→ 不重复报 */
-  const b = pickHits(text, ["in stock", "available"], ["IN STOCK"]);
-  assert.deepEqual(b.newly, ["available"]);
-  /* 关键词消失：present 收缩，供调用方回写在场集 */
-  const c = pickHits("nothing here", ["in stock", "available"], ["in stock", "available"]);
-  assert.deepEqual(c.present, []);
-  assert.deepEqual(c.newly, []);
+  assert.deepEqual(newlyOf(presentOf(text, keywords), ["IN STOCK"]), ["available"]);
+  /* 关键词消失：present 收缩，供检测链回写在场集 */
+  assert.deepEqual(presentOf("nothing here", keywords), []);
+  assert.deepEqual(newlyOf([], keywords), []);
+  assert.deepEqual(newlyOf(null, null), []);
 });
 
 test("normalizeWebhookUrl accepts only http(s) and trims", () => {

@@ -257,16 +257,23 @@ export function getTaskKeywords(task) {
   return list.filter((k) => typeof k === "string" && k.trim());
 }
 
-/* 命中划分：present=当前在场的全部关键词；newly=在场但尚未通知过的（大小写不敏感）。
-   调用方用 present 回写"在场集"（关键词消失即移出，下次再现重新通知），用 newly 触发通知 */
-export function pickHits(text, keywords, notifiedKeys) {
+/* 在场判定（纯函数）：给完整正文与关键词表，返回当前在场的有哪些。
+   页内匹配走的是 background.js 的 matchInPage（另一份实现，把匹配搬到页面里做），
+   所以这里同时是那份实现的语义基准——门禁会拿它比对 matchInPage 的判定结果 */
+export function presentOf(text, keywords) {
   const list = Array.isArray(keywords) ? keywords : [];
-  const present = list.filter((k) => keywordHit(text, k));
+  return list.filter((k) => keywordHit(text, k));
+}
+
+/* 新出现判定（纯函数）：在场集里尚未通知过的那些，大小写不敏感。
+   检测链用在场集回写"已通知"，关键词消失即移出，下次再现重新通知 */
+export function newlyOf(present, notifiedKeys) {
   const known = new Set(
     (Array.isArray(notifiedKeys) ? notifiedKeys : []).map((k) => String(k).toLowerCase())
   );
-  const newly = present.filter((k) => !known.has(String(k).toLowerCase()));
-  return { present, newly };
+  return (Array.isArray(present) ? present : []).filter(
+    (k) => !known.has(String(k).toLowerCase())
+  );
 }
 
 /* webhook 地址校验：仅接受 http(s)，其余（空/非法/其他协议）一律视为关闭 */

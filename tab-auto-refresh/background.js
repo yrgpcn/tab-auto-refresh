@@ -14,13 +14,12 @@ import {
   isTokenErrorCode,
   jitteredDelayMs,
   getTaskKeywords,
-  keywordHit,
+  newlyOf,
   normalizeStoredSettings,
   normalizeWebhookUrl,
   notifyEventsOf,
   oneLine,
   parseKeywords,
-  pickHits,
   looksLikeLoginPage,
   sameHost,
   sameSite,
@@ -80,17 +79,29 @@ async function ensureTaskTabIds() {
   return taskTabIdSet;
 }
 
-/* 存盘设置 → 生效设置：共用 normalizeStoredSettings（shared/logic.js），弹窗同款 */
+/* 偏好设置存 chrome.storage.sync 跨设备同步；旧版本留在 local 的设置自动迁移。
+   存盘设置 → 生效设置一律走 shared/logic.js 的 normalizeStoredSettings，弹窗同款。
+   生效值带内存快照：一次任务页加载周期里 getSettings 被调到 5~7 次（保活同步、验证墙
+   探测、cookie 备份、刷新、心跳、备份收敛各一次），原先每次都发两笔存储读。
+   三个写盘点（迁移、rememberLastInterval、save-settings）与 storage.onChanged 都要显式
+   invalidateSettings()，漏一个就会读到过期快照，见各自的调用注释 */
+let settingsCache = null;
+let settingsLoading = null; /* 并发去重：同一时刻只跑一笔真读 */
+let settingsEpoch = 0; /* 读盘期间发生过失效，那次结果就不能回填 */
 
-/* 偏好设置存 chrome.storage.sync 跨设备同步；旧版本留在 local 的设置自动迁移 */
-async function getSettings() {
-  const [syncData, localData] = await Promise.all([
-    chrome.storage.sync.get("settings"),
-    chrome.storage.local.get("settings"),
-  ]);
+function invalidateSettings() {
+  settingsCache = null;
+  settingsLoading = null;
+  settingsEpoch++;
+}
+
+async function loadSettings() {
+  const syncData = await chrome.storage.sync.get("settings");
   if (syncData.settings) {
     return normalizeStoredSettings(syncData.settings, DEFAULT_SETTINGS);
   }
+  /* 只有 sync 为空才回读 local，常态下省掉一笔读 */
+  const localData = await chrome.storage.local.get("settings");
   if (localData.settings) {
     const migrated = normalizeStoredSettings(localData.settings, DEFAULT_SETTINGS);
     await chrome.storage.sync.set({ settings: migrated });
@@ -98,6 +109,28 @@ async function getSettings() {
     return migrated;
   }
   return normalizeStoredSettings(null, DEFAULT_SETTINGS);
+}
+
+function getSettings() {
+  if (settingsCache) return Promise.resolve(settingsCache);
+  if (!settingsLoading) {
+    const epoch = settingsEpoch;
+    settingsLoading = loadSettings().then(
+      (s) => {
+        /* 被失效过的读盘结果既不能回填缓存，也不能清掉新那次读的门把手 */
+        if (epoch === settingsEpoch) {
+          settingsCache = s;
+          settingsLoading = null;
+        }
+        return s;
+      },
+      (e) => {
+        if (epoch === settingsEpoch) settingsLoading = null;
+        throw e; /* 读失败不留快照：下次调用重新真读 */
+      }
+    );
+  }
+  return settingsLoading;
 }
 
 /* 全局暂停是本机状态，跟随任务一起存 chrome.storage.local */
@@ -515,11 +548,15 @@ async function reconcileKeepAlive() {
 /* 快捷键没有显式间隔，复用最近一次手动任务的实际间隔 */
 async function rememberLastInterval(seconds) {
   try {
+    /* 读之前先失效：这次读的是合并基座，拿过期快照会把别的开关按旧值一并写回 sync。
+       只有手动建任务会走到这里（startTask），不是每个刷新周期，代价是一次重读 */
+    invalidateSettings();
     const settings = await getSettings();
     if (settings.lastIntervalSec === seconds) return; /* 没变不写，避免无谓的 sync 变更风暴 */
     await chrome.storage.sync.set({
       settings: Object.assign({}, settings, { lastIntervalSec: seconds })
     });
+    invalidateSettings();
   } catch (e) {
     /* 保存偏好失败不应阻止当前任务启动 */
   }
@@ -543,18 +580,43 @@ async function reloadTab(tabId) {
   await chrome.tabs.reload(tabId, { bypassCache: !!settings.bypassCache });
 }
 
-/* 关键词检测链：全在后台，不碰注入通道，与保活门控零耦合。
+/* 关键词检测链：全在后台，不碰保活注入通道，与保活门控零耦合。
    每次页面加载完成起一条链，立即查一次，未命中再于 3 秒、10 秒重采样
-   （SPA 或迟渲染的页面在 complete 时刻正文还没就位）；正文与上次相同就提前结束。
+   （SPA 或迟渲染的页面在 complete 时刻正文还没就位）。
    新链起链即作废旧链，避免并发链重复通知或竞态停任务。
    SW 中途回收丢链可以接受，下个加载完成或刷新周期会自动重建 */
 const detectChains = new Map();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/* 页内关键词匹配，经 executeScript 注入到被监控页里跑，只把命中的关键词回传后台。
+   改这里之前先记住两条约束，破坏任何一条都是静默失效：
+
+   1. 函数体必须完全自包含。executeScript 是把它 toString() 后送到页面里执行的，
+      引用任何模块作用域的标识符（连 import 进来的函数都一样）都会在页面里变成 undefined。
+      所以匹配逻辑在这里内联了一份，而不是调用 shared/logic.js 的 keywordHit；
+      那份是语义基准，两边的一致性由 tests/tab-auto-refresh/keyword-inpage.test.mjs 钉——
+      它直接跑这个函数体，与 presentOf 的真实输出逐条比对。
+
+   2. 取文本一律用 innerText，不要"顺手"换成 textContent。看着等价，实际会新增两类命中：
+      textContent 含 <script>/<style> 里的源码文本，也含 display:none 的隐藏文字。
+      前者会把页面代码里的字符串当成正文，后者会让通知报一个用户在页面上根本看不见的东西。
+
+   匹配搬到页面里做，正文就不再跨上下文序列化，原先"截 300KB、之后的内容永远检不到"
+   那个盲区随之消失。这是这次改动的目的，不是顺带的性能优化。 */
+function matchInPage(keywords) {
+  const list = Array.isArray(keywords) ? keywords : [];
+  const low = String(document.body ? document.body.innerText : "").toLowerCase();
+  const hits = [];
+  for (const k of list) {
+    const needle = String(k == null ? "" : k).trim().toLowerCase();
+    if (needle && low.includes(needle)) hits.push(k);
+  }
+  return hits;
+}
+
 async function startDetectChain(tabId) {
   const token = {}; /* 链身份：Map 里的值被替换即视为本链过期 */
   detectChains.set(tabId, token);
-  let lastText = null;
   for (const delay of [0, 3000, 10000]) {
     if (delay) await sleep(delay);
     if (detectChains.get(tabId) !== token) return;
@@ -564,29 +626,28 @@ async function startDetectChain(tabId) {
     } catch (e) {
       return;
     }
-    if (!task || !getTaskKeywords(task).length) {
+    const keywords = getTaskKeywords(task);
+    if (!task || !keywords.length) {
       detectChains.delete(tabId);
       return;
     }
-    let text;
+    let present;
     try {
       const results = await chrome.scripting.executeScript({
         target: { tabId },
-        func: () => {
-          const t = document.body && document.body.innerText;
-          return typeof t === "string" ? t.slice(0, 300000) : "";
-        },
+        func: matchInPage,
+        args: [keywords],
       });
-      text = results && results[0] && results[0].result;
+      present = results && results[0] && results[0].result;
     } catch (e) {
-      text = undefined;
+      present = undefined;
     }
     if (detectChains.get(tabId) !== token) return;
-    if (typeof text !== "string") {
+    if (!Array.isArray(present)) {
       detectChains.delete(tabId); /* 注入失败：等下个刷新周期 */
       return;
     }
-    const { present, newly } = pickHits(text, getTaskKeywords(task), task.notifiedKeys);
+    const newly = newlyOf(present, task.notifiedKeys);
     if (newly.length) {
       detectChains.delete(tabId);
       await onKeywordHit(tabId, task, newly, present);
@@ -602,11 +663,6 @@ async function startDetectChain(tabId) {
         }
       });
     }
-    if (lastText !== null && text === lastText) {
-      detectChains.delete(tabId); /* 正文稳定：继续等没意义 */
-      return;
-    }
-    lastText = text;
   }
   detectChains.delete(tabId);
 }
@@ -1393,6 +1449,9 @@ chrome.commands.onCommand.addListener(async (command) => {
    否则 rememberLastInterval 这类无关写盘会引发任务页心跳重置风暴 */
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "sync" || !changes.settings) return;
+  /* 失效排在下面两个分支之前：pruneCookieBackups 与 reconcileKeepAlive 都要按新值收敛，
+     读到写前的快照会让开关"改了但没生效"，要等下一次事件才纠正 */
+  invalidateSettings();
   const o = changes.settings.oldValue || {};
   const n = changes.settings.newValue || {};
   const touched = (k) => o[k] !== n[k];
@@ -1536,10 +1595,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await updateBadge();
         sendResponse({ ok: true, pausedAll: paused });
       } else if (msg.type === "save-settings") {
+        /* 两头都要失效。读之前：msg.settings 是增量，合并基座必须是盘上的当前值，
+           拿过期快照会把用户这次没碰的开关按旧值写回去。
+           写之后：onChanged 回流有延迟，中间任何读取都不该再拿到写前的值。
+           弹窗的"发送测试消息"会 await 到这里 sendResponse 才发出，正是靠这一次失效
+           才读得到刚填的凭据（2.0.0 修过的时序竞态，不能被缓存重新引入） */
+        invalidateSettings();
         const settings = await getSettings();
         await chrome.storage.sync.set({
           settings: Object.assign({}, settings, msg.settings)
         });
+        invalidateSettings();
         sendResponse({ ok: true });
       } else if (msg.type === "keepalive-query") {
         /* 页面脚本注入后拉配置快照（心跳/活动监听各自开关） */

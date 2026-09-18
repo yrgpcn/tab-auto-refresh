@@ -6,9 +6,20 @@
 
 ### Changed
 - 「`webhookEvents` → `notifyEvents`」的兼容判断合并为 `shared/logic.js` 的 `normalizeStoredSettings`，后台与弹窗共用一份（原先各写一份，后续容易分叉）；且返回值不再携带旧键——设置写回存盘时顺手清掉遗留的 `webhookEvents`，不再随 `storage.sync` 在各设备间空转
+- 后台的生效偏好设置改成带内存快照，用户可见行为不变。`getSettings()` 原先每次都并发读 `storage.sync` 与 `storage.local`，而一次任务页加载周期里它被调到 5~7 次（保活同步、验证墙探测、cookie 备份、刷新、心跳、备份收敛各一次）——20 个 30 秒任务就是每分钟 200 笔以上扩展存储读。现在冷启动读一次、sync 有值时不再回读 local，其余走快照。作废点：三个写入侧（local→sync 迁移、`rememberLastInterval`、`save-settings`）各读写两头一次，加 `storage.onChanged` 回流一次
+  - `save-settings` 那两处缺一不可：它的合并基座正是 `getSettings()` 的返回值，读到写前的快照会把用户这次没碰的开关按旧值一并写回 sync。这与 2.0.0 修过的「刚填完凭据点发送测试，得到的是配置不完整」是同一类竞态，不能由缓存重新引入
+  - 读盘途中发生的作废不回填快照（epoch 比对）。缺这道守卫时，那次已被作废的旧值会在落地时复活成当前值
+  - 新增 `tests/tab-auto-refresh/settings-cache.test.mjs`（5 条，chrome 桩件、无需浏览器、进 CI）。按仓库的方法学红线做过红→绿对照：指向改前源码时红在「只读一次」与「local 迁移」两条（后者是 `localGet` 从 1 变 2，正是被省掉的那笔），逐个拆掉三个作废点各红在对应用例上。对照做法记在文件末尾
+  - AGENTS.md 的存储小节加了一条硬约束：今后新增写 `chrome.storage.sync` 的地方必须显式作废，否则静默失效
+- 关键词匹配改在页面里执行（`executeScript({func: matchInPage, args: [keywords]})`），`shared/logic.js` 的 `pickHits` 拆成 `presentOf`（在场判定）与 `newlyOf`（新出现判定）；拆完的组合入口 `pickHits` 已无生产调用方，一并删掉，原有那条用例改测这两个新函数
+  - 注入体必须自包含：`executeScript` 是把函数 `toString()` 后送到页面执行的，引用模块作用域（连 import 进来的函数一样）会在页面里变成 `undefined`，抛出的 `ReferenceError` 又被外层 `catch` 吞掉。所以匹配逻辑是两份实现，由新门禁切出真实源码执行、与 `presentOf` 逐条比对钉住
+  - 取文本继续用 `innerText` 而不是看着更省的 `textContent`：后者会把 `<script>`/`<style>` 的源码文本和 `display:none` 的隐藏文字算进正文，等于新增两类用户在页面上看不见的误报
+  - 「正文与上次相同就提前结束」的早停删除：回传的已经不是正文，没有可比的字符串，三个采样点固定跑完。这是本次改动的代价，换来的是不再搬正文
+- 新增 `tests/tab-auto-refresh/keyword-inpage.test.mjs`（8 条，进 CI）：49 组语料 × 关键词集比对两份实现、自包含约束、`innerText` 约定、深处关键词、空 `body`/空值/非数组入参。四条红→绿对照实跑过（指向改前源码、改成调用模块函数、换成 `textContent`、把截断加回来），结果记在该文件头部注释
 
 ### Fixed
 - README 的「全局暂停」补明确语义：暂停只停自动刷新，静默心跳与后台保活继续维持登录会话。暂停不停心跳是有意设计——停了反而可能让登录过期，此前文档容易读成"全部后台活动都停"
+- 排在正文 300KB 之后的关键词永远检不到。检测链原先把整页 `innerText` 截到 300000 字符再序列化回 service worker 做匹配，长列表页、长文页面的目标内容一旦落在截断点之后就属于静默漏检——页面确实被扫了、也按时通知了"未命中"，看不出任何异常。现在匹配搬到页面里做，只回传命中的关键词名，截断随之删除。真浏览器实测：一页 486,040 字符的正文，排在约 430KB 处的关键词（中英文各一条）都能命中，同一份语料按旧的 300KB 截断则一条都检不到
 
 ## [tab-auto-refresh 2.0.0] - 2026-09-15
 
