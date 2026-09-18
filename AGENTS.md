@@ -147,13 +147,16 @@
 
 ## 环境备注
 
-- 推送失败先看这里：宿主会注入 `http_proxy` / `https_proxy` / `HTTP_PROXY` / `HTTPS_PROXY` 四个环境变量，全指向 `http://127.0.0.1:51734`，该通道到 GitHub 直接 502。环境变量优先级高于 git 的 `http.proxy` 配置，所以光加 `-c http.proxy=...` 不管用，必须先把四个变量摘掉，再走本机 10808 的 SOCKS：
+- 推送失败先看这里：先直接试 `git push`。2026-09-18 发布 2.1.0 时不带任何代理参数，推 main 与推 tag 都在几秒内成功。只有它失败才走下面那条摘变量的路。
+- 宿主有时会注入 `http_proxy` / `https_proxy` / `HTTP_PROXY` / `HTTPS_PROXY` 四个环境变量，全指向 `http://127.0.0.1:51734`，该通道到 GitHub 直接 502。环境变量优先级高于 git 的 `http.proxy` 配置，所以光加 `-c http.proxy=...` 不管用，必须先把四个变量摘掉，再走本机 10808 的 SOCKS：
   `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY git -c http.proxy=socks5://127.0.0.1:10808 push origin main`
   三种症状的区分办法：报 502 是环境变量那个死代理；一直挂着没输出，先分清是网络还是凭据（见下条）。
+- 上面那条摘变量的命令有一种更难查的失败：一个字节都不输出、退出码还是 0，实际什么都没推上去（2026-09-18 实遇到，靠 `git ls-remote` 才发现远端仍是旧 commit）。所以推送成功与否一律按下条用 `git ls-remote` 复核，别按退出码收工。
 - 推送挂住不动时，先确认到底是网络还是凭据，别默认是代理问题。2026-09-14 实测：`ls-remote` 与 `curl -X POST .../git-receive-pack` 都正常（后者 1.3 秒返回 401），说明网络通、缺的是凭据。而本机的凭据助手是 `git-credential-manager.exe`，它拿不到缓存的凭据时会去开交互界面，在非交互环境里表现为**一直挂住**（`git credential fill` 超时也返回不了任何东西）。快速判别：
   `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c http.proxy=socks5://127.0.0.1:10808 push origin main`
   立刻报 `could not read Username` 就是凭据缺失，需要在能弹界面的终端里推一次（或改用带 PAT 的地址），与代理无关。
 - 判断有没有推上去不要看 `git status`。本机的 `origin/main` 远程跟踪引用会僵在旧 commit，会误报 `ahead N`。以 `git ls-remote origin refs/heads/main` 为准
 - playwright 类脚本（弹窗截图、`_code-review/` 里几个门禁）需要显式给 NODE_PATH，否则报找不到 playwright：
   `NODE_PATH="C:/Users/yrgpc/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules"`
-- 本机 PowerShell 可能没有 npm，验证和测试直接用 node
+  该路径 2026-09-18 起在本机已不存在，重新装回 node 后要先改这条
+- 2026-09-18 起本机没有 node 也没有 npm：bash 与 PowerShell 都解析不到，`C:\Program Files\nodejs` 不存在，`.qoder` 各运行时目录里没有 `node.exe`。验证清单第 1、2 条因此在本机跑不了；第 3 条的 `_code-review/` 这台机器上也不在（它本来就不入库，新 clone 没有）。缺口由 CI 兜：push 后看 Actions，release workflow 自己跑 `validate.mjs` 与单测，任一失败就不建 Release。2.1.0 就是这样发的——本地零条实跑、CI 两条 push 全绿。装回 node 后恢复本地门禁为准，别把 CI 绿当成"本地验过"
