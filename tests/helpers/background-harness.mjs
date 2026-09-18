@@ -47,10 +47,14 @@ export function makeEnv() {
     startup: [],
     installed: [],
     command: [],
-    idle: []
+    idle: [],
+    winFocused: []
   };
   const tabs = new Map();
   const alarms = new Map();
+  /* 焦点窗口：null 表示没有窗口有焦点（用户在别的应用里），与 Chrome 的
+     WINDOW_ID_NONE 同义。isTabOnScreen 走 getLastFocused 时会读到它 */
+  let focusedWindow = null;
 
   const clone = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
 
@@ -83,12 +87,27 @@ export function makeEnv() {
   });
 
   const noop = async () => {};
+  /* 真实 Chrome 的每个事件对象都有 removeListener，桩件也要有：只给 addListener 的话，
+     后台里任何"临时挂监听、完事摘掉"的写法（等待窗口就是这样）会在测试里抛
+     not a function，而且是定时器回调里抛，表现为整条用例莫名失败 */
+  const eventSink = (list) => ({
+    addListener: (f) => list.push(f),
+    removeListener: (f) => {
+      const i = list.indexOf(f);
+      if (i >= 0) list.splice(i, 1);
+    }
+  });
+  /* 派发只取本次 boot 之后注册的那一段，而不是数组末尾一个：
+     后台自己会临时挂监听（如等待窗口），末尾那个恰恰可能是它，取 at(-1) 就把
+     模块常驻的 onUpdated 处理器整个跳过了。同一 env 重复 boot 时上一实例的也不派。 */
+  const bootFrom = {};
+  const dispatch = (name) => listeners[name].slice(bootFrom[name] || 0);
   const chrome = {
     storage: {
       local: area("local"),
       sync: area("sync"),
       session: area("session"),
-      onChanged: { addListener: (f) => listeners.changed.push(f) }
+      onChanged: eventSink(listeners.changed)
     },
     alarms: {
       async create(name, info) {
@@ -100,7 +119,7 @@ export function makeEnv() {
       },
       getAll: async () =>
         [...alarms.entries()].map(([name, info]) => Object.assign({ name }, clone(info))),
-      onAlarm: { addListener: (f) => listeners.alarm.push(f) }
+      onAlarm: eventSink(listeners.alarm)
     },
     tabs: {
       async get(id) {
@@ -133,28 +152,36 @@ export function makeEnv() {
         calls.messagesSent.push([id, msg]);
         return {};
       },
-      onUpdated: { addListener: (f) => listeners.updated.push(f) },
-      onRemoved: { addListener: (f) => listeners.removed.push(f) }
+      onUpdated: eventSink(listeners.updated),
+      onRemoved: eventSink(listeners.removed)
     },
     windows: {
+      WINDOW_ID_NONE: -2,
       async update(id, props) {
         if (props && props.focused) calls.windowsFocused.push(Number(id));
+        focusedWindow = Number(id);
         return { id };
-      }
+      },
+      async getLastFocused() {
+        if (focusedWindow === null) throw new Error("No current window");
+        return { id: focusedWindow };
+      },
+      onFocusChanged: eventSink(listeners.winFocused)
     },
-    idle: { onStateChanged: { addListener: (f) => listeners.idle.push(f) } },
+    idle: { onStateChanged: eventSink(listeners.idle) },
     runtime: {
-      onStartup: { addListener: (f) => listeners.startup.push(f) },
-      onInstalled: { addListener: (f) => listeners.installed.push(f) },
-      onMessage: { addListener: (f) => listeners.message.push(f) },
+      onStartup: eventSink(listeners.startup),
+      onInstalled: eventSink(listeners.installed),
+      onMessage: eventSink(listeners.message),
       lastError: null
     },
     contextMenus: {
       removeAll: (cb) => cb && cb(),
       create: noop,
-      onClicked: { addListener: noop }
+      /* 菜单点击在测试里没人派发，登记表留空但要能挂得上 */
+      onClicked: eventSink([])
     },
-    commands: { onCommand: { addListener: (f) => listeners.command.push(f) } },
+    commands: { onCommand: eventSink(listeners.command) },
     scripting: {
       async executeScript(opts) {
         calls.executeScript++;
@@ -170,7 +197,7 @@ export function makeEnv() {
         calls.notifCleared.push(id);
         return true;
       },
-      onClicked: { addListener: (f) => listeners.notifClicked.push(f) }
+      onClicked: eventSink(listeners.notifClicked)
     },
     action: {
       async setBadgeText(d) {
@@ -202,6 +229,10 @@ export function makeEnv() {
     store,
     calls,
     listeners,
+    /* bootBackground 在 import 前调用，记录每张监听表当时的长度 */
+    markBoot() {
+      for (const k of Object.keys(listeners)) bootFrom[k] = listeners[k].length;
+    },
     /* 放一个标签页进登记表：windowId 可选，缺省 1，点击跳转要用它 */
     putTab(id, url, extra) {
       tabs.set(Number(id), Object.assign({ id: Number(id), url, windowId: 1, active: false }, extra));
@@ -210,26 +241,40 @@ export function makeEnv() {
     dropTab(id) {
       tabs.delete(Number(id));
     },
+    /* 改焦点窗口并通知监听器；null = 没有窗口有焦点 */
+    focusWindow(id) {
+      focusedWindow = id;
+      for (const f of listeners.winFocused) f(id === null ? -2 : id);
+    },
     send(msg, sender) {
       return new Promise((resolve) => {
-        listeners.message.at(-1)(msg, sender || {}, resolve);
+        dispatch("message").at(-1)(msg, sender || {}, resolve);
       });
     },
     fire: {
       async onChanged(changes, areaName) {
-        await listeners.changed.at(-1)(changes, areaName);
+        for (const f of dispatch("changed")) await f(changes, areaName);
       },
       async notifClicked(id) {
-        await listeners.notifClicked.at(-1)(id);
+        for (const f of dispatch("notifClicked")) await f(id);
       },
       async tabUpdated(tabId, changeInfo, tab) {
-        await listeners.updated.at(-1)(tabId, changeInfo, tab || tabs.get(Number(tabId)));
+        for (const f of dispatch("updated")) await f(tabId, changeInfo, tab || tabs.get(Number(tabId)));
       },
       async alarm(name) {
-        await listeners.alarm.at(-1)({ name });
+        for (const f of dispatch("alarm")) await f({ name });
       },
       async tabRemoved(tabId, isWindowClosing) {
-        await listeners.removed.at(-1)(tabId, { isWindowClosing: !!isWindowClosing });
+        for (const f of dispatch("removed")) await f(tabId, { isWindowClosing: !!isWindowClosing });
+      },
+      /* onStartup / onInstalled 的处理器是 async 且不回 promise，这里直接 await 注册者，
+         才能测到 prune 跑完之后的存储状态。派发范围同样按 boot 切：本 env 只 boot 一个实例，
+         与 [0]/at(-1) 的旧写法在既有用例上等价 */
+      async startup() {
+        for (const f of dispatch("startup")) await f();
+      },
+      async installed() {
+        for (const f of dispatch("installed")) await f({ reason: "install" });
       }
     }
   };
@@ -240,5 +285,6 @@ export function makeEnv() {
    共享的 shared/config.js 与 shared/logic.js 不随查询串重建，那里全是常量与纯函数 */
 export async function bootBackground(env) {
   globalThis.chrome = env.chrome;
+  env.markBoot();
   await import(BG + "?seq=" + ++importSeq);
 }

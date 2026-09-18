@@ -411,6 +411,143 @@ export function wechatTitleOf({ eventLabel, host, sep = " · ", max = WECHAT_TIT
   return clipOneLine(e + s + tail, max);
 }
 
+/* ================= 启动恢复与定时器门控的顺序决策 =================
+   这两处原先是命令式循环里的 if 嵌套，顺序就是正确性本身（谁排在谁前面决定会不会
+   产出僵尸任务），而顺序在代码评审里是读不出来的。抽成纯函数后单测能直接断言序列。
+   执行器（background.js）只负责读写浏览器状态，不再自己做判断。 */
+
+/* "任务里没有网址、也没有可辨认的目标"时该淘汰还是补记：与 prune 的 adoptLegacyUrls 同义 */
+const HTTP_URL = /^https?:/i;
+
+/* 启动恢复的挂接计划（纯函数）。
+   输入 tasks（tabId → 任务）与 tabs（当前打开的标签页），输出一个可以自己走一遍的执行序列。
+   几条不容回退的规则，都是历史上真出过事故的：
+   - ID 仍被占用不代表挂接正确。浏览器重启后 tabId 会重新分配，旧任务 ID 可能撞上一个无关
+     的新标签页，只有网址一致才算认领（keep），否则宁可重挂或重开。
+   - 认领写入之前必须确认目标 id 不再是别的未处理任务的键（pending），否则两个任务撞同一页
+     时，后写入的会把先写入的整条覆盖掉——任务静默丢失，界面上一件事也看不出来。
+   - 同一网址开在多个标签页上时，一个页面只挂一个任务（claims 去重），认领不到的走 watch。
+   - adoptLegacyUrls 只在扩展安装/更新那一回为真：那时浏览器没重启、tabId 仍指向原页面，
+     可以给 v1.4.3 及更早"任务里只有间隔和创建时间"的旧数据补记当前网址；重启之后无从辨认，
+     只能淘汰（drop）。注册写成 () => prune(true/false)，不能直接 addListener(prune)。
+   watch 是"现场还认领不到、但值得等会话恢复再判一次"的候选：执行器等满一个共享窗口后用
+   最新的 tasks/tabs 再跑一遍本函数，剩下的才重开标签页。原先是每个候选各等 20 秒且全程
+   持着任务锁，5 个未认领任务能让弹窗与刷新停摆 100 秒。 */
+export function planPrune({ tasks, tabs, adoptLegacyUrls = false } = {}) {
+  const next = Object.assign({}, tasks || {});
+  const list = Array.isArray(tabs) ? tabs.filter((t) => t && typeof t.id === "number") : [];
+  const byId = new Map(list.map((t) => [t.id, t]));
+  /* 已被任务占用的标签页 id：认领写入前查它 */
+  const claims = new Set();
+  const pending = new Set(Object.keys(next).map(Number));
+  const keep = [];
+  const adopt = [];
+  const remap = [];
+  const watch = [];
+  const dropped = [];
+  /* 原任务键里不再有效的那些。旧 alarm 要等写盘之后再清，且只对照写盘后的最终键集合，
+     否则会把本轮刚 arm 上去的 alarm（id 恰好曾是别的任务的键）一起清掉，
+     产出"任务在、永不刷新"的僵尸 */
+  const staleIds = [];
+
+  for (const key of Object.keys(next)) {
+    const id = Number(key);
+    const task = next[key];
+    const live = byId.get(id);
+    if (!live) continue;
+    if (task.url) {
+      if (tabShowsUrl(live, task.url)) {
+        claims.add(id);
+        pending.delete(id);
+        keep.push(id);
+      }
+      continue;
+    }
+    if (adoptLegacyUrls && HTTP_URL.test(live.url || "")) {
+      next[key] = Object.assign({}, task, { url: live.url });
+      claims.add(id);
+      pending.delete(id);
+      keep.push(id);
+      adopt.push(id);
+    }
+    /* 浏览器重启后碰上无网址的旧任务：不认领，交由下面淘汰 */
+  }
+
+  for (const key of Object.keys(next)) {
+    const id = Number(key);
+    if (claims.has(id)) continue;
+    pending.delete(id);
+    const task = next[key];
+    let match = null;
+    for (const t of list) {
+      if (claims.has(t.id) || pending.has(t.id)) continue;
+      if (tabShowsUrl(t, task.url)) {
+        match = t;
+        break;
+      }
+    }
+    delete next[key];
+    staleIds.push(id);
+    if (match) {
+      claims.add(match.id);
+      pending.delete(match.id);
+      next[match.id] = Object.assign({}, task, { url: match.url || task.url });
+      remap.push({ from: id, to: match.id, url: next[match.id].url });
+    } else if (task.url && HTTP_URL.test(task.url)) {
+      /* 带上整个 task：执行器等到窗口结束后要么把它挂到到位的页面上，要么原样重开
+         （保留 keywords / onHit / notifiedKeys / autoPaused，不能只留网址和间隔） */
+      watch.push({ from: id, url: task.url, task });
+    } else {
+      dropped.push({ from: id, url: task.url || "", task });
+    }
+  }
+
+  const dirty =
+    adopt.length > 0 || remap.length > 0 || watch.length > 0 || dropped.length > 0;
+  return { next, keep, adopt, remap, watch, dropped, staleIds, claims, dirty };
+}
+
+/* 用户在该页上真实操作后多久内跳过刷新。放在这里是因为它是 decideAlarmAction 的判据，
+   而 decideAlarmAction 必须能被单测直接调用 */
+export const ACTIVITY_SKIP_MS = 60000;
+
+export const ALARM_ACT = { CLEAR: "clear", STOP: "stop", SKIP: "skip", RELOAD: "reload" };
+
+/* 定时器到点后该做什么（纯函数）。输入全是已经取好的事实，不做任何浏览器调用。
+   次序就是语义，三处不能调换：
+   - pausedAll 排在标签页存在性之前：全局暂停期间不去动"页没了就停任务"那条，
+     否则暂停状态下随手关一个被监控页就会收到"任务已停止"。
+   - 标签页存在性排在 autoPaused 之前：被自动暂停的任务如果标签页被关掉了，
+     没人清理就会留下僵尸。
+   - 活动跳过排在休眠判定之前，两条都是"跳过这一拍"，谁先谁后只影响 reason。
+   活动跳过的 tabIsVisible 与 lastActivityAgoMs 是 or：前者是不依赖注入的兜底
+   （人正看着这页就别重载它），后者来自内容脚本上报。焦点窗口认不出来时
+   tabIsVisible 给 false，宁可多刷一次也绝不能变成"永不刷新"。
+   返回 { action, reason }，action 取 ALARM_ACT 四个值之一。 */
+export function decideAlarmAction({
+  task,
+  tab,
+  pausedAll,
+  skipOnActivity,
+  skipDiscarded,
+  lastActivityAgoMs = Infinity,
+  tabIsVisible = false
+} = {}) {
+  if (!task) return { action: ALARM_ACT.CLEAR, reason: "no-task" };
+  if (pausedAll) return { action: ALARM_ACT.SKIP, reason: "paused-all" };
+  if (!tab) return { action: ALARM_ACT.STOP, reason: "tab-gone" };
+  if (task.autoPaused) {
+    return { action: ALARM_ACT.SKIP, reason: "auto-paused", pausedReason: task.autoPaused.reason };
+  }
+  const recentlyUsed =
+    Number.isFinite(lastActivityAgoMs) && lastActivityAgoMs < ACTIVITY_SKIP_MS;
+  if (skipOnActivity && (tabIsVisible || recentlyUsed)) {
+    return { action: ALARM_ACT.SKIP, reason: "user-active" };
+  }
+  if (skipDiscarded && tab.discarded) return { action: ALARM_ACT.SKIP, reason: "discarded" };
+  return { action: ALARM_ACT.RELOAD, reason: "" };
+}
+
 /* 凭据完整性：四样缺一不可。返回缺失项（键名），让弹窗能点名而不是笼统报错 */
 export function wechatConfigState(settings) {
   const s = settings || {};

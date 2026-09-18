@@ -3,11 +3,14 @@
 import { PREFIX, PRESETS, DEFAULT_SETTINGS, HB_PREFIX } from "./shared/config.js";
 import {
   RESTRICTED_URL,
+  ACTIVITY_SKIP_MS,
+  ALARM_ACT,
   applyBackupAction,
   buildTokenRequest,
   buildWechatMessage,
   capCookies,
   clampInterval,
+  decideAlarmAction,
   domainChain,
   hostOf,
   isErrorStatus,
@@ -20,6 +23,7 @@ import {
   notifyEventsOf,
   oneLine,
   parseKeywords,
+  planPrune,
   looksLikeLoginPage,
   sameHost,
   sameSite,
@@ -380,12 +384,12 @@ async function pruneCookieBackups(remainingTasks) {
    不用 registerContentScripts：它的 matches 是站点级，会溢出到同站无关标签页，
    而且站点注册 id 与任务 id 语义分裂，重启后停任务清不掉注册 */
 const KEEPALIVE_SCRIPT = "content/keepalive.js";
-/* 错误页与验证墙的确认次数、以及"用户操作后跳过刷新"的窗口 */
+/* 错误页与验证墙的确认次数。"用户操作后跳过刷新"的窗口长度在 shared/logic.js 的
+   ACTIVITY_SKIP_MS，因为它是 decideAlarmAction 的判据 */
 const PAUSE_CONFIRM_SAMPLES = 2;
 /* 验证墙的阈值单独放宽到 3：它只看页面标题，采样节奏跟着刷新周期（≥30 秒），
    而错误页有独立的 4 分钟心跳通道且能自愈，两者误判的代价不对称（见 probeCaptcha） */
 const CAPTCHA_CONFIRM_SAMPLES = 3;
-const ACTIVITY_SKIP_MS = 60000;
 
 /* 跨 SW 实例的运行时状态统一放 chrome.storage.session。
    MV3 的 service worker 闲置 30 秒即终止（收到事件或调扩展 API 会重置计时器），
@@ -1213,7 +1217,31 @@ async function notifySessionLost(host) {
   });
 }
 
-/* 定时器触发：刷新类 alarm 走刷新并重新 arm；心跳 alarm 走静默请求 */
+/* 这个标签页此刻是不是正被用户看着：它是所在窗口的活动页，且那个窗口是焦点窗口。
+   这是 skipOnActivity 不依赖注入的第二条通道——内容脚本注入失败（受限页、时序、
+   站点权限）时该页永不上报活动，只靠时间戳就会在用户眼皮底下把页面重载掉。
+   焦点窗口 id 跟着 windows.onFocusChanged 记；SW 刚起来还没有事件时补查一次 getLastFocused。
+   认不出来一律返回 false：宁可多刷一次，也绝不能反过来变成"永远不刷新"。
+   不需要新权限，tabs 已经给到 tab.windowId */
+let focusedWindowId = null;
+chrome.windows.onFocusChanged.addListener((id) => {
+  focusedWindowId = typeof id === "number" && id !== chrome.windows.WINDOW_ID_NONE ? id : null;
+});
+
+async function isTabOnScreen(tab) {
+  if (!tab || !tab.active || typeof tab.windowId !== "number") return false;
+  if (focusedWindowId === null) {
+    const w = await chrome.windows.getLastFocused().catch(() => null);
+    focusedWindowId = w && typeof w.id === "number" ? w.id : null;
+    if (focusedWindowId === null) return false; /* 没有焦点窗口（用户在别的应用里） */
+  }
+  return focusedWindowId === tab.windowId;
+}
+
+/* 定时器触发：刷新类 alarm 走刷新并重新 arm；心跳 alarm 走静默请求。
+   "到点之后该做什么"的判断全部在 shared/logic.js 的 decideAlarmAction 里，
+   这里只负责把事实取齐（任务、标签页、设置、活动时间戳）再把结论执行掉一遍。
+   次序不能调换的两条（pausedAll 早于标签页存在性、存在性早于 autoPaused）写在纯函数侧 */
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name.startsWith(HB_PREFIX)) {
     await doHeartbeat(Number(alarm.name.slice(HB_PREFIX.length)));
@@ -1221,31 +1249,36 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
   if (!alarm.name.startsWith(PREFIX)) return;
   const tabId = Number(alarm.name.slice(PREFIX.length));
-  const [tasks, paused] = await Promise.all([getTasks(), isPausedAll()]);
-  if (!tasks[tabId]) {
+  const [tasks, pausedAll] = await Promise.all([getTasks(), isPausedAll()]);
+  const task = tasks[tabId];
+  if (!task) {
     await chrome.alarms.clear(alarm.name);
     return;
   }
-  /* 每次触发重新 arm：重算抖动窗口（周期 alarm 只兜底，主循环节奏由重 arm 决定） */
-  await armRefresh(tabId, tasks[tabId].intervalSec);
-  if (paused) return; /* 暂停期间跳过，恢复后按原周期继续 */
-  const tab = await chrome.tabs.get(tabId).catch(() => null);
-  /* 标签页不存在优先于自动暂停判定：否则"被自动暂停的任务 + 用户关掉标签页"
-     永远等不到清理，会留下僵尸任务 */
-  if (!tab) {
-    await stopTaskWithNotice(tabId, "tab-gone");
+  /* 每次触发重新 arm：重算抖动窗口（周期 alarm 只兜底，主循环节奏由重 arm 决定）。
+     暂停与自动暂停期间也续跑，恢复时零重建 */
+  await armRefresh(tabId, task.intervalSec);
+  const [tab, settings] = await Promise.all([
+    chrome.tabs.get(tabId).catch(() => null),
+    getSettings()
+  ]);
+  /* 真人活动的时间戳存会话态：SW 一回收内存就没了，60 秒跳过窗口会失效 */
+  const lastActivity = Number(await rtGet(rtTab(RT_ACTIVITY, tabId))) || 0;
+  const verdict = decideAlarmAction({
+    task,
+    tab,
+    pausedAll,
+    skipOnActivity: settings.skipOnActivity,
+    skipDiscarded: settings.skipDiscarded,
+    lastActivityAgoMs: lastActivity ? Date.now() - lastActivity : Infinity,
+    /* 可见性只有 skipOnActivity 开着时才用得上，未开就别为每次触发多问两回窗口焦点 */
+    tabIsVisible: settings.skipOnActivity ? await isTabOnScreen(tab) : false
+  });
+  if (verdict.action === ALARM_ACT.STOP) {
+    await stopTaskWithNotice(tabId, verdict.reason);
     return;
   }
-  if (tasks[tabId].autoPaused) return; /* 错误页/验证墙自动暂停：alarm 已由 armRefresh 续跑，等恢复 */
-  const settings = await getSettings();
-  /* 真人 60 秒内在该页操作过就跳过本次刷新（合成事件 isTrusted 为 false，不会误报）。
-     是跳过而不是重置计时：重置会被用户操作无限期推迟，违背盯变化的用途。
-     时间戳存会话态，否则 SW 回收后该开关基本无效 */
-  if (settings.skipOnActivity) {
-    const last = Number(await rtGet(rtTab(RT_ACTIVITY, tabId))) || 0;
-    if (Date.now() - last < ACTIVITY_SKIP_MS) return;
-  }
-  if (settings.skipDiscarded && tab.discarded) return; /* 休眠标签页不唤醒 */
+  if (verdict.action !== ALARM_ACT.RELOAD) return;
   try {
     await reloadTab(tabId);
   } catch (e) {
@@ -1315,22 +1348,30 @@ async function cleanupInvalidTasks() {
   await updateBadge();
 }
 
-/* 延迟认领窗口：等 RECLAIM_WATCH_MS，期间任何标签页导航到目标网址即认领成功，
-   救"会话恢复晚到"或"先跳 SSO 才到位"的页面，避免无谓重开 */
-function watchForUrl(url, excludeIds) {
+/* 共享的等待窗口：等这批网址里任意一个在任何标签页上到位，全部到位或等满
+   RECLAIM_WATCH_MS 就返回。返回与否都不影响正确性——调用方随后会用最新的现场重跑
+   planPrune，这里只是给"会话恢复晚到"和"先跳 SSO 才到位"的页面一点时间。
+   与原先按任务逐个等的区别：那一版每多一个认领不到的任务就多花整整 20 秒，
+   而且整段时间都持着任务锁，弹窗的起停与到点刷新全排在后面 */
+function waitForUrls(urls) {
+  const wanted = new Set(urls || []);
+  if (!wanted.size) return Promise.resolve();
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
+    const finish = () => {
+      clearTimeout(timer);
       chrome.tabs.onUpdated.removeListener(onUp);
-      resolve(null);
-    }, RECLAIM_WATCH_MS);
+      resolve();
+    };
+    const timer = setTimeout(finish, RECLAIM_WATCH_MS);
     function onUp(tabId, changeInfo, tab) {
       if (changeInfo.status !== "complete") return;
-      if (excludeIds.has(tabId)) return;
-      if (tabShowsUrl(tab, url)) {
-        clearTimeout(timer);
-        chrome.tabs.onUpdated.removeListener(onUp);
-        resolve(tab);
+      for (const url of wanted) {
+        if (tabShowsUrl(tab, url)) {
+          wanted.delete(url);
+          break;
+        }
       }
+      if (!wanted.size) finish();
     }
     chrome.tabs.onUpdated.addListener(onUp);
   });
@@ -1370,97 +1411,61 @@ async function prune(adoptLegacyUrls = false) {
     }
   }
 
-  /* 把死 tabId 的任务重新挂接到正在打开的标签页（会话恢复后 ID 会变），挂接不上就重新打开 */
+  /* 会话恢复后 tabId 会重新分配：把任务重新挂接到正在打开的标签页，挂不上就先给页面一点
+     时间到位，仍然挂不上才按记录的网址重开。顺序决策全部在 planPrune（shared/logic.js）
+     里，本函数只负责浏览器调用——那套规则因此能被单测直接断言，而不是靠读代码推断。 */
+  const first = planPrune({
+    tasks: await getTasks(),
+    tabs: await chrome.tabs.query({}),
+    adoptLegacyUrls
+  });
+  /* 认领不到的先等一轮。原先是每个候选各等 20 秒且全程持着任务锁，5 个未认领任务能让
+     弹窗与刷新停摆 100 秒；这里改成所有候选共享一个上限窗口 */
+  if (first.watch.length) await waitForUrls(first.watch.map((w) => w.url));
+
   await withTaskLock(async () => {
-    const tasks = await getTasks();
-    const openTabs = await chrome.tabs.query({});
-    const openById = new Map(openTabs.map((t) => [t.id, t]));
-    /* 预扫描认领：ID 仍被占用不代表挂接正确（重启后 tabId 会重新分配，旧任务 ID
-       可能撞上无关的新标签页），只有网址一致才保留。无网址的旧任务按
-       adoptLegacyUrls 决定补记网址还是淘汰 */
-    const claimed = new Set();
-    /* 未认领任务的旧 alarm 先记账、setTasks 落盘之后再清：
-       SW 中途回收时宁可留"有 alarm 没任务"（onAlarm 找不到任务会自清），
-       也不能留"有任务没 alarm"的僵尸 */
-    const staleAlarms = [];
-    /* 待处理集合：认领写入 tasks[match.id] 之前必须确认该 id 不再是别的未处理任务的键，
-       否则两个任务撞同一页时，后者会被覆盖而静默丢失 */
-    const pending = new Set(Object.keys(tasks).map(Number));
-    let dirty = false;
-    for (const key of Object.keys(tasks)) {
-      const task = tasks[key];
-      const live = openById.get(Number(key));
-      if (!live) continue;
-      if (task.url) {
-        if (tabShowsUrl(live, task.url)) {
-          claimed.add(Number(key));
-          pending.delete(Number(key));
-        }
-        continue;
-      }
-      if (adoptLegacyUrls && /^https?:/i.test(live.url || "")) {
-        /* 扩展更新：浏览器没重启，ID 仍指向原页面，补记网址升级为正常任务 */
-        tasks[key] = Object.assign({}, task, { url: live.url });
-        claimed.add(Number(key));
-        pending.delete(Number(key));
-        dirty = true;
-      }
-      /* 浏览器重启：无从辨认目标，不认领，交由下方淘汰 */
+    /* 等待期间用户可能起停过任务、页面也可能正好到位了，所以用最新的现场重跑一遍计划：
+       等完之后的认领与等不到的重开走的是同一套规则，不需要第二份判断 */
+    const plan = planPrune({
+      tasks: await getTasks(),
+      tabs: await chrome.tabs.query({}),
+      adoptLegacyUrls
+    });
+    const tasks = plan.next;
+    /* 先落盘、后挂定时器。反过来会让 ensureHeartbeat 按新 id 读不到任务，
+       以为"这个页面没任务了"而把心跳 alarm 清掉——重启后恢复的任务于是只剩刷新、
+       没有静默心跳，直到下一次刷新完成才自愈。startTask 与 reopenTaskTab 都是先写后挂 */
+    const rearm = plan.remap.map(({ to }) => ({ id: to, restore: true }));
+    for (const { url, task } of plan.watch) {
+      /* 等过一轮还是不认：按记录的网址重开。任务原样搬过去，
+         keywords / onHit / notifiedKeys / autoPaused 都不能在恢复时丢掉 */
+      const newTab = await chrome.tabs.create({ url, active: false }).catch(() => null);
+      if (!newTab || typeof newTab.id !== "number") continue;
+      tasks[newTab.id] = task;
+      /* 新建的页面本来就带着恢复好的 cookie 加载，不需要再补一次刷新 */
+      rearm.push({ id: newTab.id, restore: false });
     }
-    for (const key of Object.keys(tasks)) {
-      const tabId = Number(key);
-      if (claimed.has(tabId)) continue;
-      pending.delete(tabId);
-      const task = tasks[tabId];
-      /* 重映射时跳过已被其他任务认领、或仍是其他未处理任务键的页面：
-         同一网址开在多个标签页时，一个页面只挂一个任务，认领不到的走下方重开 */
-      let match =
-        openTabs.find((t) => !claimed.has(t.id) && !pending.has(t.id) && tabShowsUrl(t, task.url)) || null;
-      delete tasks[tabId];
-      staleAlarms.push(alarmName(tabId), hbName(tabId));
-      if (match) {
-        claimed.add(match.id);
-        pending.delete(match.id);
-        tasks[match.id] = Object.assign({}, task, { url: match.url || task.url });
-        await armRefresh(match.id, task.intervalSec);
-        await ensureHeartbeat(match.id);
-        /* 会话恢复的页面是在 cookie 恢复前加载的，补一次刷新让登录态生效 */
-        if (restoredRoots.has(siteRoot(hostOf(match.url || task.url)))) {
-          chrome.tabs.reload(match.id).catch(() => {});
-        }
-      } else if (task.url && /^https?:/i.test(task.url)) {
-        /* 先等 20 秒观察该 URL 是否会被其他页面导航到位，等不到再重开 */
-        const watched = await watchForUrl(task.url, new Set(Object.keys(tasks).map(Number)));
-        if (watched && typeof watched.id === "number" && !tasks[watched.id]) {
-          claimed.add(watched.id);
-          tasks[watched.id] = Object.assign({}, task, { url: watched.url || task.url });
-          await armRefresh(watched.id, task.intervalSec);
-          await ensureHeartbeat(watched.id);
-        } else {
-          const newTab = await chrome.tabs
-            .create({ url: task.url, active: false })
-            .catch(() => null);
-          if (newTab && typeof newTab.id === "number") {
-            tasks[newTab.id] = task;
-            await armRefresh(newTab.id, task.intervalSec);
-            await ensureHeartbeat(newTab.id);
-          }
-        }
-      } else if (!task.url) {
-        /* 浏览器重启后的旧格式任务：目标页面无从辨认，只能淘汰 */
-        console.warn("Dropped legacy task without url:", tabId);
-      }
-      dirty = true;
+    for (const { from } of plan.dropped) {
+      /* 浏览器重启后的旧格式任务：目标页面无从辨认，只能淘汰 */
+      console.warn("Dropped legacy task without url:", from);
     }
-    if (dirty) await setTasks(tasks);
-    const liveIds = new Set(Object.keys(tasks)); /* 落盘后的最终键：被重挂接/重开占用的 id 不能清 */
-    /* 清理时对照落盘后的最终键集合：延后清理若不看最终键集合，会把本轮刚 arm 的 alarm
-       （id 恰好曾是别的任务的键：tabId 互换、watch 等回原 id、Chrome 复用 id）
-       一并清掉，产出"任务在、永不刷新"的僵尸 */
-    for (const name of staleAlarms) {
-      const id = name.startsWith(HB_PREFIX) ? name.slice(HB_PREFIX.length) : name.slice(PREFIX.length);
-      if (liveIds.has(id)) continue;
-      await chrome.alarms.clear(name);
+    if (plan.dirty) await setTasks(tasks);
+    for (const { id, restore } of rearm) {
+      await armRefresh(id, tasks[id].intervalSec);
+      await ensureHeartbeat(id);
+      /* 会话恢复的页面是在 cookie 恢复之前加载的，补一次刷新让登录态生效 */
+      if (restore && restoredRoots.has(siteRoot(hostOf(tasks[id].url)))) {
+        chrome.tabs.reload(id).catch(() => {});
+      }
+    }
+    /* 未认领任务留下的 alarm 一律等写盘之后再清，且对照写盘后的最终键集合：
+       不看最终键集合会把本轮刚 arm 的 alarm（id 恰好曾是别的任务的键：tabId 互换、
+       重开拿到回用的 id）一并清掉，产出"任务在、永不刷新"的僵尸 */
+    const liveIds = new Set(Object.keys(tasks));
+    for (const id of plan.staleIds) {
+      if (liveIds.has(String(id))) continue;
+      await chrome.alarms.clear(alarmName(id));
+      await chrome.alarms.clear(hbName(id));
     }
     /* 启动时统一淘汰：v1.4.5 前遗留的多余备份、过期备份、超量备份 */
     await pruneCookieBackups(tasks);
