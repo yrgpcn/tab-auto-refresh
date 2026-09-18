@@ -156,7 +156,16 @@
   `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c http.proxy=socks5://127.0.0.1:10808 push origin main`
   立刻报 `could not read Username` 就是凭据缺失，需要在能弹界面的终端里推一次（或改用带 PAT 的地址），与代理无关。
 - 判断有没有推上去不要看 `git status`。本机的 `origin/main` 远程跟踪引用会僵在旧 commit，会误报 `ahead N`。以 `git ls-remote origin refs/heads/main` 为准
-- playwright 类脚本（弹窗截图、`_code-review/` 里几个门禁）需要显式给 NODE_PATH，否则报找不到 playwright：
-  `NODE_PATH="C:/Users/yrgpc/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules"`
-  该路径 2026-09-18 起在本机已不存在，重新装回 node 后要先改这条
-- 2026-09-18 起本机没有 node 也没有 npm：bash 与 PowerShell 都解析不到，`C:\Program Files\nodejs` 不存在，`.qoder` 各运行时目录里没有 `node.exe`。验证清单第 1、2 条因此在本机跑不了；第 3 条的 `_code-review/` 这台机器上也不在（它本来就不入库，新 clone 没有）。缺口由 CI 兜：push 后看 Actions，release workflow 自己跑 `validate.mjs` 与单测，任一失败就不建 Release。2.1.0 就是这样发的——本地零条实跑、CI 两条 push 全绿。装回 node 后恢复本地门禁为准，别把 CI 绿当成"本地验过"
+- playwright 类脚本（弹窗截图、`_code-review/` 里几个门禁）需要显式给 NODE_PATH，否则报找不到 playwright。原先记的那个 codex-runtimes 路径随运行时一起没了，别再照抄；现在怎么给见下面"恢复本地门禁"
+- 2026-09-18 起本机没有 node 也没有 npm：bash 与 PowerShell 都解析不到，`C:\Program Files\nodejs` 不存在，`.qoder` 各运行时目录里没有 `node.exe`。验证清单第 1、2 条因此在本机跑不了；第 3 条的 `_code-review/` 这台机器上也不在（它本来就不入库，新 clone 没有）。缺口由 CI 兜：push 后看 Actions，release workflow 自己跑 `validate.mjs` 与单测，任一失败就不建 Release。2.1.0 就是这样发的——本地零条实跑、CI 三条 push 全绿。装回 node 后恢复本地门禁为准，别把 CI 绿当成"本地验过"
+
+### 恢复本地门禁
+
+2026-09-18 在本机探过的现状：`winget` 可用（`WindowsApps\winget.exe`），`choco` / `scoop` / `nvm` 都没有。
+
+1. `winget install OpenJS.NodeJS.LTS`。装完**新开一个终端**，否则 PATH 不刷新，仍是 `node: command not found`
+2. `node --version` 要是 24.x，与 CI 的 `setup-node@v4 / node-version: 24` 对齐。22.x 也跑得起来，但那不等于 CI 的结果
+3. 验证清单第 1、2 条：`node scripts/validate.mjs` 与 `node --test "tests/**/*.test.mjs"`（引号必需，去掉就被 shell 吃掉）。这两步**不需要 `npm install`**——`scripts/` 与 `tests/` 里除了 `node:` 内置模块没有任何第三方 import，根 `package.json` 也没有 dependencies
+4. 只有截图（清单第 4 条）才需要 playwright，它是脚本运行时用 `createRequire` 现找的、不在仓库依赖里：`npm install -g playwright`，再在 PowerShell 里 `$env:NODE_PATH=(npm root -g)`，然后 `node scripts/screenshot-popup.mjs`。脚本里 Chrome 路径写死 `C:\Program Files\Google\Chrome\Application\chrome.exe`，本机该文件在；换机器要连着改
+5. 清单第 3 条不在这次恢复范围内：`_code-review/` 不入库，这台机器上从未存在，只能从原来那台拷过来，或按 CHANGELOG 里的描述重写门禁
+6. 恢复完成后改掉上面那条"本机没有 node"，以及本节里以今天为前提的现状描述
