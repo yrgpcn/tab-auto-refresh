@@ -39,7 +39,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { stripComments, storageCalls, spanThrough, functionBody } from "../helpers/source-tables.mjs";
+import { stripComments, storageCalls, spanThrough, functionBody, splitTop } from "../helpers/source-tables.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const pluginRoot = join(repoRoot, "tab-auto-refresh");
@@ -118,29 +118,6 @@ let recording = true; /* 建表阶段的命中不算「通道被走到了」 */
 const hit = (r) => {
   if (recording) ROUTES.add(r);
 };
-
-function topSplit(text, isSep) {
-  const parts = [];
-  let depth = 0;
-  let inStr = false;
-  let cur = "";
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inStr) {
-      cur += c;
-      if (c === "\\") cur += text[++i];
-      else if (c === '"') inStr = false;
-      continue;
-    }
-    if (c === '"') { inStr = true; cur += c; continue; }
-    if (c === "(" || c === "[" || c === "{") depth++;
-    else if (c === ")" || c === "]" || c === "}") depth--;
-    if (depth === 0 && isSep(c)) { parts.push(cur); cur = ""; continue; }
-    cur += c;
-  }
-  parts.push(cur);
-  return parts;
-}
 
 function asLiteral(expr) {
   const m = expr.match(/^"([^"\n]*)"$/);
@@ -246,7 +223,7 @@ function resolve(rawExpr, scope) {
   }
   if (expr.startsWith("[") && expr.endsWith("]")) {
     const inner = spanThrough(expr, 1, "]").text;
-    const items = topSplit(inner, (c) => c === ",").map((x) => x.trim()).filter(Boolean);
+    const items = splitTop(inner, ",").map((x) => x.trim()).filter(Boolean);
     if (!items.length) return null;
     const vals = [];
     for (const it of items) {
@@ -261,7 +238,7 @@ function resolve(rawExpr, scope) {
   if (expr.startsWith("{") && expr.endsWith("}")) {
     const inner = spanThrough(expr, 1, "}").text;
     const vals = [];
-    for (const entry of topSplit(inner, (c) => c === ",")) {
+    for (const entry of splitTop(inner, ",")) {
       const t = entry.trim();
       if (!t) continue;
       if (t.startsWith("...")) return null;
@@ -281,7 +258,7 @@ function resolve(rawExpr, scope) {
     if (vals.length) hit("对象字面量");
     return vals.length ? { values: vals } : null;
   }
-  const concat = topSplit(expr, (c) => c === "+");
+  const concat = splitTop(expr, "+");
   if (concat.length > 1) {
     let out = "";
     let known = 0;
@@ -305,7 +282,7 @@ function resolve(rawExpr, scope) {
     if (!fn) return null;
     const argStart = expr.indexOf("(", call.index) + 1;
     const argText = spanThrough(expr, argStart, ")").text;
-    const args = topSplit(argText, (c) => c === ",").map((a) => {
+    const args = splitTop(argText, ",").map((a) => {
       const r = resolve(a, scope);
       return r ? (r.values ? r.values[0] : r.value) : DYN;
     });
@@ -434,7 +411,7 @@ const callersOf = (name) => {
       if (new RegExp("(?:function\\s+|const\\s+|let\\s+)" + name + "\\s*[=(]").test(s.slice(Math.max(0, m.index - 40), m.index + name.length + 2))) continue;
       const argStart = m.index + m[0].length;
       const text = spanThrough(s, argStart, ")").text;
-      const first = topSplit(text, (c) => c === ",")[0].trim();
+      const first = splitTop(text, ",")[0].trim();
       out.push({ file: f, fn: enclosingFn(s, m.index), expr: first.replace(/\s+/g, " ") });
     }
   }

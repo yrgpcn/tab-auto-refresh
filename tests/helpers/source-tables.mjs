@@ -1,5 +1,6 @@
 /* 源码表格的切取原语，给"键名住在表里"那一类判据共用（`i18n-indirection.test.mjs` 管通道，
-   `wechat-budget.test.mjs` 管内容，`storage-map.test.mjs` 管存储调用点）。
+   `wechat-budget.test.mjs` 管内容，`storage-map.test.mjs` 管存储调用点，
+   `cookie-schema.test.mjs` 管存档对象的字段清单）。
 
    为什么单独一个文件而不是各写一份：这几段切取认的是本仓库常量表的**形状**
    （`const NAME = { k: "v" }` / 数组表每行最后一个字面量 / `PRESETS` 那种 `{key, seconds}`）。
@@ -184,6 +185,55 @@ export function storageCalls(src) {
     const start = m.index + m[0].length;
     const { text, end } = spanThrough(stripped, start);
     out.push({ zone: m[1], op: m[2], args: text, at: m.index, end });
+  }
+  return out;
+}
+
+/* 顶层分隔：只在深度 0（括号之外）且不在字符串里时切开。第十七轮那份 `topSplit` 住在
+   `storage-map.test.mjs` 里，本轮同一件事第二次要用——搬到这儿来共用一份，理由与本文件顶部
+   那句一样：切分类的东西写第二份必然漂移，而漂移在这里不报错，只是安静地少切几条 */
+export function splitTop(text, sep) {
+  const parts = [];
+  let depth = 0;
+  let inStr = false;
+  let cur = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      cur += c;
+      if (c === "\\") cur += text[++i];
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; cur += c; continue; }
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") depth--;
+    if (depth === 0 && c === sep) { parts.push(cur); cur = ""; continue; }
+    cur += c;
+  }
+  parts.push(cur);
+  return parts;
+}
+
+/* 一个对象字面量**内部**的键名清单（调用方负责先按配对把外层花括号切掉，传进来的是不含
+   `{}` 的原文）。返回四样东西，够判据分清"这个键叫什么"与"这里没法知道键叫什么"：
+     keys      —— 裸标识符与引号名，以及简写（`{ tasks }` 的键就是 tasks）
+     computed  —— `[expr]:` 形式的计算键，把 expr 原文交回调用方自己解析
+     spread    —— `...expr`，它带进来的键在这次切取里看不见
+     认不出的条目形状一律抛，不回一个截断的清单：这里"少一条"的表现是判据安静地少覆盖 */
+export function objectKeys(inner) {
+  const out = { keys: [], computed: [], spread: [] };
+  for (const part of splitTop(inner, ",")) {
+    const t = part.trim();
+    if (!t) continue;
+    if (t.startsWith("...")) { out.spread.push(t.slice(3).trim()); continue; }
+    const computed = t.match(/^\[([\s\S]*?)\]\s*:/);
+    if (computed) { out.computed.push(computed[1].trim()); continue; }
+    const named = t.match(/^(?:"([^"\n]*)"|'([^'\n]*)'|([A-Za-z_$][\w$]*))\s*:/);
+    if (named) { out.keys.push(named[1] ?? named[2] ?? named[3]); continue; }
+    const shorthand = t.match(/^([A-Za-z_$][\w$]*)$/);
+    if (shorthand) { out.keys.push(shorthand[1]); continue; }
+    throw new Error(`对象条目形状认不出来：${t.slice(0, 60)}`);
   }
   return out;
 }
