@@ -58,7 +58,7 @@
 
 1. 含"先读后写、跨异步步骤共享状态"的流程要把顺序决策抽成纯函数、执行器只负责写盘，让顺序能被单测直接断言，而不是靠读代码推断。已按这条落地的是 `planPrune`（启动恢复）、`decideAlarmAction`（到点处置）、`decideBackupWrite`（备份写入），以及检测链的 `aggregateFrameHits` + `decideWallFromFrames`（多框架结果怎么合并、逐框架怎么判墙）——页内注入体只回原始事实，判断一概留在 `logic.js`。新写的同类流程照这个形状做
 2. 权限与功能成对记账：新增权限要在 CHANGELOG 该版本 Added 里点名，并更新下面的权限清单；新增需要权限的功能同样要更新权限说明（这本账现在四段都对得上，见"权限这本账有四段"那一条）
-3. 默认值（开关、阈值、间隔）任何变动都要逐条列出受影响路径和"用户已显式设过值"的分支，确认不会改变既有用户的行为
+3. 默认值（开关、阈值、间隔）任何变动都要逐条列出受影响路径和"用户已显式设过值"的分支，确认不会改变既有用户的行为。新增一个设置项要一次改齐五处，理由见下面"设置这本账有五段"那一条
 
 ### 测试纪律
 
@@ -85,6 +85,7 @@
 - `chrome.storage.local`：`tasks`（tabId → `{intervalSec, createdAt, url, keywords?, onHit?, notifiedKeys?, autoPaused?}`，旧数据的单串 `keyword` 由 `getTaskKeywords` 兼容读取，后台与弹窗共用这一个入口）、`pausedAll`、`sessionProbe`（根域 → `{sus, lost, lastNotifiedAt}`）、`cookieBackup:<host>`、`cookieBackupWarnedOnce`、`wechatLastResult`、`webhookLastResult`（两个出口各一份最近一次投递结果，只存本机、不走 sync）
 - `chrome.storage.session`：跨 SW 回收要活下来的运行时计数与标记，即 `rt:error:<tabId>` / `rt:captcha:<tabId>` / `rt:activity:<tabId>` / `rt:skip:<tabId>` / `rt:awake` / `rt:pruneDone`（本轮浏览器会话的启动恢复是否收尾，给弹窗那条清理网看，A16）/ `wechatToken`。判断标准是要活过 SW 回收放这里，要活过浏览器重启才放 local
 - `chrome.storage.sync`：`settings`。默认值集中在 `shared/config.js` 的 `DEFAULT_SETTINGS`，弹窗与后台共用；sync 为空时会从 local 迁移旧设置
+- 设置这本账有五段：`DEFAULT_SETTINGS` 的键 ↔ 弹窗 `saveSettings` 发出的载荷键 ↔ `popup.html` 里能填值的控件 ↔ 插件源码里的读写点 ↔ `NOTIFY_EVENTS` 与弹窗那几个事件格子。原先只有两头有人核（A18 钉"保存读的控件＝回流铺的控件"、A29 钉"`popup.js` 取的 id 在 HTML 里存在"），中间三段零判据，现在由 `tests/tab-auto-refresh/settings-map.test.mjs` 钉。每一段的静默形状：载荷多出一个 defaults 没登记的键 → `pickKnownSettings` 把它丢掉，用户点了看着生效、落盘一个字都没有（实测：把 `keepAlive` 那一项改个名、载荷键数仍是 15，改前的整套 504 条全绿）；defaults 里长出一个没人读也没人写的键 → 它跟着 `sync` 漫游却改不掉任何行为；HTML 里摆一格 `popup.js` 从不取的控件 → 一个从来没能生效过的开关；`.checked` 读到文本框存进去的是 undefined（序列化时整个键消失）、`.value` 读到复选框存进去的是永远真值的 `"on"`；事件名在清单、格子、载荷、`notifyOut("…")` 调用点四处里任一处漂一格 → 那一格勾与不勾一模一样。**新增一个设置项要一次改齐**：`DEFAULT_SETTINGS` 的默认值、载荷键、HTML 的格子与类型（复选框用 `.checked`、文本框用 `.value`）、真实的读写点，若是一类通知还要同时进 `NOTIFY_EVENTS` 并在 `background.js` 有 `notifyOut` 调用点。只改一头就是这条门禁的红
 - 后台的 `getSettings()` 带内存快照（`settingsCache` / `settingsLoading` / `settingsEpoch`）：一次任务页加载周期里它被调 5~7 次，原先每次都发两笔存储读。**新增的 `settings` 写入一律走 `patchSettings(partial)`，别自己 `get`/`set`**：它在 `withSettingsLock` 里读盘、合并、整份写回，读写两头各 `invalidateSettings()` 一次（读前不失效会拿过期快照当基座，把用户这次没碰的开关按旧值写回去；写后不失效则 `onChanged` 回流前的一切读取仍是写前的值）。`partial` 给函数时按当前设置决定增量、返回 `null` 即不写，"没变就不写"的判断因此与写盘同处一把锁。唯一例外是 `loadSettings` 的 local→sync 迁移（整份写入、只发生一次、且在 `getSettings` 调用栈内，走 `patchSettings` 等于自锁）。两把锁的方向是契约：`startTask` 在 `withTaskLock` 内 `await` 设置写盘（单向等待），设置锁内绝不排 `withTaskLock`，否则互相等死。失效点、串行、锁方向均由 `tests/tab-auto-refresh/settings-cache.test.mjs` 钉住，文件末尾记着红→绿对照与两处第一次不合格的对照
 - 当前默认开：`bypassCache`、`keepAlive`、`httpHeartbeat`、`skipOnActivity`、`captchaGuard`；默认关：`skipDiscarded`、`cookieBackup`、`keepAwake`、`wechatEnabled`；`webhookUrl` 默认空即关闭
 - 改 `DEFAULT_SETTINGS` 只影响新装：`getSettings()` 是 `Object.assign({}, DEFAULT_SETTINGS, 已存值)`，老用户的存盘值优先。想让老用户也吃到新默认必须写迁移
