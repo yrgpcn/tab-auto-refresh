@@ -183,6 +183,8 @@
 - 守卫排在异步分发体的**第一行**：带 `sender.tab` 的来源（我们自己注入的 `content/keepalive.js`）只能用 `keepalive-query` 与 `user-activity`，其余一律 `ok: false` 回掉。MV3 下网页本来到不了这个入口，这条守的是同样带 `sender.tab` 的自己人。**新增页面侧消息类型必须同时登记进 `FROM_PAGE_TYPES`**，漏登记的表现是那条功能静默失效（注入脚本自己吞掉失败），由 `tests/tab-auto-refresh/message-gate.test.mjs` 扫 `keepalive.js` 源码比对钉住
 - 反向刻意不守：弹窗发 `user-activity` 自己就空转（只认 `sender.tab.id`，不看 msg 里的 id），`keepalive-query` 是只读配置快照
 - `save-settings` 的载荷先过 `pickKnownSettings`（`shared/logic.js` 纯函数）再进 `patchSettings`：只留 `DEFAULT_SETTINGS` 的**自有**键（判据不能用 `in`，否则 `constructor` 那批原型链键全被收下），未知键丢弃——进了 `settings` 就会随 `sync` 漫游并占配额。只管键不管值，值的形状由读侧（`normalizeStoredSettings` / `normalizeWebhookUrl`）负责
+- 一条消息有三处名字要两头对齐，此前一处也没对过（A32）：**① 类型名**（弹窗与页面发出的 `type` ↔ 分发链上 `msg.type` 那几个分支字符串）、**② 请求载荷键**（`send` 出去的每个键 ↔ 分支里读的每个 msg 属性）、**③ 应答字段**（`sendResponse` 回的对象 ↔ 弹窗读的每个 res 属性）。三段全是跨文件字面量、全没有 import，改一边另一边一个字都不会报错，症状永远是"点了没反应"而不是"报错了"：类型名打错落到分发链末尾，回一个 `{ok:false}`，而 `prune-now` 与 `resume-task` 两个调用点把返回值甩掉不看，连失败都不知道；载荷键打错那边读到 `undefined`，而 `undefined` 在这几个参数上全是合法输入（"继续盯守"当成没勾、关键词当成没填），没有一条路径抛错也没有一行日志说这里少了字段。判据在 `tests/tab-auto-refresh/message-ledger.test.mjs`，按花括号配对从真实源码里切出对象字面量求键名、不执行任何函数体（跑起来对账要先造一份假载荷，那等于把待核对的字面量再抄第三遍）。**新增一条消息、加删一个载荷键或改一个应答字段，三本账一起对**；该文件末尾记着实测：从弹窗这一头改坏 ①②③ 全盲，从背景那一头改坏 ② 也盲，因为测试侧那一份是**第三份抄本**——唯一发过 `keepWatching: true` 的用例发完从没回头看 `onHit`，两份真源码之间的账没人对，抄本自己多齐都对不上任何东西
+- 保活配置到页面有两条路：注入后 `keepalive-query` 拉一次快照，之后 `tabs.sendMessage` 推变更。两条路必须给同一个形状——推送载荷、`keepalive-query` 应答、`applyConfig` 读的字段**三方齐平**，同一条门禁钉住。字段名对不上时页面上那个 cfg 属性是 `undefined`，等于把对应开关判成关，页面不报错，只是从此不心跳
 
 ### 弹窗
 
