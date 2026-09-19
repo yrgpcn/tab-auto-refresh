@@ -67,6 +67,28 @@
   两轮的门禁 import 同一份——同一类判据写第二份必然漂移，而这里"漂"的表现是不报错。
   两处刻意不管：站点地板那个数本文件跟着代码放宽（写死它就成了第二份真相来源，代价记在
   文件末尾），弹窗那两行状态文字的容量由 CSS 与版面定，不在这根轴上
+- 存储这本账（源码里到底读写哪些键、落在哪个区 ↔ 下面 `### 存储` 那三行清单）此前零判据，
+  第十七轮补上（A35）。相邻三条门禁各从自己的切面看存储，没有一条问过这本账本身：
+  `permission-map` 管 API 要哪一项权限、`settings-map` 管 `settings` 那一个键的五段、
+  `rt-lifecycle` 管 `rtRoundKeys` 里放哪几族以及清不清得干净。实测（仓库外整仓副本 14 台变异，
+  下表记在门禁文件末尾）六类改法在删掉本门禁之后 `validate.mjs` 与其余 534 条全绿：
+  新增一个键而文档只字不提、新增一笔解析不出的读写、文档删掉一项、文档多列一项、
+  第二处 `chrome.storage.local.get(null)` 全量读、会话态包装函数的调用方递一个解析不出的键名。
+  这六类的共同形状是"代码与测试自洽，只有跨文件那本账漂移"，而两头的症状都是**安静**：
+  键进错区不崩，只是让状态在没人预期的时刻活着或消失；文档少一行也不崩，直到下一个人照着它改代码
+  （实测真收获就是这样出来的：`settings` 与 `cookieBackup` 两个只在旧数据上存在的 local 键，
+  源码真读写而 `### 存储` 没写，正向那一条当场点名）。门禁
+  `tests/tab-auto-refresh/storage-map.test.mjs` 七条：抽取形状（45 个调用点每个都要有归宿，
+  未定的按"哪个文件的哪个函数里有几笔"登记在册，`n` 参与比对）、正向（源码→文档）、反向
+  （文档→源码，那个区真碰它一次）、包装函数这一头（`rtGet` / `rtSet` / `rtRemove` / `rtBump`
+  的 17 处调用点递出去的键都要解析得出来）、全量读（只此一处，且函数体必须按 `COOKIE_BACKUP_PREFIX`
+  过滤，否则全量读回来不筛等于把整个区的键都当成自己那一族）、文档那三行的形状与数量下限、
+  参照物（只有间接通道才进得了账的键实测 10 个，断的是精确数）。动态段一律归一成 `前缀:<*>`
+  再比，所以文档写 `cookieBackup:<host>` 还是 `<tabId>` 都不影响判据，占位符名字不进比较。
+  **新增一个存储键要同时进 `### 存储` 对应那一区的清单**；把状态换区更要进来，因为区的语义
+  就是"活过 SW 回收放 session、要活过浏览器重启才放 local"那把尺。刻意留下的边界：只管键名与区，
+  值的形状不在这根轴上（除 `settings` 另有 `settings-map`）；"这一族生命周期里清得干净不干净"
+  是 `rt-lifecycle` 的账，两头都绿才叫这本账齐
 - `tests/` 单元测试放在仓库根，避免被打进插件 zip
 - `docs/` README 用的截图
 - `_code-review/` 是本地审核归档（多轮报告与回归脚本），被 `.gitignore` 忽略，不入库、不进 Release、新 clone 里不存在。所以本文件里引用 `_code-review/...` 的路径只在本地有效
@@ -114,9 +136,10 @@
 
 ### 存储
 
-- `chrome.storage.local`：`tasks`（tabId → `{intervalSec, createdAt, url, keywords?, onHit?, notifiedKeys?, autoPaused?}`，旧数据的单串 `keyword` 由 `getTaskKeywords` 兼容读取，后台与弹窗共用这一个入口）、`pausedAll`、`sessionProbe`（根域 → `{sus, lost, lastNotifiedAt}`）、`cookieBackup:<host>`、`cookieBackupWarnedOnce`、`wechatLastResult`、`webhookLastResult`（两个出口各一份最近一次投递结果，只存本机、不走 sync）
+- `chrome.storage.local`：`tasks`（tabId → `{intervalSec, createdAt, url, keywords?, onHit?, notifiedKeys?, autoPaused?}`，旧数据的单串 `keyword` 由 `getTaskKeywords` 兼容读取，后台与弹窗共用这一个入口）、`pausedAll`、`sessionProbe`（根域 → `{sus, lost, lastNotifiedAt}`）、`cookieBackup:<host>`、`cookieBackupWarnedOnce`、`wechatLastResult`、`webhookLastResult`（两个出口各一份最近一次投递结果，只存本机、不走 sync）、`settings`（1.1.0 及之前把设置存在 local，迁移读到就整份搬去 sync 再删掉这一份）、`cookieBackup`（v1.4.1 及之前的"单一对象"格式旧备份，`prune` 一进来就整条删）。这两项都只在旧数据上存在、读一次就没，但 local 里为什么会出现这两个名字，只有这一行说得出。
 - `chrome.storage.session`：跨 SW 回收要活下来的运行时计数与标记，即 `rt:error:<tabId>` / `rt:captcha:<tabId>` / `rt:activity:<tabId>` / `rt:skip:<tabId>` / `rt:awake` / `rt:pruneDone`（本轮浏览器会话的启动恢复是否收尾，给弹窗那条清理网看，A16）/ `wechatToken`。判断标准是要活过 SW 回收放这里，要活过浏览器重启才放 local
 - `chrome.storage.sync`：`settings`。默认值集中在 `shared/config.js` 的 `DEFAULT_SETTINGS`，弹窗与后台共用；sync 为空时会从 local 迁移旧设置
+- 上面那三行是**两头账的一头**：另一头是插件源码里每一个 `chrome.storage.<区>.<动作>` 调用点，由 `tests/tab-auto-refresh/storage-map.test.mjs` 现切现比（正向：源码里出现的键要在那一区列名；反向：那行列出的键源码要真碰一次）。所以**新增一个存储键要回来改对应那一行**，把状态换区更要回来改，理由写在上面 `## 仓库` 那一条里
 - 设置这本账有五段：`DEFAULT_SETTINGS` 的键 ↔ 弹窗 `saveSettings` 发出的载荷键 ↔ `popup.html` 里能填值的控件 ↔ 插件源码里的读写点 ↔ `NOTIFY_EVENTS` 与弹窗那几个事件格子。原先只有两头有人核（A18 钉"保存读的控件＝回流铺的控件"、A29 钉"`popup.js` 取的 id 在 HTML 里存在"），中间三段零判据，现在由 `tests/tab-auto-refresh/settings-map.test.mjs` 钉。每一段的静默形状：载荷多出一个 defaults 没登记的键 → `pickKnownSettings` 把它丢掉，用户点了看着生效、落盘一个字都没有（实测：把 `keepAlive` 那一项改个名、载荷键数仍是 15，改前的整套 504 条全绿）；defaults 里长出一个没人读也没人写的键 → 它跟着 `sync` 漫游却改不掉任何行为；HTML 里摆一格 `popup.js` 从不取的控件 → 一个从来没能生效过的开关；`.checked` 读到文本框存进去的是 undefined（序列化时整个键消失）、`.value` 读到复选框存进去的是永远真值的 `"on"`；事件名在清单、格子、载荷、`notifyOut("…")` 调用点四处里任一处漂一格 → 那一格勾与不勾一模一样。**新增一个设置项要一次改齐**：`DEFAULT_SETTINGS` 的默认值、载荷键、HTML 的格子与类型（复选框用 `.checked`、文本框用 `.value`）、真实的读写点，若是一类通知还要同时进 `NOTIFY_EVENTS` 并在 `background.js` 有 `notifyOut` 调用点。只改一头就是这条门禁的红
 - 后台的 `getSettings()` 带内存快照（`settingsCache` / `settingsLoading` / `settingsEpoch`）：一次任务页加载周期里它被调 5~7 次，原先每次都发两笔存储读。**新增的 `settings` 写入一律走 `patchSettings(partial)`，别自己 `get`/`set`**：它在 `withSettingsLock` 里读盘、合并、整份写回，读写两头各 `invalidateSettings()` 一次（读前不失效会拿过期快照当基座，把用户这次没碰的开关按旧值写回去；写后不失效则 `onChanged` 回流前的一切读取仍是写前的值）。`partial` 给函数时按当前设置决定增量、返回 `null` 即不写，"没变就不写"的判断因此与写盘同处一把锁。唯一例外是 `loadSettings` 的 local→sync 迁移（整份写入、只发生一次、且在 `getSettings` 调用栈内，走 `patchSettings` 等于自锁）。两把锁的方向是契约：`startTask` 在 `withTaskLock` 内 `await` 设置写盘（单向等待），设置锁内绝不排 `withTaskLock`，否则互相等死。失效点、串行、锁方向均由 `tests/tab-auto-refresh/settings-cache.test.mjs` 钉住，文件末尾记着红→绿对照与两处第一次不合格的对照
 - 当前默认开：`bypassCache`、`keepAlive`、`httpHeartbeat`、`skipOnActivity`、`captchaGuard`；默认关：`skipDiscarded`、`cookieBackup`、`keepAwake`、`wechatEnabled`；`webhookUrl` 默认空即关闭

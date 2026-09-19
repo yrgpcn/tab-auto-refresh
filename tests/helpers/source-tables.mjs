@@ -1,5 +1,5 @@
-/* 源码表格的切取原语，给"键名住在表里"那一类判据共用（`i18n-indirection.test.mjs`
-   管通道，`wechat-budget.test.mjs` 管内容）。
+/* 源码表格的切取原语，给"键名住在表里"那一类判据共用（`i18n-indirection.test.mjs` 管通道，
+   `wechat-budget.test.mjs` 管内容，`storage-map.test.mjs` 管存储调用点）。
 
    为什么单独一个文件而不是各写一份：这几段切取认的是本仓库常量表的**形状**
    （`const NAME = { k: "v" }` / 数组表每行最后一个字面量 / `PRESETS` 那种 `{key, seconds}`）。
@@ -145,22 +145,45 @@ export function getMessageArgs(src) {
   const out = [];
   const re = /getMessage\s*\(/g;
   for (let m = re.exec(stripped); m; m = re.exec(stripped)) {
-    let i = m.index + m[0].length;
-    let depth = 1;
-    let inStr = false;
-    const start = i;
-    for (; i < stripped.length && depth > 0; i++) {
-      const c = stripped[i];
-      if (inStr) {
-        if (c === "\\") i++;
-        else if (c === '"') inStr = false;
-        continue;
-      }
-      if (c === '"') inStr = true;
-      else if (c === "(") depth++;
-      else if (c === ")") depth--;
+    const start = m.index + m[0].length;
+    out.push(spanThrough(stripped, start).text);
+  }
+  return out;
+}
+
+/* 从"开括号之后的第一个字符"走到与它配对的那个闭括号，返回括号里的原文与闭括号下标。
+   双引号串整段跳过（里面有括号也不算数）。调用方给的 src 应当已经剔过注释。
+   配不平时抛，不回一个截断的片段——切一半在这里的表现是"安静地少看几个键" */
+export function spanThrough(src, start, closeChar = ")") {
+  const openChar = { ")": "(", "]": "[", "}": "{" }[closeChar];
+  let depth = 1;
+  let inStr = false;
+  for (let i = start; i < src.length; i++) {
+    const c = src[i];
+    if (inStr) {
+      if (c === "\\") i++;
+      else if (c === '"') inStr = false;
+      continue;
     }
-    out.push(stripped.slice(start, i - 1));
+    if (c === '"') inStr = true;
+    else if (c === openChar) depth++;
+    else if (c === closeChar && --depth === 0) return { text: src.slice(start, i), end: i };
+  }
+  throw new Error(`${openChar}…${closeChar} 没配平（从 ${start} 起）`);
+}
+
+/* 插件源码里每一个 `chrome.storage.<区>.<动作>(…)` 调用点，实参整段取回（括号配平）。
+   第十七轮的探针在第一版上用 `[^)]*` 切实参，凡是自己带括号的都少切一截
+   （`session.remove(rtRoundKeys(tabId))` 只剩到 `rtRoundKeys(tabId`），键集合因此看着比实际大。
+   这一条认的是"调用点写了什么"，键名的解析留给调用方 */
+export function storageCalls(src) {
+  const stripped = stripComments(src);
+  const out = [];
+  const re = /chrome\.storage\.(local|session|sync)\.(get|set|remove)\s*\(/g;
+  for (let m = re.exec(stripped); m; m = re.exec(stripped)) {
+    const start = m.index + m[0].length;
+    const { text, end } = spanThrough(stripped, start);
+    out.push({ zone: m[1], op: m[2], args: text, at: m.index, end });
   }
   return out;
 }
