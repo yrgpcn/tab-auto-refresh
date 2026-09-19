@@ -262,10 +262,11 @@ test("两个颜色类在 CSS 里真的存在：类挂上了却没样式等于没
   }
 });
 
-test("renderWebhook 的四处调用各在各自的事件里", () => {
-  /* 定义那一行也写成 renderWebhook() {，所以只数独占一句的调用 */
+test("renderWebhook 的五处调用各在各自的事件里", () => {
+  /* 定义那一行也写成 renderWebhook() {，所以只数独占一句的调用。
+     4 处是 A8 的形状；A11 给文本框补 input 绑定后是 5 处（初绘、input、change、点测试、留痕变化） */
   const calls = [...POPUP_SRC.matchAll(/^\s*renderWebhook\(\);$/gm)];
-  assert.equal(calls.length, 4, `调用点该是 4 处（初绘、改地址、点测试、留痕变化），实到 ${calls.length} 处`);
+  assert.equal(calls.length, 5, `调用点该是 5 处（初绘、input、change、点测试、留痕变化），实到 ${calls.length} 处`);
   /* 初绘必须紧跟在地址回填之后：它读的是输入框当前值，排在前面就等于永远显示"未配置" */
   const fill = POPUP_SRC.indexOf('$("webhookUrlInput").value = settings.webhookUrl');
   assert.ok(fill > 0 && POPUP_SRC.indexOf("renderWebhook();", fill) - fill < 80, "初绘没紧跟在地址回填后面");

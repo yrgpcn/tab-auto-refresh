@@ -23,6 +23,16 @@ const WECHAT_FIELD_LABEL_KEYS = {
   templateId: "wechatTplLabel"
 };
 
+/* 走 settings 的文本框。绑事件时一视同仁：一边打一边重算状态行，写盘延后一拍（见 scheduleSave）。
+   凭据四项 + webhook 地址，全是"填完不点别处就可能直接关窗"的那种输入 */
+const TEXT_SETTING_INPUT_IDS = [
+  "webhookUrlInput",
+  "wechatAppIdInput",
+  "wechatSecretInput",
+  "wechatOpenIdInput",
+  "wechatTplInput"
+];
+
 let currentTab = null;
 let tasks = {};
 let settings = Object.assign({}, DEFAULT_SETTINGS);
@@ -400,6 +410,47 @@ async function saveSettings() {
   });
 }
 
+/* 文本框的保存时机（A11）。原先只绑 change，而弹窗一失去焦点就整体销毁：
+   打完字不按 Tab、不点别处、直接点弹窗外，这一笔输入连一次保存都没发生过。
+   也不能改成逐字符立即写：一笔 sync.set 会回流成 storage.onChanged，弹窗于是每敲一个字
+   就重读一遍存储、整体重绘一次，后台那份 settings 快照也跟着每次失效；
+   而 chrome.storage.sync 这一族本来就带每分钟写次数上限，抛出来的错在弹窗里没人看得见。所以：
+     input  → 把写盘往后推一拍（每敲一个字重新计时），状态行同步重算
+     change → 立刻写（回车与失焦都是"这个字段填完了"的明确信号）
+     两个「发送测试」→ 先写再测，见那两处
+     关窗   → 还有没落盘的输入就补一次
+   最后那条只是补救：文档正在销毁，这一笔 sendMessage 不保证来得及。
+   "打完字 0.5 秒内点弹窗外"仍只能真机验，记在 BACKLOG.md V1 (e) */
+const SAVE_DEBOUNCE_MS = 500;
+let saveTimer = null;
+
+function cancelScheduledSave() {
+  if (saveTimer === null) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+}
+
+function scheduleSave() {
+  cancelScheduledSave();
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    saveSettings();
+  }, SAVE_DEBOUNCE_MS);
+}
+
+/* 测试按钮用：先落盘再发测试，所以不论有没有待写的输入都要写这一次。
+   顺手把计时器摘掉，免得它稍后再写一笔一样的 */
+async function saveNow() {
+  cancelScheduledSave();
+  await saveSettings();
+}
+
+/* 关窗用：没有待写的输入就一笔都不写，免得每次点开点外都白写一次 sync */
+async function flushPendingSave() {
+  if (saveTimer === null) return;
+  await saveNow();
+}
+
 /* webhook 状态行，三件事按"用户当场能修的优先"排：
    地址非法 > 还没发过 > 最近一次投递的成败。
    后台对非法地址是静默忽略的（normalizeWebhookUrl → "" → 直接 return，那属于配置态而不是
@@ -536,9 +587,29 @@ async function init() {
   $("skipOnActivityCheck").addEventListener("change", saveSettings);
   $("keepAwakeCheck").addEventListener("change", saveSettings);
   $("captchaGuardCheck").addEventListener("change", saveSettings);
-  $("webhookUrlInput").addEventListener("change", () => {
-    renderWebhook();
-    saveSettings();
+  /* 五个文本框共用一套（A11）：input 让"地址非法"的红字一边打一边出现，写盘延后一拍；
+     change（回车、失焦）立刻写。原先只有 change，红字要等失焦才出现，
+     而不点别处就关窗的话这次输入整条丢失 */
+  for (const id of TEXT_SETTING_INPUT_IDS) {
+    const el = $(id);
+    el.addEventListener("input", () => {
+      renderWebhook();
+      renderWechat();
+      scheduleSave();
+    });
+    el.addEventListener("change", () => {
+      renderWebhook();
+      renderWechat();
+      saveNow();
+    });
+  }
+  /* 弹窗失去焦点即整体销毁，change 不会再触发：还有没落盘的输入就补一次。
+     这一笔不保证来得及（文档正在销毁），所以真机那条检查仍然留着 */
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushPendingSave();
+  });
+  window.addEventListener("pagehide", () => {
+    flushPendingSave();
   });
   $("webhookEvSession").addEventListener("change", saveSettings);
   $("webhookEvKeyword").addEventListener("change", saveSettings);
@@ -550,9 +621,10 @@ async function init() {
     btn.disabled = true;
     btn.textContent = msg("webhookTestSending");
     try {
-      /* 与微信侧同一个时序理由：点按钮必然先让地址框失焦，弹窗会先发 save-settings，
-         而它在后台自己也要 await 一次 getSettings 才写盘。不串起来的话测试读的是旧地址 */
-      await saveSettings();
+      /* 与微信侧同一个时序理由，换了形状：地址可能是刚刚打完字还没落盘的（压在 input 的
+         去抖计时器里），不先写一次，测试读到的就是上一个地址。saveNow 顺带把计时器摘掉，
+         免得它稍后再写一笔一样的 */
+      await saveNow();
       const res = await send({ type: "webhook-test" });
       if (res && res.result) {
         webhookLast = res.result;
@@ -564,17 +636,11 @@ async function init() {
     }
   });
 
-  /* 微信直连：开关即时保存并刷新状态行；凭据在二级视图里填，change（失焦/回车）才写盘 */
+  /* 微信直连：开关即时保存并刷新状态行；凭据四项与 webhook 地址共用上面那段文本框绑定 */
   $("wechatEnabledCheck").addEventListener("change", () => {
     renderWechat();
     saveSettings();
   });
-  for (const id of ["wechatAppIdInput", "wechatSecretInput", "wechatOpenIdInput", "wechatTplInput"]) {
-    $(id).addEventListener("change", () => {
-      renderWechat();
-      saveSettings();
-    });
-  }
   $("wechatSetupBtn").addEventListener("click", () => {
     document.body.classList.add("wx-mode");
     $("wechatAppIdInput").focus();
@@ -583,23 +649,28 @@ async function init() {
     document.body.classList.remove("wx-mode");
   });
   /* 测试消息：填完凭据立刻能验证，不用等某个事件真的发生。
-     结果经后台写 storage → onChanged 回流，这里同时也用返回值即时刷新一次 */
+     结果经后台写 storage → onChanged 回流，这里同时也用返回值即时刷新一次。
+     try/finally 与 webhook 那条对齐：中途任何一次 await 抛错（SW 正好被回收就是这种时候），
+     按钮不能留在 disabled +"发送中"，错误也不能被吞成"什么都没发生" */
   $("wechatTestBtn").addEventListener("click", async () => {
     const btn = $("wechatTestBtn");
     btn.disabled = true;
     btn.textContent = msg("wechatTestSending");
-    /* 先保存再测试：凭据输入框是失焦（change）保存的，点这个按钮必然先让输入框失焦，
-       所以弹窗会先发 save-settings。两条消息在后台各自独立执行，而 save-settings 自己
-       也要先 await 一次 getSettings() 才能写盘，于是 wechat-test 的 getSettings() 排在
-       它前面落地、读到旧值：刚填完凭据点测试，得到的是"还缺 appID、密钥、openid、模板ID"，
-       而实际发出去的微信请求数是 0。必须在这里 await，把保存和测试串成一条链 */
-    await saveSettings();
-    const res = await send({ type: "wechat-test" });
-    btn.disabled = false;
-    btn.textContent = msg("wechatTestBtn");
-    if (res && res.result) {
-      wechatLast = res.result;
-      renderWechat();
+    try {
+      /* 先保存再测试：刚打的凭据可能还压在 input 的去抖计时器里，不先写一次，
+         后台读到的就是上一个值。两条消息在后台各自独立执行，而 save-settings 自己也要先
+         await 一次 getSettings() 才写盘，于是 wechat-test 的 getSettings() 可能排在它前面
+         落地、读到旧值：刚填完凭据点测试会得到"还缺 appID、密钥、openid、模板ID"，
+         而实际发出去的微信请求数是 0。必须在这里 await，把保存和测试串成一条链 */
+      await saveNow();
+      const res = await send({ type: "wechat-test" });
+      if (res && res.result) {
+        wechatLast = res.result;
+        renderWechat();
+      }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = msg("wechatTestBtn");
     }
   });
 

@@ -223,6 +223,33 @@
     没有它，"动一个字就红"的守卫同样能拿满分。其中 K10 **第一次跑是绿的**：子句只按中文句读切，
     整段英文算一句，前一句里的 `do not omit` 替后一句的兜底建议作了证；把英文句点也算边界之后才红。
     逐条红名单记在该文件末尾
+- 弹窗的五个文本框只在失焦时保存，"打完字直接点弹窗外"这一次输入整条丢掉（`BACKLOG.md` A11，P3）。
+  绑的只有 `change`，而 Chrome 弹窗一失去焦点就整体销毁——文档都没了，`change` 自然不会触发。
+  webhook 地址与微信凭据四项全是"填完不点别处就关窗"的那种输入，重开弹窗是空的，用户只会认为它没记住。
+  同一处绑定还压着另一半：`renderWebhook()` 也挂在 `change` 上，于是 A8 那条"地址非法给红字"
+  在真实操作中从来没出现过——它要等一次失焦，而失焦通常就意味着关窗
+  - 现在是四档：`input` 去抖 500ms 写盘并同步重算状态行（红字一边打一边出现）、
+    `change`（回车、失焦）立刻写、两个「发送测试」先 `await saveNow()` 再发、
+    `visibilitychange → hidden` 与 `pagehide` 各补一次
+  - 刻意**不**改成逐字符立即写：一笔 `sync.set` 会回流成 `storage.onChanged`，弹窗于是每敲一个字
+    重读一遍存储、整体重绘一次，后台那份 settings 快照也跟着每次失效；`chrome.storage.sync` 那族
+    每分钟写次数上限还在后面。具体阈值没写进注释，也没写在这里——本仓库没实测过它
+  - 关窗那一笔是补救不是保证：文档正在销毁，`sendMessage` 来不来得及都不一定。
+    "打完字 0.5 秒内点弹窗外"仍只能真机验，记在 `BACKLOG.md` V1 (e)
+  - 微信的「发送测试」补上 `try/finally`（webhook 那条从 A8 起就有）：中途任何一次 await 抛错
+    （SW 正好被回收就是这种时候）原先会把按钮永久留在 disabled +"发送中"，错误本身被吞成
+    "什么都没发生"。两条按钮现在同形，连"先落盘再测"的时序也同形
+  - 纪律 3：默认值、存储键、消息类型一个都没动，改的全是弹窗侧的事件绑定与写盘时机；
+    新增的 `SAVE_DEBOUNCE_MS` 与 `TEXT_SETTING_INPUT_IDS` 都住在 popup.js，不入存储。
+    权限没有新增（纪律 2 无账要记）
+  - 门禁：新增 `tests/tab-auto-refresh/popup-save-timing.test.mjs` 16 条，把 `scheduleSave` /
+    `saveNow` / `flushPendingSave` / `cancelScheduledSave` 切真实源码、接假时钟与写盘计数器真跑，
+    所以"敲五次只落一笔""`saveNow` 之后到点不再写第二笔""没有待写时 flush 一笔都不写"
+    是跑出来的断言，不是读代码读出来的。另有一条反-drift：以后谁在 `saveSettings` 里多读一个
+    清单外的文本框，它就悄悄退回"只有失焦才保存"而没人想起来——那条会直接变红。
+    19 处红→绿对照（17 红 + 2 反向绿）逐条记在文件末尾；其中一处开发期撞中 `sel.addEventListener`
+    的 substring 坑（"sel." 的尾巴是 "el."），另一处是本条的连锁：`renderWebhook()` 的调用点
+    从 4 处变 5 处，`popup-repopulate.test.mjs` 的计数守卫跟着改
 
 ### Changed
 - 共享测试桩件 `tests/helpers/background-harness.mjs` 按真实 Chrome 语义补齐十一处，为的是让"看着绿、实际空跑"
