@@ -462,6 +462,20 @@ export function urlKey(u) {
   }
 }
 
+/* 外发载荷里的网址：同样只留 origin+pathname，把 query 与 hash 剪掉。
+   形状与 urlKey 相同却**故意不共用一个函数**——urlKey 是页面认领的匹配键，为了匹配
+   它将来可能放宽（忽略尾部斜杠、把 hash 算进去都合理），而这类改动对匹配是修 bug、
+   对外发是把一次性令牌送出去。两个语义各自演化，各自的门禁各自红。
+   解析不出来回空串而不是 null：调用方把它当载荷字段值用，"没有可发的网址"就该是空 */
+export function outboundUrl(u) {
+  try {
+    const x = new URL(String(u == null ? "" : u));
+    return x.origin + x.pathname;
+  } catch (e) {
+    return "";
+  }
+}
+
 /* 网址与目标一致（精确或 origin+pathname 相等）的标签页判定 */
 export function tabShowsUrl(tab, url) {
   if (!tab || !tab.url || !url) return false;

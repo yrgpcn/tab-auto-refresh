@@ -24,6 +24,7 @@ import {
   normalizeWebhookUrl,
   notifyEventsOf,
   oneLine,
+  outboundUrl,
   parseKeywords,
   pickKnownSettings,
   planBackupConvergence,
@@ -794,7 +795,8 @@ async function onKeywordHit(tabId, task, newly, present) {
 
 /* Webhook 通知。不需要新权限，常驻的 host_permissions 已覆盖任意 http(s) 目标。
    载荷填 content（Discord）、text（Slack、Telegram）、body（冗余兜底）三个别名，
-   外加 type/url/host/ts，让各家认的字段都能对上。
+   外加 type/url/host/ts，让各家认的字段都能对上（url 到这儿时已被 notifyOut 剪成
+   origin+pathname，query 不在外发面上）。
    ntfy 不在此列：它只在根端点解析 JSON，POST 到 /<主题> 会把整个 JSON 当正文存下，
    而载荷里没有 topic 字段、也改不了填根端点，所以它收到的是原始 JSON 文本。
    调用方必须 await：fetch 要挂在被 await 的链路上，否则 SW 被回收时请求会被截断 */
@@ -999,10 +1001,22 @@ async function postWechat(event, payload, opts) {
 }
 
 /* 外发通知总入口：两个出口各推一份（webhook 没配地址会自己跳过，微信关着也跳过）。
-   调用方必须 await：两条链路都是 fetch，裸甩异步会在 SW 回收时被截断 */
+   调用方必须 await：两条链路都是 fetch，裸甩异步会在 SW 回收时被截断
+   载荷里的 url 在这里统一剪成 origin+pathname：被监控页的 query 常带一次性签名、
+   会话令牌、邮箱手机号（工单与后台系统尤其如此），而"是哪个站点的哪条路径"这点信息
+   origin+pathname 就给得齐。前端哈希路由的页面例外：路由在 hash 里，剪完跳到的是应用根，
+   代价与是否要补深链记在 `BACKLOG.md` V1 (g)。
+   剪的位置是总入口而不是各调用点，有两个理由：两个出口读的是同一个 payload.url，
+   逐处改必然出现"改了 webhook 忘了微信"；将来新增事件不必再记得重复一遍。
+   解析不出来（不是合法 URL）就当没有网址可发，原样传出去等于给漏 query 留后门。
+   其余字段不在精简之列：host 是刻意的定位信息，keyword 的 text 是用户自己填的监控词 */
 async function notifyOut(event, payload) {
-  await postWebhook(event, payload);
-  await postWechat(event, payload);
+  const out =
+    payload && payload.url
+      ? Object.assign({}, payload, { url: outboundUrl(payload.url) })
+      : payload;
+  await postWebhook(event, out);
+  await postWechat(event, out);
 }
 
 /* 备份该主机及全部父域的 cookie；按主机独立存储；仅在与监控目标同根域且开关开启时执行 */

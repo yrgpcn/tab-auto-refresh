@@ -37,6 +37,7 @@ import {
   withinRoot,
   tabShowsUrl,
   urlKey,
+  outboundUrl,
   NOTIFY_EVENTS,
   WECHAT_TEMPLATE_KEYS,
   WECHAT_FIELD_MAX,
@@ -246,6 +247,17 @@ test("planBackupConvergence drops only what sits outside the registrable root", 
 test("urlKey keeps origin+pathname and drops query and hash", () => {
   assert.equal(urlKey("https://example.com/page?a=1#frag"), "https://example.com/page");
   assert.equal(urlKey("not a url"), null);
+});
+
+test("outboundUrl 剪掉 query 与 hash，坏输入回空串", () => {
+  assert.equal(
+    outboundUrl("https://example.com/ticket/42?sig=ONE-TIME&email=a%40b.test#s=9"),
+    "https://example.com/ticket/42"
+  );
+  assert.equal(outboundUrl("https://example.com"), "https://example.com/");
+  /* 与 urlKey 唯一的形状差别是刻意的：载荷字段要的是字符串，不是"可以传 null 进去" */
+  assert.equal(outboundUrl("not a url"), "");
+  assert.equal(outboundUrl(null), "");
 });
 
 test("tabShowsUrl matches exact url or origin+pathname, rejects junk", () => {

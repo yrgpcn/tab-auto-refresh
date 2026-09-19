@@ -144,6 +144,25 @@ test("缺 intervalSec 的任务不会把 undefined 写进数字框", () => {
   assert.match(dom.customInput.value, /^\d*$/);
 });
 
+/* ---------- popup.html 的源码扫描 ----------
+   上面那些用例靠切 popup.js 的函数源码来跑，控件本身（HTML 上那几个 input）从来没进过视野，
+   而"密钥框回显不回显"这件事恰好只写在 HTML 里。与 message-gate 扫 keepalive.js 同一形状：
+   读不来的行为就扫源码，别因为"没法执行"干脆不守。 */
+
+/* 红→绿对照用：TAR_POPUP_HTML 指到另一份 popup.html（只读文本）。CI 上不设 */
+const POPUP_HTML_PATH = process.env.TAR_POPUP_HTML
+  ? process.env.TAR_POPUP_HTML
+  : new URL("../../tab-auto-refresh/popup.html", import.meta.url);
+const POPUP_HTML = readFileSync(POPUP_HTML_PATH, "utf8").replace(/\r\n/g, "\n");
+
+test("密钥输入框是 type=\"password\"：旁边有人时读不到用户粘进去的凭据", () => {
+  /* appsecret 是一把能以该公众号名义发消息的钥匙，且随 sync 明文存；
+     输入框回显等于把最后一个只靠屏幕位置的防线也拿掉 */
+  const tag = POPUP_HTML.match(/<input[^>]*id="wechatSecretInput"[^>]*>/);
+  assert.ok(tag, "弹窗里找不到密钥输入框，控件改了名要先同步这条用例");
+  assert.match(tag[0], /\btype="password"/, "密钥框回退成明文回显");
+});
+
 /* ---------- 红→绿对照（2026-09-19 实跑，node v24.21.0） ----------
 
    做法：只把 popup.js 复制到仓库外一份、逐处改坏，TAR_POPUP_SRC 指给本文件跑。
@@ -162,5 +181,9 @@ test("缺 intervalSec 的任务不会把 undefined 写进数字框", () => {
           那条用例钉的是兼容读取，钉不了分隔符，两处各管一件事）
    处 6 间隔不过 clampInterval，直接取存盘值 → 红 1 条：缺 intervalSec 的任务不会把 undefined…
    处 7 绕开 getTaskKeywords 直接读 task.keywords → 红 1 条：旧单串 keyword 的任务也回得填上
+   处 8（2026-09-19，A4）popup.html 里密钥框的 type="password" 改回 "text"
+        → 红 1 条：密钥输入框是 type="password"…
+        这一处先按"整仓复制、在副本里跑"验过一遍，又用 TAR_POPUP_HTML 指着一份临时改坏的
+        popup.html 再跑一遍——新增的重定向入口本身也要跑一次，否则它就是 A6 记的那种死入口
 
-   七处各只红在它点名的那一条（处 3 两条），没有一条变异能同时躲过顺序守卫与早退守卫。 */
+   八处各只红在它点名的那一条（处 3 两条），没有一条变异能同时躲过顺序守卫与早退守卫。 */

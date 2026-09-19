@@ -13,7 +13,8 @@
 2026-09-19 的 A7 那轮之后，本文件所有位置已统一改成符号名。
 
 2026-09-19 当日累计：A1（焦点三态）、A2（公共后缀越界采集）、A3（检测只覆盖顶层框架）、
-A5（弹窗不回填任务级字段）、A6（桩件十二条全部）、A7（`settings` 两条无锁读-改-写互相覆盖）、
+A4（外发载荷带 query、凭据暴露面）、A5（弹窗不回填任务级字段）、A6（桩件十二条全部）、
+A7（`settings` 两条无锁读-改-写互相覆盖）、
 A9（`onMessage` 不认来源、设置键无白名单）、E1（本机 node 门禁）已修完并移进 `CHANGELOG.md`
 的 `[未发布]`，编号不复用。
 A6 第 8 条欠的 cookie 执行器用例随 A2 一起交付（`tests/tab-auto-refresh/cookie-backup.test.mjs` 13 条）；
@@ -21,14 +22,16 @@ A5 让 popup 第一次有了门禁（`popup-repopulate.test.mjs` 10 条，切源
 A7 给 `settings-cache.test.mjs` 补了 4 条（并发覆盖、读前失效、锁方向、锁内"没变就不写"）；
 A9 新增 `message-gate.test.mjs` 9 条（来源守卫逐类型、零副作用指纹、白名单端到端与纯函数、两条扫源码）；
 A3 新增 `frame-scan.test.mjs` 27 条（多框架聚合与逐框架判定的纯函数层、切 `captchaProbe` 真实源码跑的
-注入体层、两层接缝、执行器接线），并改动了 `detect-chain.test.mjs` 的验证墙桩件形状（布尔 → 事实对象）。
-下一条动手是 A4。其余条目原样在账。
+注入体层、两层接缝、执行器接线），并改动了 `detect-chain.test.mjs` 的验证墙桩件形状（布尔 → 事实对象）；
+A4 剪枝落在 `notifyOut` 一处（不是三个调用点），`outbound.test.mjs` 补 4 条事件级用例并把全文件通用的
+任务网址换成带令牌的形状、`logic.test.mjs` 补 `outboundUrl` 1 条、`popup-repopulate.test.mjs` 补 1 条
+扫 `popup.html` 的守卫，七处对照记在两个文件末尾。
+下一条动手是 A8。其余条目原样在账。
 
 ## 优先级一览
 
 | 编号 | 优先级 | 一句话 | 状态 |
 | --- | --- | --- | --- |
-| A4 | P1 | 外发载荷带完整 query 网址；凭据存 sync 且明文 | 待做 |
 | A8 | P2 | webhook 失败无痕，且没有"发送测试" | 待做 |
 | A10 | P3 | 语言包内部自相矛盾（四项/三项、英文冒号/中文冒号） | 待做 |
 | A11 | P3 | 弹窗文本框只在失焦保存；测试按钮无 finally | 待做 |
@@ -36,30 +39,8 @@ A3 新增 `frame-scan.test.mjs` 27 条（多框架聚合与逐框架判定的纯
 | V1 | — | 2.1.0 真机手工验证（含下面几条只能真机验的检查） | 待做 |
 | E2 | — | `_code-review/` 门禁是否迁入入库路径 | 待定 |
 
-建议动手顺序：A4 → 其余。A6 排在最前面那条理由（要先有"能真的变红"的桩件）
-已经兑现，A1、A2、A3、A5、A6、A7、A9 七条都已移进 `CHANGELOG.md`。
-
-## P1
-
-### A4 外发内容与凭据的暴露面
-
-- 位置：`background.js` 的 `onKeywordHit`（keyword 命中载荷）、`notifyTaskStopped`、`pauseTaskAuto`
-  （各有一处 `url:` 字段）、`postWebhook`（外发本体）；`popup.js` 的 `saveSettings`，
-  `popup.html` 里 `webhookUrlInput` / `wechatSecretInput`
-- 三件事：
-  1. 载荷带完整 `task.url`。**三个**外发点各有 `url:` 字段（上面列的前三处），
-     `session-lost` 只带 `host`，不在其列。只改关键词那一处等于留两个出口。
-     `URL` 的 query 常含会话令牌、一次性签名、邮箱手机号（工单与后台系统
-     尤其如此）。改成默认只发 `origin + pathname`（`urlKey` 已有实现）。**已定：不加开关，直接切**——
-     精简版照样可跳转、可定位页面，而"带 query"这个选项等于长期留一个把令牌外发的入口。
-     属纪律 3 范畴，CHANGELOG 要点名。
-     外发点由 `outbound.test.mjs` 钉住，加一条"任意事件的载荷里不得出现 query"的断言比逐处改更有效。
-  2. 关键词命中的 `text` 就是把用户监控的字面发给外部端点。这是用户主动配的，可接受，
-     但 README 外发一节要点名（现在只说"通知内容会发出去"）。
-  3. `webhookUrl` 与微信 appsecret 存在 `settings`（即 `chrome.storage.sync`），随 Google 账号
-     漫游到其它桌面 Chrome 且明文。README 说明了微信凭据同步，**没提 webhook 地址本身也是凭据**
-     （带 token 的 URL 拿到就能发）。另外 appsecret 输入框是 `type="text"`，旁边有人就能看到——
-     改 `type="password"`。
+建议动手顺序：A8 → 其余。A6 排在最前面那条理由（要先有"能真的变红"的桩件）
+已经兑现，A1、A2、A3、A4、A5、A6、A7、A9 八条都已移进 `CHANGELOG.md`。
 
 ## P2
 
@@ -123,6 +104,12 @@ A3 新增 `frame-scan.test.mjs` 27 条（多框架聚合与逐框架判定的纯
   开任务后等 3 个加载周期，要被自动暂停、角标变 `⚠`；反过来，页面上只有一个验证挂件
   （reCAPTCHA / hCaptcha 那种小框）的正常页面**不该**被暂停。切片用例给不了这两条，
   它要的框架尺寸与自身网址都得是真实 iframe 才作数
+- (g) 给一个**前端哈希路由**的页面（网址长这样：`https://x.test/#/orders/42?tab=1`）开任务并收到
+  外发通知，点开微信卡片或 webhook 里的链接：A4 把 query 与 hash 一起剪掉了，落点会是
+  `https://x.test/` 即应用根，而不是 `#/orders/42` 那一页。剪枝的收益（一次性令牌不出机器）
+  由 `outbound.test.mjs` 钉住了，"落点还是不是用户要找的那一页"只有真机说得清。
+  要验的是这件事对日常使用到底碍不碍事——不碍事就维持现状，碍事再谈怎么在不回吐 query
+  的前提下把深链带上（记在 `CHANGELOG.md` 的 A4 那条里）
 
 既有缺口不变：开几个任务后重启浏览器或重新加载扩展，任务要全挂回原页面、不多开标签页、弹窗不卡住，
 且 DevTools 背景页 Alarms 里 `refresh-<id>` 与 `hb-<id>` 同时存在（缺 `hb-` 说明心跳又被排到写盘前面）。

@@ -6,15 +6,28 @@
    分工：logic.test.mjs 钉的是 normalizeWebhookUrl / buildWechatMessage / tokenFresh 这些
    纯函数本身；这边钉的是执行器——什么时候真的发、发出去的形状对不对、失败留没留痕。
    触发口两个：refresh alarm 发现标签页没了（真实事件 task-stopped），
-   以及弹窗的"发送测试消息"（wechat-test，唯一能直接点着 postWechat 的入口）。 */
+   以及弹窗的"发送测试消息"（wechat-test，唯一能直接点着 postWechat 的入口）。
+
+   2026-09-19 起这个文件还管第二件事（A4）：外发载荷里不得出现 query。做法是把本文件
+   通用的任务网址换成带一次性令牌的 RAW，于是每条断言外发形状的用例顺带都在检查剪没剪，
+   末尾那一节再把四个事件逐个跑一遍。为什么钉在出口而不是逐处改调用点：见 notifyOut 的注释。 */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import { makeEnv, bootBackground } from "../helpers/background-harness.mjs";
+import { SESSION_LOST_CONFIRM_SAMPLES } from "../../tab-auto-refresh/shared/logic.js";
 
 const PAGE = "https://a.test/board";
-const task = (over) => Object.assign({ intervalSec: 300, createdAt: 1, url: PAGE }, over);
+/* A4：任务网址一律给带 query 的形状。外发面上现在只许出现 origin+pathname，
+   所以本文件里每一条"发出去的东西"的断言都顺带在钉这件事——令牌串放在这里，
+   漏一次就会被点名，而不是只靠下面那一节专门写的用例 */
+const SECRET = "ONE-TIME-9f3c";
+const RAW = `https://a.test/board?ticket=${SECRET}&email=me%40corp.test#frag`;
+const TRIMMED = PAGE;
+/* 心跳被踢到的登录页：它自己也带 query，用来确认"落地地址"不会被当成载荷网址发出去 */
+const LOGIN = "https://a.test/login?next=%2Fboard";
+const task = (over) => Object.assign({ intervalSec: 300, createdAt: 1, url: RAW }, over);
 const HOOK = "https://hooks.test/token-abc";
 const WX = {
   wechatEnabled: true,
@@ -59,7 +72,9 @@ test("配了地址又勾了这个事件：POST 出去，三个别名字段都填
   const body = JSON.parse(init.body);
   assert.equal(body.type, "task-stopped");
   assert.equal(body.host, "a.test");
+  /* 任务网址是带一次性令牌的 RAW，发出去的必须是剪过的 TRIMMED（A4） */
   assert.equal(body.url, PAGE);
+  assert.ok(!init.body.includes(SECRET), "原始请求体里混进了令牌串");
   assert.equal(body.reason, "tab-gone");
   assert.equal(typeof body.ts, "number");
   /* Discord 认 content、Slack 与 Telegram 认 text、body 是兜底：三家各认一个字段，
@@ -192,6 +207,107 @@ test("事件清单是两个出口共用的：微信也听它", async () => {
   assert.deepEqual(sent(env), [], "勾选只管 webhook，微信照推不误");
 });
 
+/* ---------- A4：外发面上不得出现 query ---------- */
+
+const flush = () => new Promise((r) => setTimeout(r, 50));
+
+/* 心跳那一拍按用例给，其余请求（webhook 落地、微信取令牌与推送）一律回成功，
+   好让两个出口都真的把请求发出去 */
+const replyFor = (hb) => (url) => {
+  if (url === RAW) return hb;
+  if (tokenUrl(url)) return { json: { access_token: "T1", expires_in: 7200 } };
+  return { json: { errcode: 0 } };
+};
+
+/* 两个出口一起开：它们读的是同一份 payload.url，只测一个等于放过另一个 */
+const bothOutlets = (event) => Object.assign({}, WX, { webhookUrl: HOOK, notifyEvents: [event] });
+
+/* 只取通知类请求的**原始 body 文本**：解析过的对象会漏掉嵌套字段，
+   而"不得出现 query"要钉的正是序列化之后真正离开本机的那串字节。
+   心跳自己那笔 GET 不算：那是站点页面的地址，本来就该带 query，也不发给第三方 */
+const notifyBodies = (env) =>
+  env.calls.fetch
+    .filter((c) => c.url === HOOK || /\/message\/template\/send/.test(c.url))
+    .map((c) => String(c.init.body || ""));
+
+const assertNoQueryLeak = (env, event, withUrl) => {
+  const bodies = notifyBodies(env);
+  assert.ok(
+    bodies.length >= 2,
+    `${event}：两个出口一共只发出 ${bodies.length} 笔，下面的断言会空跑`
+  );
+  for (const body of bodies) {
+    assert.ok(!body.includes(SECRET), `${event}：一次性令牌被发出去了 → ${body}`);
+    assert.ok(!body.includes("corp.test"), `${event}：query 里的邮箱被发出去了 → ${body}`);
+    if (withUrl) {
+      /* 剪的是 query，不是整条网址：卡片点不动、载荷里认不出哪个页面都是回归 */
+      assert.ok(
+        body.includes(`"url":${JSON.stringify(TRIMMED)}`),
+        `${event}：载荷没带上剪过的网址 → ${body}`
+      );
+    } else {
+      assert.ok(
+        !/"url":/.test(body),
+        `${event}：这个事件的载荷本不带网址，冒出来就说明新增的外发点没走 notifyOut 的精简`
+      );
+    }
+    for (const m of body.matchAll(/"(?:url|link|href|page|target|pageUrl|page_url)":"([^"]*)"/g)) {
+      assert.ok(!/[?#]/.test(m[1]), `${event}：网址字段带着 query 或 hash → ${m[1]}`);
+      assert.equal(m[1], TRIMMED, `${event}：网址字段不是 origin+pathname → ${m[1]}`);
+    }
+  }
+};
+
+/* 四个事件各自的触发口，形状与各门禁文件里已有的用例一致：
+   task-stopped 是刷新 alarm 发现页没了，keyword 是页面加载完成后的检测链，
+   task-paused 与 session-lost 是心跳的错误页通道与掉线通道 */
+const TRIGGERS = {
+  "task-stopped": { fire: (env) => env.fire.alarm("refresh-7"), withUrl: true },
+  "keyword": {
+    withUrl: true,
+    fire: async (env) => {
+      env.putTab(7, RAW);
+      env.onScript((opts) => (opts.args ? [{ result: ["已售罄"] }] : undefined));
+      await env.fire.tabUpdated(7, { status: "complete" });
+      await flush();
+    }
+  },
+  "task-paused": {
+    withUrl: true,
+    fire: async (env) => {
+      /* 错误页连击阈值（PAUSE_CONFIRM_SAMPLES = 2）住在 background.js 里、不导出，
+         所以这里写死 2 拍：阈值改了这条会红在"一笔外发都没发出"，不会悄悄空跑 */
+      for (let i = 0; i < 2; i++) await env.fire.alarm("hb-7");
+    }
+  },
+  /* 掉线事件的载荷刻意只有 host，没有网址：这一条顺带把那个形状钉住，
+     将来谁给它补 url 字段就必须同时经过精简 */
+  "session-lost": {
+    withUrl: false,
+    fire: async (env) => {
+      for (let i = 0; i < SESSION_LOST_CONFIRM_SAMPLES; i++) await env.fire.alarm("hb-7");
+    }
+  }
+};
+
+for (const [event, spec] of Object.entries(TRIGGERS)) {
+  test(`${event}：两个出口发出的网址都已剪成 origin+pathname`, async () => {
+    const hb =
+      event === "task-paused"
+        ? { status: 503 }
+        : event === "session-lost"
+          ? { status: 200, url: LOGIN }
+          : { status: 200 };
+    const env = await boot({
+      tasks: event === "keyword" ? { 7: task({ keywords: ["已售罄"] }) } : undefined,
+      settings: Object.assign({}, bothOutlets(event), { httpHeartbeat: true })
+    });
+    env.reply(replyFor(hb));
+    await spec.fire(env);
+    assertNoQueryLeak(env, event, spec.withUrl);
+  });
+}
+
 /* 红→绿对照（2026-09-19 实跑：整份插件目录复制到仓库外，每处只改坏 postWebhook / postWechat /
    getWechatToken 函数体内的一处——needle 在区段内断言正好命中一次——TAR_BG 指过去跑本文件）：
      1) webhook 的 `if (!events.includes(event)) return;` 改成 `if (false) return;`
@@ -225,4 +341,26 @@ test("事件清单是两个出口共用的：微信也听它", async () => {
    本文件红 7/11，绿的四条恰好全是"断言一笔都不发"的否定式用例（事件没勾上、地址非法、
    凭据没填全、事件清单共用）。fetch 根本不存在时它们照样绿——单看这四条，
    它们证明不了任何一条链路跑过。但这四条本身是被钉住的：改坏对应的四道闸（1/3/6/7）
-   各红一条，红的是"闸没了就多发出一笔"，而不是"这条用例压根没跑"。 */
+   各红一条，红的是"闸没了就多发出一笔"，而不是"这条用例压根没跑"。
+
+   ---------- A4（载荷剪枝）的对照，同一天实跑，脚本 ctl-a4.mjs ----------
+   前 13 处改的是 postWebhook / postWechat / getWechatToken 的函数体；下面这些改的是
+   notifyOut 与 shared/logic.js 的 outboundUrl（第 7 处改 popup.html）。跑法：整份插件目录
+   复制到仓库外用 TAR_BG 指过去（logic.js 跟着副本走，因为 background 按相对路径 import）；
+   后两处落在 logic.test.mjs / popup-repopulate.test.mjs 直读真路径的文件上，所以整仓复制一份。
+     1) notifyOut 整段不剪（`const out = payload;`）
+        → 红 4：既有那条"配了地址又勾了这个事件" + 三条带 url 的新用例
+     2) 只剪 webhook、微信那一侧漏掉（`postWechat(event, out)` 改回 payload）
+        → 红 3：三条新用例。**既有那 11 条一条都不红**——它们没开微信凭据。
+           这就是"逐处改"当初会漏掉的形状，也是这一节存在的理由
+     3) outboundUrl 剪过头，pathname 也没了（只回 origin）
+        → 红 4：与第 1 处同一批，红的是"载荷没带上剪过的网址"那半边的断言
+     4) outboundUrl 把 query 留着（只去 hash）
+        → 红 4：同上这批，红在令牌串/邮箱那两条
+     5) 给 session-lost 的载荷补一个 url 字段
+        → 红 1：只红在 session-lost 那条。withUrl=false 那一支不是死断言
+     6) outboundUrl 解析失败时回退成原样传出去（而不是空串）
+        → 红 1：logic.test.mjs 的"outboundUrl 剪掉 query 与 hash，坏输入回空串"
+     7) 密钥输入框改回 type="text"
+        → 红 1：popup-repopulate.test.mjs 的"密钥输入框是 type=password"
+   七处每处都只红在它点名的那些条上，没有一处能把整份文件带崩。 */

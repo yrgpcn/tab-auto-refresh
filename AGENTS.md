@@ -119,11 +119,13 @@
 
 - `notifyOut(event, payload)` 是唯一入口，依次 `postWebhook` 与 `postWechat`。两者共用 `notifyEvents` 事件清单、各有独立开关。调用方必须 `await`，两条链路都是 fetch，裸甩异步会在 SW 回收时被截断
 - Webhook：`normalizeWebhookUrl` 只接受 http(s)，非法就静默不发（弹窗另有内联提示）。载荷填 `content` / `text` / `body` 三个别名，加 `type` / `url` / `host` / `ts`。ntfy 收到的是原始 JSON 文本，它只在根端点解析 JSON 而载荷里没有 topic 字段，别再说它开箱即用
+- 外发网址一律由 `notifyOut` 剪成 `origin + pathname`（`shared/logic.js` 的 `outboundUrl`）：被监控页的 query 常带一次性签名、会话令牌、邮箱手机号，而"跳回哪一页"不依赖它。**剪在总入口而不是各调用点**——两个出口读的是同一份 `payload.url`，逐处改必然出现"改了 webhook 忘了微信"；解析不出来就当没有网址可发（回空串），绝不回退成原样传出去。`outboundUrl` 与页面认领用的 `urlKey` 形状相同而刻意不共用（匹配键将来放宽是合理的，那类改动对外发就是漏令牌）。`session-lost` 本来只有 `host`，没有 url
+- 你填的 `webhookUrl` 本身就是凭据（这类地址内嵌 token，拿到就能往里发），且与其它设置一起走 `sync` 明文漫游，README 有说明；载荷里的关键词 `text` 是用户自己填的监控词，刻意保留（不外发就等于功能不存在）
 - 微信直连（`wechatEnabled`，默认关）：扩展 SW 直接调 `api.weixin.qq.com` 推模板消息，不经中继。令牌走 `stable_token`（老的 `/cgi-bin/token` 每刷一次就作废上一个，多端并发会互相打掉），缓存在 `chrome.storage.session`，距过期 5 分钟提前重取，命中 40001/42001 清缓存重取并重试一次
 - 微信平台的两条硬限制写死在常量与注释里，别凭直觉给大值。一是模板消息单个字段不超过 20 个字、不支持换行，超长由平台去掉且不给任何提示；二是模板正文里变量前必须有关键词加中文冒号，裸写变量会被平台整行丢弃，而接口照旧返回 errcode=0，用户收到的是一张空白卡片
 - 卡片标题用一套短事件名（`wechatEv*Short`），不复用弹窗复选框的长标签：标题要和站点一起挤在 20 字里，英文长标签会把预算吃光。站点放不下完整注册域时整段不显示，不给"…e.com"这样的碎片
 - 失败要留痕：错误码经 `wechatErrorKey` 翻成"该去哪改"的提示，最近一次结果写 `chrome.storage.local` 的 `wechatLastResult`，弹窗显示
-- 凭据四项存在 `settings`（即 `chrome.storage.sync`），会随 Google 账号同步到其它桌面 Chrome，README 有说明
+- 凭据四项存在 `settings`（即 `chrome.storage.sync`），会随 Google 账号同步到其它桌面 Chrome，README 有说明。弹窗里密钥那一格是 `type="password"`（只挡回显，存储与同步一个字没变），这条由 `popup-repopulate.test.mjs` 扫 `popup.html` 源码钉住（该文件另给对照用加了 `TAR_POPUP_HTML` 重定向入口）
 
 ### 系统通知
 
