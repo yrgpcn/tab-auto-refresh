@@ -168,11 +168,15 @@
 - 推送失败先看这里：先直接试 `git push`。2026-09-18 发布 2.1.0 时不带任何代理参数，推 main 与推 tag 都在几秒内成功。只有它失败才走下面那条 SOCKS 的路。
 - 宿主有时会注入 `http_proxy` / `https_proxy` / `HTTP_PROXY` / `HTTPS_PROXY` 四个环境变量，全指向 `http://127.0.0.1:51734`，该通道到 GitHub 直接 502。环境变量优先级高于 git 的 `http.proxy` 配置，所以光加 `-c http.proxy=...` 不管用，必须先把四个变量摘掉，再走本机 10808 的 SOCKS：
   `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY git -c http.proxy=socks5://127.0.0.1:10808 push origin main`
-  先 `env | grep -i proxy` 确认变量在不在。2026-09-19 实测这一次四个变量一个都没有，直连报的是 `curl 28 Recv failure: Connection was reset`、`ls-remote` 报 `Failed to connect to github.com port 443`，同一条命令带上 10808 SOCKS 立刻成功——所以摘变量只是变量在场时才需要，路走不通先试 SOCKS，别默认病因一定是那几个环境变量。
-  症状区分：报 502 是环境变量那个死代理；报 connection reset / 连不上 443 是直连路本身不通，SOCKS 可解；一直挂着没输出，先分清是网络还是凭据（见下条）。
-- 上面那条推送命令有两种更难查的假成功：一是**一个字节都不输出**、退出码还是 0，实际什么都没推上去（2026-09-18 实遇到）；二是**照常打印 `Everything up-to-date`** 并返回 0，而同一次 push 前面已经写着 `RPC failed; curl 28`、`fatal: the remote end hung up unexpectedly`（2026-09-19 实遇到，远端仍停在旧 commit）。所以推送成功与否一律按下条用 `git ls-remote` 复核，别按退出码或按那行 up-to-date 收工。
+  **但这条命令在这台机器上多一个更阴的失败面**（2026-09-19 查明）：`env` 被 `~/.local/bin/env` 挡在前面（`which -a env` 第一条就是它），它一个字节都不输出、退出码还是 0，于是 `env -u ... git <任何子命令>` 压根没执行 git——连 `env -u http_proxy git --version` 都是空的。这就是下面那种"零输出加退出码 0 的假成功"的成因之一。
+  所以先用 `printenv | grep -i proxy` 确认变量在不在（**别用 `env | grep -i proxy`**，同样被挡，`env | head` 也是空的）。四个变量不在时就直接走 SOCKS、别套 `env`：
+  `git -c http.proxy=socks5://127.0.0.1:10808 push origin main`
+  2026-09-19 就是这样推成功的，`socks5://` 与 `socks5h://` 两种写法都实测可用。那天的现状：四个变量一个都没有，直连报 `curl 28 Recv failure: Connection was reset`、`ls-remote` 报 `Failed to connect to github.com port 443`，同一命令带上 10808 SOCKS 立刻成功——摘变量只是变量在场时才需要，路走不通先试 SOCKS，别默认病因一定是那几个环境变量。
+  症状区分：报 502 是环境变量那个死代理；报 connection reset / 连不上 443 是直连路本身不通，SOCKS 可解；零输出加退出码 0 是 `env` 前缀把命令吞了；一直挂着没输出，先分清是网络还是凭据（见下条）。
+- 上面那条推送命令有两种更难查的假成功：一是**一个字节都不输出**、退出码还是 0，实际什么都没推上去（2026-09-18 实遇到；2026-09-19 查明其中一种成因就是上面那个把命令整条吞掉的 `env` 前缀）；二是**照常打印 `Everything up-to-date`** 并返回 0，而同一次 push 前面已经写着 `RPC failed; curl 28`、`fatal: the remote end hung up unexpectedly`（2026-09-19 实遇到，远端仍停在旧 commit）。所以推送成功与否一律按下条用 `git ls-remote` 复核，别按退出码或按那行 up-to-date 收工。
 - 推送挂住不动时，先确认到底是网络还是凭据，别默认是代理问题。2026-09-14 实测：`ls-remote` 与 `curl -X POST .../git-receive-pack` 都正常（后者 1.3 秒返回 401），说明网络通、缺的是凭据。而本机的凭据助手是 `git-credential-manager.exe`，它拿不到缓存的凭据时会去开交互界面，在非交互环境里表现为**一直挂住**（`git credential fill` 超时也返回不了任何东西）。快速判别：
   `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c http.proxy=socks5://127.0.0.1:10808 push origin main`
+  （四个变量不在时去掉 `env -u ...` 前缀，否则这条也是零输出零退出码。2026-09-19 实测：`GIT_TERMINAL_PROMPT=0 git -c http.proxy=socks5h://127.0.0.1:10808 push origin main`——不带 `env` 前缀、也不清空凭据助手——一次推成功，缓存凭据可用，没弹任何界面。）
   立刻报 `could not read Username` 就是凭据缺失，需要在能弹界面的终端里推一次（或改用带 PAT 的地址），与代理无关。
 - 判断有没有推上去不要看 `git status`。本机的 `origin/main` 远程跟踪引用会僵在旧 commit，会误报 `ahead N`。以 `git ls-remote origin refs/heads/main` 为准
 - playwright 类脚本（弹窗截图、`_code-review/` 里几个门禁）需要显式给 NODE_PATH，否则报找不到 playwright。原先记的那个 codex-runtimes 路径随运行时一起没了，别再照抄；现在怎么给见下面"恢复本地门禁"
