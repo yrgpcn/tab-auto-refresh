@@ -305,44 +305,11 @@ export function planBackupConvergence(backups) {
   return { remove, rewrite, clean };
 }
 
-/* 备份索引（A12 第 2 条）：cookieBackup:<host> 的键名清单，键名 BACKUP_INDEX_KEY 在 background.js。
-   存档封顶 20 站 × 200 条，最坏一次 get(null) 要把几 MB 明文反序列化进 SW，只为拿键名做前缀过滤。
-   写备份时登记主机名，清理与恢复就只按索引那几条读。两个纯函数把这件事的次序钉住： */
-
-/* 读之前怎么问存储。索引不是数组 = 从没写过（老版本升上来、或用户一家都没备份过），
-   这时只能退回一次全量读。方向要认准：把"缺失"当"空数组"，紧接着 planBackupIndex 就会
-   把老用户的全部存档都判成索引之外的东西，下游按索引清理时是丢登录态，不是慢一点 */
-export function planBackupFetch(indexed) {
-  if (!Array.isArray(indexed)) return { fullScan: true, hosts: null };
-  return { fullScan: false, hosts: dedupeStrings(indexed) };
-}
-
-/* 读之后与存档实况对账。索引里躺着但没读回来的（存档被别的途径删了、或键写坏）摘掉，
-   读回来但索引没有的补上（全量扫那一次、以及并发登记漏掉的那家）。
-   changed 给执行器决定要不要写回：没有变化就别在每次启动多落一笔盘 */
-export function planBackupIndex({ indexed, presentHosts } = {}) {
-  const have = Array.isArray(indexed) ? dedupeStrings(indexed) : [];
-  const present = dedupeStrings(presentHosts || []);
-  const inPresent = new Set(present);
-  const inHave = new Set(have);
-  const hosts = have.filter((h) => inPresent.has(h)).concat(present.filter((h) => !inHave.has(h)));
-  const same =
-    Array.isArray(indexed) &&
-    indexed.length === hosts.length &&
-    hosts.every((h, i) => h === indexed[i]);
-  return { hosts, changed: !same };
-}
-
-function dedupeStrings(list) {
-  const out = [];
-  const seen = new Set();
-  for (const h of list) {
-    if (typeof h !== "string" || !h || seen.has(h)) continue;
-    seen.add(h);
-    out.push(h);
-  }
-  return out;
-}
+/* 备份没有"主机名清单"这类索引。想过用它省掉全量读（存档封顶 20 站 × 200 条，一次
+   get(null) 要把几 MB 明文反序列化进 SW），2026-09-19 落地当天回退：登记是索引自己的一次
+   无锁读-改-写，漏一次、或写盘后 SW 被回收，那条存档就对定向读永久隐身，而清理与恢复
+   全部改按索引取数之后，它同时变成"删不掉、也恢复不了"的死数据。读法见 background.js
+   的 readBackupEntries */
 
 /* 错误页判定：服务器故障或页面失踪，心跳连续命中则自动暂停任务 */
 export function isErrorStatus(status) {

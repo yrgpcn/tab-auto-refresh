@@ -9,9 +9,16 @@
    与 alarm-gate / heartbeat 的分工：那两处管到点之后走哪个分支，这里只管 cookie 这一条侧链。 */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { makeEnv, bootBackground } from "../helpers/background-harness.mjs";
+
+/* 源码扫描用：与 notifications.test.mjs 同一套重定向，红→绿对照跑副本时扫的是副本 */
+const BG_SRC = readFileSync(
+  process.env.TAR_BG || new URL("../../tab-auto-refresh/background.js", import.meta.url),
+  "utf8"
+);
 
 const NOW_SEC = Math.floor(Date.now() / 1000);
 
@@ -257,8 +264,6 @@ test("键本身是公共后缀的遗留备份整条删掉，不留空壳", async
   await env.fire.startup();
   assert.equal(env.store.local[ck("co.nz")], undefined, "整条都属于别人的备份还留着");
   assert.deepEqual(env.calls.cookieSet, [], "后缀键里的条目被恢复了");
-  /* 整条被删的存档同时要从索引里摘掉，否则索引从此指着一条不存在的键 */
-  assert.deepEqual(index(env), [], "存档收敛掉了，索引还认着它");
 });
 
 test("备份开关关着时，遗留备份在启动恢复里被清空", async () => {
@@ -291,7 +296,7 @@ test("恢复只碰被监控的注册域，不替别的站点回灌 cookie", asyn
   assert.equal(env.store.local[ck("quiet.example.com")], undefined);
 });
 
-/* ---------- 备份索引（A12 第 2 条）---------- */
+/* ---------- 备份的读法（A13）---------- */
 
 /* 桩件的 storage.set 是合并写，"少读一次盘"与"读了但没用"在落盘结果上看不出差别，
    所以这里把 local.get 包一层，记下每次问的是 null（全量扫）、键数组，还是单个键 */
@@ -304,122 +309,70 @@ function watchLocalGet(env) {
   };
   return seen;
 }
-const INDEX = "cookieBackupHosts";
-const index = (env) => env.store.local[INDEX];
 const allBackups = (env) =>
   Object.keys(env.store.local)
     .filter((k) => k.startsWith("cookieBackup:"))
     .sort();
+const scans = (seen) => seen.filter((s) => s === "ALL").length;
 
-test("索引在位时清理不再全量扫盘，删掉的存档同时从索引摘掉", async () => {
-  const env = await boot({
-    backups: {
-      [ck("shop.example.co.nz")]: {
-        timestamp: Date.now(),
-        cookies: [{ name: "sid", value: "v", domain: "shop.example.co.nz", path: "/" }]
-      },
-      [INDEX]: ["shop.example.co.nz"],
-      /* 一个与备份无关的大键：全量扫的代价就是要把它一起读回来 */
-      "cookieBackupWarnedOnce": true
-    }
-  });
-  const seen = watchLocalGet(env);
-  /* 停掉唯一的任务 → 该站点不再被任何任务使用 → pruneCookieBackups 收掉它 */
-  await env.send({ type: "stop", tabId: 7 });
-  assert.ok(!seen.includes("ALL"), `还是去全量扫了盘：${JSON.stringify(seen)}`);
-  assert.equal(stored(env, "shop.example.co.nz"), undefined, "孤儿存档没删");
-  assert.deepEqual(index(env), [], "存档删了索引还留着，等于索引会说谎");
-});
+/* 一条主机名清单（无论写没写、写没写全）都不许影响"哪些存档该删"。
+   这里故意留下一份声称"一家都没有"的清单，模拟 A12 索引登记丢失后的现场 */
+const STRANDED = {
+  [ck("mail.example.org")]: {
+    timestamp: Date.now() - 60 * 60 * 1000,
+    cookies: [{ name: "sid", value: "v", domain: "mail.example.org", path: "/" }]
+  },
+  [ck("shop.example.co.nz")]: {
+    timestamp: Date.now() - 60 * 60 * 1000,
+    cookies: [{ name: "sid", value: "v", domain: "shop.example.co.nz", path: "/" }]
+  },
+  cookieBackupHosts: []
+};
 
-test("索引缺失时退回一次全量读：老用户的存档一个都不丢，并顺手把索引建起来", async () => {
-  const host = "shop.example.co.nz";
-  const env = await boot({
-    /* 刻意不写 cookieBackupHosts：2.1.x 升上来的现场就是这个样子 */
-    backups: {
-      [ck(host)]: {
-        timestamp: Date.now() - 60 * 60 * 1000,
-        cookies: [{ name: "sid", value: "v", domain: host, path: "/" }]
-      }
-    }
-  });
-  const seen = watchLocalGet(env);
+test("没有任何任务时，清单上说没有的存档也要全部删掉", async () => {
+  const env = await boot({ tasks: {}, backups: STRANDED });
   await env.fire.startup();
-  assert.ok(seen.includes("ALL"), "没有索引却没去全量读，接下来的定向读会以为一家备份都没有");
-  assert.deepEqual(allBackups(env), [ck(host)], "被当成无主数据清掉了");
-  assert.deepEqual(index(env), [host], "扫过一遍却没把索引建起来，下次还得再扫");
-  assert.deepEqual(env.calls.cookieSet.map((c) => c.name), ["sid"], "迁移路径上恢复本身也坏了");
+  /* 期望是空表：遗留的 cookieBackupHosts 键本身不带冒号，不算存档，但它也不该参与任何判断 */
+  assert.deepEqual(allBackups(env), [], "清单之外的明文存档成了删不掉的死数据");
 });
 
-test("索引里没有的存档不许被顺手删掉", async () => {
-  /* 并发登记漏掉一家、或用户手动往存储里塞了一条：定向读看不见它，但它不该因此变成
-     "可清理的孤儿"。删东西的判据必须是存档实况，不是索引清单——方向反了就是丢登录态 */
-  const env = await boot({
-    backups: {
-      [ck("shop.example.co.nz")]: {
-        timestamp: Date.now(),
-        cookies: [{ name: "sid", value: "v", domain: "shop.example.co.nz", path: "/" }]
-      },
-      [ck("quiet.example.com")]: {
-        timestamp: Date.now(),
-        cookies: [{ name: "ghost", value: "v", domain: "quiet.example.com", path: "/" }]
-      },
-      [INDEX]: ["shop.example.co.nz"]
-    }
-  });
-  await env.fire.startup();
-  assert.ok(stored(env, "quiet.example.com"), "没登记进索引的存档被当成无主数据清了");
-  assert.ok(!index(env).includes("quiet.example.com"), "索引凭空认下了这条：它并没有登记过");
-});
-
-test("写成一笔新备份时把主机登记进索引；索引还没建立时不登记半个", async () => {
-  const host = "shop.example.co.nz";
-  const cookies = [{ domain: host, name: "sid", path: "/", value: "v" }];
-
-  /* 已有索引（哪怕是空的）：新存档要登记，否则下一次定向读不会去读它 */
-  const seeded = await boot({ backups: { [INDEX]: [] } });
-  seeded.setCookies(cookies);
-  await seeded.fire.alarm("refresh-7");
-  assert.ok(stored(seeded, host), "这次连存档都没写");
-  assert.deepEqual(index(seeded), [host], "写了存档没登记索引，恢复与清理都找不到它");
-
-  /* 索引尚未建立：只登记自己这一家会把别家的遗留明文变成定向读永远看不见的孤儿，
-     完整性交给启动那次全量读去补 */
-  const fresh = await boot({});
-  fresh.setCookies(cookies);
-  await fresh.fire.alarm("refresh-7");
-  assert.ok(stored(fresh, host), "没索引就不写备份了？");
-  assert.equal(index(fresh), undefined, "建了个只有一家的索引，别家遗留存档就此隐身");
-});
-
-test("索引里躺着但存档已经不在了的条目在对账时被摘掉", async () => {
-  const host = "shop.example.co.nz";
-  const env = await boot({
-    backups: {
-      [ck(host)]: {
-        timestamp: Date.now(),
-        cookies: [{ name: "sid", value: "v", domain: host, path: "/" }]
-      },
-      [INDEX]: [host, "gone.example.com"]
-    }
-  });
-  await env.fire.startup();
-  assert.deepEqual(index(env), [host], "幽灵条目一直留着，定向读每次多问一个不存在的键");
-});
-
-test("关掉备份开关时按索引清空，并把索引归零", async () => {
-  const env = await boot({
-    settings: { cookieBackup: false },
-    backups: {
-      [ck("shop.example.co.nz")]: {
-        timestamp: Date.now(),
-        cookies: [{ name: "sid", value: "v", domain: "shop.example.co.nz", path: "/" }]
-      },
-      [INDEX]: ["shop.example.co.nz"]
-    }
-  });
+test("关掉备份开关时，清单之外的存档同样被清空", async () => {
+  const env = await boot({ settings: { cookieBackup: false }, tasks: {}, backups: STRANDED });
   await env.fire.startup();
   assert.deepEqual(allBackups(env), [], "关着开关还留着明文票据");
-  assert.deepEqual(index(env), [], "清完存档索引还认着那一家");
+  assert.deepEqual(env.calls.cookieSet, []);
+});
+
+test("停掉最后一个任务时按存档实况清理，不看任何清单", async () => {
+  const env = await boot({ backups: STRANDED });
+  /* 任务页盯的是 shop.example.co.nz，mail.example.org 从头到尾没人登记过 */
+  await env.send({ type: "stop", tabId: 7 });
+  assert.deepEqual(allBackups(env), [], "两处都没被任务用到的存档留下来了");
+});
+
+test("存档清单那个键不许回到后台源码里", () => {
+  /* 上面几条钉的是"清单当不得删除依据"，可它只认读法：把登记写回 background.js 不会有
+     任何本地症状（写进去没人读），要拦的是这件事本身。谁要重新引入，先回答
+     "登记漏一条时那份明文存档怎么删掉" */
+  assert.equal(
+    BG_SRC.includes("cookieBackupHosts"),
+    false,
+    "cookieBackupHosts 是 2026-09-19 回退掉的备份索引键：它回来就等于把删除依据交回一份会漏登记的清单"
+  );
+});
+
+test("备份只有一个读法：全量扫，从不按清单定向读", async () => {
+  const env = await boot({ backups: STRANDED });
+  const seen = watchLocalGet(env);
+  await env.fire.startup();
+  assert.ok(
+    seen.every((s) => !(Array.isArray(s) && s.some((k) => String(k).startsWith("cookieBackup")))),
+    `出现了按键名清单的定向读：${JSON.stringify(seen)}`
+  );
+  /* 一趟启动收敛（恢复）与清理各扫一次；改坏成"每处操作各扫一遍"会让这个数涨回 3 以上，
+     那正是当初想省掉的东西——省它的办法只能是一次读共享，不能是第二份真相来源 */
+  assert.ok(scans(seen) >= 1, "一次都没读，说明备份整条链路没跑到这条用例");
+  assert.ok(scans(seen) <= 2, `一次启动恢复扫了 ${scans(seen)} 遍全量，读优化又丢了`);
 });
 
 /* 红→绿对照（2026-09-19 本机实跑，A2 那五处）
@@ -455,6 +408,9 @@ test("关掉备份开关时按索引清空，并把索引归零", async () => {
    结果，不是"谁删的"；真正区分得开的是 patch 3（它会连带把别家票据回灌）。 */
 
 /* 红→绿对照（2026-09-19 本机实跑，A12 第 2 条"备份索引"）
+   【已作废】下面这一批钉的是 cookieBackupHosts 索引，而索引当天就被 A13 回退掉了：
+   登记的读-改-写漏一次，那条明文存档就对所有删除路径永久隐身。跑法与判读仍然一样，
+   留着是为了记着"这批绿灯当时确实全绿，仍然漏了一个会丢登录态的方向"。
    跑法与上一段相同：整仓复制到仓库外，一次只改坏一处，在副本里跑
    logic.test.mjs + cookie-backup.test.mjs（90 条）。下面记的是实跑红名单，不是预测。
 
@@ -493,3 +449,32 @@ test("关掉备份开关时按索引清空，并把索引归零", async () => {
    P8 已撤回：prune() 收敛处原本跟着一句 dropBackupIndexHosts(conv.remove)，实跑零红——
    同一次启动末尾的 pruneCookieBackups 必然再对一次账，索引跟着存档实况被修正，那句改坏
    也看不出来。按"没有本地症状的行不留"删掉了，源码注释里记着这段来处。 */
+
+/* 红→绿对照（2026-09-19 本机实跑，A13"回退备份索引"）
+   跑法同上一批：整仓复制到仓库外（D:\Github\_tar_ctl_a13），一次只改坏一处，在副本里跑
+   全套 324 条。记的是实跑红名单，不是预测。副本里 background.js 是 CRLF，多行 needle
+   要先换成文件自己的换行，否则命中 0 次、静悄悄什么也没改坏（这一批第一次跑就撞上了）。
+
+     C1 readBackupEntries 改按 cookieBackupHosts 取数（清单当删除依据，即 2.1.x 之后那版）
+        → 实跑红 9 条：本文件"hostOnly 三种取值…""历史越界备份先收敛再恢复"
+          "键本身是公共后缀的遗留备份整条删掉""备份开关关着时…被清空""恢复只碰被监控的
+          注册域"，加新写的四条（清单之外的存档删不掉 ×3、源码扫描 ×1）。
+          这一处就是本批的立论：今天全绿的门禁，对着"清单漏登记"这个方向一条都不红；
+          现在同一处改坏红 9 条。
+     C2 去掉 cookieBackup: 前缀过滤 → 实跑红 15 条，红到 prune / 关键词 / 通知那一堆文件：
+          枚举不认前缀，tasks 这个键本身就成了一条"存档"，根域取不出 → 直接删。
+          全量读的代价只在前缀过滤这一行上。
+     C3 关闭开关的分支只查不删 → 实跑红 2 条（本批的关闭开关用例 + A2 那条遗留备份用例）。
+     C5 写存档时顺手登记主机名清单（索引写入复活，但没人读它）
+        → 实跑红 1 条，只有源码扫描那条。行为用例全绿：一份没人消费的清单确实是隐形的，
+          这条守卫因此不是装饰。
+     C4 恢复侧只枚举被监控根域的存档 → 零红。不在 taskRoots 里的存档既不会被恢复、
+          也必然被 pruneCookieBackups 按"站点不再被任何任务使用"删掉，两个分支同结果。
+          与上一批的 P8 同类：不为此补断言，也不为此改代码。
+
+   反向对照三处，实跑全绿：
+     R1 pruneStaleProbes 与全量读换序（两者无先后语义）
+     R2 COOKIE_BACKUP_TTL_MS 30 天 → 31 天
+     R3 超量淘汰的排序方向反过来
+   R2/R3 绿得和上一批同样有信息量：TTL 边界与"20 站封顶的计数"在这批门禁里仍无任何断言。
+   本批没动这两个判据，将来要动得先补按天数与按站点数淘汰的用例。 */

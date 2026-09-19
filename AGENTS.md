@@ -47,7 +47,7 @@
 
 ### 存储
 
-- `chrome.storage.local`：`tasks`（tabId → `{intervalSec, createdAt, url, keywords?, onHit?, notifiedKeys?, autoPaused?}`，旧数据的单串 `keyword` 由 `getTaskKeywords` 兼容读取，后台与弹窗共用这一个入口）、`pausedAll`、`sessionProbe`（根域 → `{sus, lost, lastNotifiedAt}`）、`cookieBackup:<host>`、`cookieBackupHosts`（备份键名索引，见"cookie 备份与登录保持"）、`cookieBackupWarnedOnce`、`wechatLastResult`、`webhookLastResult`（两个出口各一份最近一次投递结果，只存本机、不走 sync）
+- `chrome.storage.local`：`tasks`（tabId → `{intervalSec, createdAt, url, keywords?, onHit?, notifiedKeys?, autoPaused?}`，旧数据的单串 `keyword` 由 `getTaskKeywords` 兼容读取，后台与弹窗共用这一个入口）、`pausedAll`、`sessionProbe`（根域 → `{sus, lost, lastNotifiedAt}`）、`cookieBackup:<host>`、`cookieBackupWarnedOnce`、`wechatLastResult`、`webhookLastResult`（两个出口各一份最近一次投递结果，只存本机、不走 sync）
 - `chrome.storage.session`：跨 SW 回收要活下来的运行时计数与标记，即 `rt:error:<tabId>` / `rt:captcha:<tabId>` / `rt:activity:<tabId>` / `rt:skip:<tabId>` / `rt:awake` / `wechatToken`。判断标准是要活过 SW 回收放这里，要活过浏览器重启才放 local
 - `chrome.storage.sync`：`settings`。默认值集中在 `shared/config.js` 的 `DEFAULT_SETTINGS`，弹窗与后台共用；sync 为空时会从 local 迁移旧设置
 - 后台的 `getSettings()` 带内存快照（`settingsCache` / `settingsLoading` / `settingsEpoch`）：一次任务页加载周期里它被调 5~7 次，原先每次都发两笔存储读。**新增的 `settings` 写入一律走 `patchSettings(partial)`，别自己 `get`/`set`**：它在 `withSettingsLock` 里读盘、合并、整份写回，读写两头各 `invalidateSettings()` 一次（读前不失效会拿过期快照当基座，把用户这次没碰的开关按旧值写回去；写后不失效则 `onChanged` 回流前的一切读取仍是写前的值）。`partial` 给函数时按当前设置决定增量、返回 `null` 即不写，"没变就不写"的判断因此与写盘同处一把锁。唯一例外是 `loadSettings` 的 local→sync 迁移（整份写入、只发生一次、且在 `getSettings` 调用栈内，走 `patchSettings` 等于自锁）。两把锁的方向是契约：`startTask` 在 `withTaskLock` 内 `await` 设置写盘（单向等待），设置锁内绝不排 `withTaskLock`，否则互相等死。失效点、串行、锁方向均由 `tests/tab-auto-refresh/settings-cache.test.mjs` 钉住，文件末尾记着红→绿对照与两处第一次不合格的对照
@@ -90,8 +90,7 @@
 - 单站点封顶 200 条，超限时先按"像登录票据的程度"排序再截（httpOnly > 会话票 > `__Host-`/`__Secure-` > `path=/` > 域更短）。正常规模不排序，避免无谓的顺序变化
 - 启动恢复按注册域匹配，覆盖 SSO 登录所在的兄弟子域；恢复成功的根域记在 `restoredRoots`，据此决定认领的标签页要不要补刷新
 - 淘汰三条件：站点不再被任何任务使用、超过 30 天、超过 20 站上限（按时间留新）。停止任务与启动恢复时统一执行
-- 存档按**键名索引**读：`cookieBackupHosts` 是 `cookieBackup:<host>` 的主机名清单，写成一笔存档时登记（`ensureBackupIndex`），清理与恢复按它定向读，不再 `get(null)` 把几 MB 明文票据反序列化进 SW 只为拿键名。次序决策照纪律 1 抽成 `logic.js` 的两个纯函数：`planBackupFetch`（读之前怎么问存储）与 `planBackupIndex`（读之后与存档实况对账：索引里的幽灵条目摘掉、没登记的补上，没有变化就不落盘）
-- **索引是读优化，不是删除依据**。"该删哪几条"永远看存档实况，不看"索引里有没有"——把方向反了就是丢登录态。索引尚未建立（老版本升上来、或一家都没备份过）时退回**一次**全量读并顺手补建；`ensureBackupIndex` 在这之前只登记不建表，否则别家遗留明文会变成定向读再也看不见的孤儿。并发登记漏掉一家最迟下一次页面加载补回，不会删任何东西。迁移与方向的门禁在 `cookie-backup.test.mjs`（含 `watchLocalGet`：桩件的 `set` 是合并写，"少读一次盘"只能记读法来断言），文件末尾是实跑红名单
+- 存档只有一个读法：`readBackupEntries()` 一次 `get(null)` 全量读、按 `cookieBackup:` 前缀过滤。**不要引入主机名清单**（`cookieBackupHosts` 试过、当天回退，见 CHANGELOG 的 A13）：登记是清单自己的一次无锁读-改-写，漏一条，那条明文存档就对"按清单取数"的恢复与清理永久隐身——丢登录态且没有任何本地症状。全量读的代价止于慢（最坏 20 站 × 200 条明文反序列化进 SW），一趟启动至多两次（收敛/恢复一次、清理一次），要再省只能共享这一次读，不能加第二份真相来源。门禁是"先造孤儿再证明它被删掉"那几条（启动 / 关开关 / 停任务三条路径），外加一条扫 `background.js` 里 `cookieBackupHosts` 字样的守卫——登记写回本身没有读侧症状，只有扫源码拦得住；`watchLocalGet` 记每次问的是全量还是键清单（桩件的 `set` 是合并写，"少读一次盘"在落盘结果上看不出来）。实跑红名单记在 `cookie-backup.test.mjs` 末尾
 
 ### 会话保活与掉线检测
 
