@@ -138,7 +138,7 @@
   "skipReasonUnknown": { "message": "other reason" },
   "actionResume": { "message": "Resume" },
   "notifTaskPausedError": { "message": "The monitored page keeps returning errors (5xx/404); the task is auto-paused and will resume once the page recovers" },
-  "notifTaskPausedCaptcha": { "message": "The monitored page hit a bot verification wall; the task is auto-paused - pass the check and press Resume" },
+  "notifTaskPausedCaptcha": { "message": "The monitored page hit a bot verification wall; the task is auto-paused and resumes once the page loads clean - or press Resume" },
   "webhookEvPaused": { "message": "task auto-paused" },
   "intervalLabel": { "message": "Interval" },
   "customPlaceholder": { "message": "Custom seconds" },

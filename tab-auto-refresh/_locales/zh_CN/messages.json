@@ -137,7 +137,7 @@
   "skipReasonUnknown": { "message": "另有原因" },
   "actionResume": { "message": "恢复" },
   "notifTaskPausedError": { "message": "监控页面持续返回错误（5xx/404），任务已自动暂停；页面恢复后会自动继续" },
-  "notifTaskPausedCaptcha": { "message": "监控页面出现人机验证墙，任务已自动暂停；请在页面中通过验证后点恢复" },
+  "notifTaskPausedCaptcha": { "message": "监控页面出现人机验证墙，任务已自动暂停；过墙后页面再次加载会自动继续，也可点恢复" },
   "webhookEvPaused": { "message": "任务自动暂停" },
   "skipDiscardedLabel": { "message": "跳过休眠标签页" },
   "skipDiscardedHint": { "message": "标签页被浏览器休眠（丢弃）时跳过本次刷新，唤醒后自动恢复" },
