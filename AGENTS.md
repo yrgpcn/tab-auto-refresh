@@ -12,13 +12,21 @@
 - `.github/workflows/ci.yml`：push 与 PR 时用 Node 24 跑仓库校验与单元测试
 - `.github/workflows/release.yml`：tag 驱动发布，先跑校验与单测，再比对 tag 版本与 manifest 版本，任一失败即不发布
 - `scripts/validate.mjs` 仓库级校验（JSON、manifest、语言包、JS 语法、引用完整性、插件目录无未跟踪文件）；`scripts/screenshot-popup.mjs` 一次渲染 README 那两张弹窗截图，需要 playwright，CI 不跑，它那份 chrome mock 与弹窗用面的对齐由 `tests/tab-auto-refresh/screenshot-mock.test.mjs` 守着（见验证清单第 4 条）
-- 上面那条"引用完整性"的判据全在 `scripts/validate-refs.mjs`（五个纯提取器：`manifestMsgKeys` 深走整份
+- 上面那条"引用完整性"的判据全在 `scripts/validate-refs.mjs`（六个纯提取器：`manifestMsgKeys` 深走整份
   manifest 收 `__MSG_key__`、`htmlLocalRefs` 收本地 `src`/`href`、`htmlI18nKeys` 收 `data-i18n*` 三条通道、
-  `jsMessageKeys` 只收 `getMessage` 的第一个实参、`stringLiterals` 收单双引号字面量给反向判据用），
-  `validate.mjs` 只剩遍历与报账。纪律 1 在工具上同样成立的理由是"正则要有单测"：执行器没有 fixture
-  也没有 DOM，能判的那一半必须能单独 import。门禁 `tests/tab-auto-refresh/validate-refs.test.mjs`
-  （12 条，含四条通道各自的数量下限——下限只挡"对着空集合绿过去"），末尾记着 14 处对照的落点，
+  `jsMessageKeys` 只收 `getMessage` 的第一个实参、`i18nAliases` 现推别名包装、`stringLiterals` 收单双引号
+  字面量给反向判据用），`validate.mjs` 只剩遍历与报账。纪律 1 在工具上同样成立的理由是"正则要有单测"：
+  执行器没有 fixture 也没有 DOM，能判的那一半必须能单独 import。门禁 `tests/tab-auto-refresh/validate-refs.test.mjs`
+  （19 条，含五条通道各自的数量下限——下限只挡"对着空集合绿过去"），末尾记着 24 处对照的落点，
   以及一处真实假报警的成因（三元条件里的 `"captcha"` 是拿去比值的、不是键，故 `jsMessageKeys` 先切分支）
+- 语言包键的取用有**两条写法，判据两条都要走**：直调 `chrome.i18n.getMessage("键")`，或经包装函数
+  `msg("键")`（popup.js 是 `function msg(key, subs)`，wechat-setup.js 是 `const msg = (key) => ...`）。
+  别名名**不写死在表里**，由 `i18nAliases` 从源码现推（判据：谁把自己的入参原样递给 `getMessage`），
+  所以改名与新增包装自动跟上；写死表就是第二份真相来源，包装改名时那条通道会静默退回零覆盖。
+  **别名只在本文件内推导**：包装定义在 `shared/logic.js` 这类共享模块里、由别的页面 import 过去用的，
+  判据看不见（现有两处都是同文件定义同文件调用）。A26 之前只有直调那半边有正向判据，于是
+  `msg()` 传一个语言包里根本没有的键会一路 exit 0 过 CI：正向看不见别名，反向只查"语言包里的键有没有
+  人提到"，而那条键压根不在语言包里，没有账可查
 - `tests/` 单元测试放在仓库根，避免被打进插件 zip
 - `docs/` README 用的截图
 - `_code-review/` 是本地审核归档（多轮报告与回归脚本），被 `.gitignore` 忽略，不入库、不进 Release、新 clone 里不存在。所以本文件里引用 `_code-review/...` 的路径只在本地有效
@@ -30,8 +38,9 @@
 - 许可证红线：本仓库是 MIT。tab-reloader 与 staying_alive 没有许可证（默认保留所有权利），Keep-Alive-Pro 是 GPL-3.0。对这些只能取思路、不得粘贴代码字面，注释里至多写"思路与 X 一致"。只有 MIT 项目（如 auto-refresh-extension）的片段可以借鉴，且要保留来源 URL 与版权声明
 - 提交信息用英文 Conventional Commits（feat / fix / docs / refactor / chore）
 - UI 默认中文，同时维护 `_locales/zh_CN` 与 `_locales/en`，两边键必须齐平。**新增一条文案必须同时在源码里
-  提到它**：`validate.mjs` 除"两份键齐平"外还跑正向（四处 `__MSG_`、`data-i18n*`、`getMessage` 字面量都得上
-  语言包）与反向（语言包里每条键都要在插件源码某处以字符串出现过）两头，只加文案没接线就 exit 1。
+  提到它**：`validate.mjs` 除"两份键齐平"外还跑正向（四处 `__MSG_`、`data-i18n*`、`getMessage` 字面量、
+  以及 `msg()` 那类别名包装，都得上语言包）与反向（语言包里每条键都要在插件源码某处以字符串出现过）两头，
+  只加文案没接线就 exit 1。
   反向判据认不出注释——键名带引号写在注释里也算"提到"，这是刻意选的宽松面（宁可漏报也不去写一套认不出注释的切分）
 - 版本号在 `tab-auto-refresh/manifest.json` 维护
 - 发布：改 manifest 版本号并更新 CHANGELOG → 提交到 `main` → 打 tag `tab-auto-refresh/vX.Y.Z`（前缀勿改）→ 推 `main` 与 tag，Actions 自动打包、建 Release 并清理旧 Release 与 tag

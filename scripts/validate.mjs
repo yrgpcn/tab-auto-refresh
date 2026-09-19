@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import {
   htmlI18nKeys,
   htmlLocalRefs,
+  i18nAliases,
   jsMessageKeys,
   manifestMsgKeys,
   stringLiterals,
@@ -230,6 +231,16 @@ for (const [path, manifest] of jsonFiles) {
     }
     for (const key of jsMessageKeys(src)) {
       if (!known.has(key)) problems.push(`${file}: getMessage 引用了语言包里没有的键 ${key}`);
+    }
+    /* 别名通道：popup.js 与 wechat-setup.js 各有一个 msg(key) 把键递给 getMessage，
+       上面那条正则看不见它们。别名名从本文件现推，不写死清单（理由见 validate-refs.mjs）。
+       这一条不补，"新增一个语言包里根本没有的键"在两条判据上都不红：正向看不见别名，
+       反向只查"语言包里的键有没有人提到"，而那个键压根不在语言包里。
+       实测症状不致命（msg() 有 `|| key` 兜底，界面上露的是原始键名），但它是静默的 */
+    for (const alias of isJs ? i18nAliases(src) : []) {
+      for (const key of jsMessageKeys(src, alias)) {
+        if (!known.has(key)) problems.push(`${file}: ${alias}() 引用了语言包里没有的键 ${key}`);
+      }
     }
   });
 
