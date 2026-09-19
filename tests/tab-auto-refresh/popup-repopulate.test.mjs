@@ -243,6 +243,21 @@ test("失败留痕没带 errorKey：兜底文案，不能显示 undefined", () =
   assert.doesNotMatch(dom.webhookState.textContent, /undefined/);
 });
 
+test("popup.js 里每一处字面量取的控件 id，popup.html 都得有（全量对账，不是只对一个函数）", () => {
+  /* 下面那条只管 renderWebhook 那几处。剩下三十多处的失败形状是同一类：$() 就是
+     getElementById，取不到返回 null，紧接着的 .addEventListener 抛在模块顶层，
+     整个弹窗脚本当场停住 —— 页面不是"少一行"，是整页空白 */
+  const ids = new Set();
+  for (const m of POPUP_SRC.matchAll(/\$\(\s*"([A-Za-z0-9_]+)"\s*\)/g)) ids.add(m[1]);
+  assert.ok(ids.size >= 40, `只切出 ${ids.size} 个字面量 id，本条是空跑`);
+  const missing = [...ids].filter((id) => !POPUP_HTML.includes(`id="${id}"`));
+  assert.deepEqual(missing, [], "popup.js 取这个 id 而 popup.html 里没有：弹窗整页白屏");
+  /* 按变量取的那两处（TEXT_SETTING_INPUT_IDS 的遍历、activeElement 的比较）不在这里，
+     由 popup-save-timing.test.mjs 按它自己那份清单钉住。
+     方向刻意单向：popup.html 里有 id 而 popup.js 没取过，不算错（footer#repoFooter、
+     #wechatView、#wechatGuideLink 三条今天就是这样，各由 CSS 与锚点用着）；反过来才致命 */
+});
+
 test("renderWebhook 用到的控件在 popup.html 里都在，状态行默认藏着", () => {
   const ids = [...WH_FN_SRC.matchAll(/\$\("([A-Za-z0-9_]+)"\)/g)].map((m) => m[1]);
   assert.ok(ids.length >= 4, `只切出 ${ids.length} 个控件 id，本条是空跑`);
@@ -333,6 +348,21 @@ test("renderWebhook 的五处调用各在各自的事件里", () => {
    处 15 H1 状态行去掉 hidden               → 红 1 条：renderWebhook 用到的控件在 popup.html 里都在…
    处 16 H2 状态文字控件改名                → 红 1 条：同上那条（id 覆盖那半边）
    处 17 H3 删掉 CSS 里的 .wx-state.ok      → 红 1 条：两个颜色类在 CSS 里真的存在…
+
+   ---------- A29（第十一轮）：全量 id 对账，2026-09-19 实跑，脚本在仓库外 _tar_ctl_r11/ ----------
+
+   同一套做法（整仓复制到仓库外、一轮只改坏一处、跑副本的本文件与 screenshot-mock.test.mjs，
+   基线 29 条全绿）。本轮加的这条管的是"popup.js 取到的每一个字面量 id，HTML 里都得有"。
+
+   处 18 popup.html 里把 bypassCheck 的属性名改掉 → 红 1 条：新加的那条全量对账。
+        这正是要买的增量：42 处取值里旧门禁只点到 6 处，H1/H2 那两条对这一处改坏毫无反应；
+        而 #bypassCheck 是"取不到就 .addEventListener 抛在模块顶层、整页白屏"的那种控件
+   处 19 反向：给 <body> 加一个 popup.js 从不取的 id → 全绿。判据刻意单向（HTML 多给不管），
+        与 screenshot-mock.test.mjs 那条 mock 覆盖判据同一个口径
+
+   另一头运行时也有对照（记在 screenshot-mock.test.mjs 末尾的 R1）：同一处改坏真渲染一次，
+   --measure 确实 exit 1。但那条红的是 waitForSelector 超时而不是新加的报错清单——
+   形状判据与运行时判据各证各的，别拿一条顶另一条。
 
    处 1~8 各只红在它点名的那一条（处 3 两条），没有一处变异能同时躲过顺序守卫与早退守卫；
    处 9~17 同样各红 1~2 条，且红的全是本条点名的用例——两处绿是补了输入形状才变红的。 */

@@ -292,6 +292,58 @@ test("量高度的形状引用真实场景、补丁键是真实设置键（打�
   assert.deepEqual(unknown, [], "补丁键不在 DEFAULT_SETTINGS 里：合并进去没人读，那一行根本不会出现");
 });
 
+/* 截出 `page.on("<事件>", (…) => { … })` 的回调体。用现成的花括号配对，别按 "});" 找收尾：
+   回调里就有 console.error(...) 这样的调用，按字符串找会切早、于是判据对着半截代码绿 */
+function handlerBody(src, event) {
+  const at = src.indexOf(`page.on("${event}"`);
+  if (at < 0) throw new Error(`脚本里没有 page.on("${event}") 这一条订阅`);
+  const brace = src.indexOf("{", src.indexOf("=>", at));
+  if (brace < 0) throw new Error(`page.on("${event}") 的回调不是块体，判据要跟着改`);
+  const end = closeBrace(src, brace);
+  if (end < 0) throw new Error(`page.on("${event}") 的回调花括号没闭合`);
+  return src.slice(brace, end + 1);
+}
+
+test("页面报错的两条订阅都攒进同一份清单，而且这份清单决定退出码", () => {
+  const nameOf = (body, event) => {
+    const m = body.match(/(\w+)\.push\(/);
+    assert.ok(m, `page.on("${event}") 只把报错打给终端：没有清单就没人判红，图照写、退出码照 0`);
+    return m[1];
+  };
+  const pageErr = handlerBody(SHOT_SRC, "pageerror");
+  const consoleErr = handlerBody(SHOT_SRC, "console");
+  const name = nameOf(pageErr, "pageerror");
+  assert.equal(nameOf(consoleErr, "console"), name, "两类错误各攒一份：判红时只会看到其中一半");
+  assert.match(
+    consoleErr,
+    /type\(\)\s*!==\s*"error"/,
+    "console 订阅不再筛类型：弹窗里一条普通 log 就能让整次运行红"
+  );
+  const verdict = SHOT_SRC.match(new RegExp(`if\\s*\\(\\s*${name}\\.length\\s*\\)`));
+  assert.ok(verdict, `没有任何判据读这份 ${name} 清单：攒了等于没攒`);
+  const brace = SHOT_SRC.indexOf("{", verdict.index);
+  const body = SHOT_SRC.slice(brace, closeBrace(SHOT_SRC, brace) + 1);
+  assert.match(
+    body,
+    /process\.exitCode\s*=\s*1|process\.exit\(1\)/,
+    "清单非空却不改退出码：这脚本本机手工跑，没人会去读那行红字"
+  );
+});
+
+test("favicon 由服务器回 204，所以报错清单不必按文本放行任何一条", () => {
+  /* 报错文本里不含网址（实测只有 "Failed to load resource: ... 404"），没法靠字符串把
+     Chrome 自己来要图标这条与真错分开。既然分不开就不放行：让那条噪音根本不会产生 */
+  const at = SHOT_SRC.indexOf('"/favicon.ico"');
+  assert.ok(at >= 0, "脚本不再认 favicon：Chrome 每次加载页面都会来要，于是每一次都判红");
+  assert.match(SHOT_SRC.slice(at, at + 220), /writeHead\(204\)/, "认得 favicon 却回 404，那条报错照样进清单");
+  assert.doesNotMatch(
+    handlerBody(SHOT_SRC, "console"),
+    /favicon|Failed to load/,
+    "console 订阅里出现按文本放行的分支：那等于给真错留了后门"
+  );
+  assert.match(SHOT_SRC, /writeHead\(404\)/, "404 那条兜底被删了：缺资源不再产生报错，正是这条通道要抓的一类");
+});
+
 /* ---------- 红→绿对照（2026-09-19 实跑，D:/Github/_tar_ctl_r5/run.mjs） ----------
 
    做法：把 popup.js / screenshot-popup.mjs / README.md 复制到仓库外的 _base/，一次只改
@@ -386,3 +438,36 @@ test("量高度的形状引用真实场景、补丁键是真实设置键（打�
      是硬封顶加内部滚动，多开任务不会拉长整页——那是 CSS 保证的，不是这条判据保证的
    - 量的是 mock 数据下的形状：真系统的字体回退、浏览器 zoom、更长的中文站点名仍只能真机看
      （`BACKLOG.md` V1 (h) 因此收窄成这三样） */
+
+/* ---------- A29 加的那两条（第十一轮）：对照与边界，2026-09-19 实跑 ----------
+
+   脚本 `D:/Github/_tar_ctl_r11/run.mjs`：整仓复制到仓库外，一轮只改坏一处。N* 跑副本的
+   本文件 + popup-repopulate.test.mjs（副本自己是完整仓库，TAR_* 一个都不设）；R* 跑副本的
+   `--measure`，看 exit 码。基线 29 条全绿（本文件 7 + 那文件 22）。
+
+     N2 页面报错改回"只 console.error 一行"（改前的真实形状）→ 红 1，正是"两条订阅都攒进
+        同一份清单"。这一根就是本轮的起点：一条"页面死了也绿"的通道
+     N3 两类错误各攒一份清单 → 红 1，同一条。判红时只看得到一半，这一半恰好是 console
+     N4 读清单却不改退出码 → 红 1，还是同一条（判据最后一句就是查这个）
+     N5 删掉 favicon 那一支 → 红 1，favicon 那条
+     N6 给 console 订阅加一段 `if (text.includes("favicon")) return` → 红 1。这一根是 N5 的
+        对偶：先把"按文本放行"这条路堵住，才谈得上"剩下的 404 都是真错"
+     N7 反向：清单整体改名（9 处一起改）→ 全绿。判据拿的是 push 调用里的数组名，不绑死字面量
+
+     R1 真渲染：副本的 popup.html 里把一个 id 的属性名改掉 → exit 1。**注意它红在哪**：
+        抛在模块顶层的脚本连任务列表都没建起来，于是红的是 waitForSelector 超时（30 秒后抛），
+        不是那句"1 条页面报错"。所以"整页白屏"这一类本来就拦得住，本轮补的不是这一类
+     R2 真渲染：删掉 favicon 那一支 → 六个形状高度全部 ✔、最深仍 571px，只有末尾那句报错清单
+        让它 exit 1。这一处才是新判据独有的覆盖面，也是 R1 之外必须再跑一条的理由：
+        页面照建、数字照量、看着一切正常，红只可能来自清单
+
+   为什么 R1 那种"本来就响"的还要记：不记的话下次有人会把 R1 当成"新判据的证明"，
+   而它证明的是旧机制。两条对照要分开摆，一条量增量、一条量存量。
+
+   已知边界（别当成已覆盖）：
+   - 这两条钉的是"报错有没有被收集与判红"，不是"弹窗渲染得对不对"。少绑一个事件、回填错控件
+     这类不会打印任何东西的错，仍然只有 popup-repopulate.test.mjs 那一头与真机看图
+   - 清单只在**这一次进程**里有效：中途脚本自己抛（R1 就是）会跳过末尾那句统计，
+     那种情况红是红，但报的是超时不是那 N 条错
+   - favicon 那条判据认的是 writeHead(204) 这一种解法。换别的安静法（比如真放一个图标文件）
+     要连着改判据，别只改脚本 */

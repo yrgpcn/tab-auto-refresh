@@ -12,12 +12,15 @@
    坑记在这里免得再踩：addInitScript 的第二个参数按 JSON 序列化，函数会被丢掉，
    因此整套 mock 写在回调体内、只把纯数据传进去。
 
-   跑完会有一行 404 的 console 报错：那是 Chrome 自己向临时服务器要 /favicon.ico，
-   插件目录里没有这个文件，与弹窗渲染无关。
+   页面报错（pageerror 与 console error）一条都不许悄悄过去：一张"看着挺完整"的截图可以出自
+   一个当场死掉的弹窗脚本。原先跑完固定有一行 404 —— Chrome 自己来要 /favicon.ico，而报错文本
+   里不含网址、没法与真错分开判，所以临时服务器现在对它直接回 204；这样剩下的每一条 404 都是
+   "该在而不在"，正是要红的那一类。
 
    --measure 只量高度、不写图：把弹窗按几个"多出一行"的形状各渲染一遍，量整页最深内容的
    底边落在哪，跟 Chrome 弹窗外框的 600px 上限比。撑破它的症状是"底部那几张卡片看不见"，
-   CSS 里的 max-height 只挡住 body 自己，量不出真实深边，所以这一面此前只能靠人眼看图。 */
+   CSS 里的 max-height 只挡住 body 自己，量不出真实深边，所以这一面此前只能靠人眼看图。
+   这些数字只在"这一页真的建完了"的前提下有意义，所以它与上面那条报错判据是同一条通道的两半。 */
 
 import { mkdirSync, readFileSync } from "node:fs";
 import http from "node:http";
@@ -185,6 +188,15 @@ const MIME = {
 };
 const server = http.createServer((req, res) => {
   const urlPath = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
+  /* Chrome 每次加载页面都自己来要 /favicon.ico，插件目录里没有这个文件。下面那套
+     "页面报错就判红"的通道分不清这条噪音与真错，而 console error 的文本里又不含网址
+     （实测只有 "Failed to load resource: ... 404"），没法按内容放过它——所以直接回 204：
+     浏览器对 No Content 不产生 console 报错，其余任何 404 就都是"这个资源真的该在而不在" */
+  if (urlPath === "/favicon.ico") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
   const filePath = join(pluginDir, urlPath);
   if (!filePath.startsWith(pluginDir)) {
     res.writeHead(403);
@@ -208,13 +220,22 @@ const MEASURE = process.argv.includes("--measure");
 if (!MEASURE) mkdirSync(outDir, { recursive: true });
 let worst = 0;
 let over = 0;
+/* 页面里抛出来的错一个都不许悄悄过去：一张"看着挺完整"的截图可以出自一个当场死掉的脚本
+   （$() 取不到控件就是这种），量到的高度同样能落在限内。攒着不立即退出，是为了让
+   后面的形状也各跑各的、一次把账报全 */
+const pageErrors = [];
 for (const probe of MEASURE ? PROBES : SCENARIOS) {
   const scenario = MEASURE ? scenarioFor(probe) : probe;
   const label = MEASURE ? probe.name : scenario.file;
   const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 2 });
-  page.on("pageerror", (err) => console.error(`${label} pageerror:`, err.message));
+  page.on("pageerror", (err) => {
+    pageErrors.push(`${label} pageerror: ${err.message}`);
+    console.error(pageErrors[pageErrors.length - 1]);
+  });
   page.on("console", (entry) => {
-    if (entry.type() === "error") console.error(`${label} console:`, entry.text());
+    if (entry.type() !== "error") return;
+    pageErrors.push(`${label} console: ${entry.text()}`);
+    console.error(pageErrors[pageErrors.length - 1]);
   });
   await page.addInitScript(({ scenario, tabs, msgs }) => {
     /* 真 Chrome 的 get 只回你问的那些键，mock 照做：整份返回会让"读了哪个键"这类改坏查不出来 */
@@ -344,5 +365,11 @@ if (MEASURE) {
       ? `✖ ${over} / ${PROBES.length} 个形状撑破了 ${POPUP_MAX_H}px（最深 ${worst}px）`
       : `✔ ${PROBES.length} 个形状都在 ${POPUP_MAX_H}px 内（最深 ${worst}px）`
   );
-  if (over) process.exit(1);
+  if (over) process.exitCode = 1;
+}
+if (pageErrors.length) {
+  console.error(`✖ ${pageErrors.length} 条页面报错，这次渲染不算数（详见上面每一条）`);
+  process.exitCode = 1;
+} else {
+  console.log("✔ 页面零报错");
 }
