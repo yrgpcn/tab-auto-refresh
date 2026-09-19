@@ -12,6 +12,7 @@ import {
   capCookies,
   clampInterval,
   decideAlarmAction,
+  decideBadge,
   decideWallFromFrames,
   domainChain,
   hostOf,
@@ -1233,7 +1234,8 @@ async function restoreCookies(host) {
   }
 }
 
-/* 角标四态集中在这里切换：掉线待重登 "!" 红 > 全局暂停 "‖" 灰 > 监控数量 蓝 > 无任务空 */
+/* 角标集中在这里刷新。哪一态赢、给什么颜色与文字全在 shared/logic.js 的 decideBadge，
+   这一段只把四件事实取齐（有掉线探针 / 有自动暂停的任务 / 是否全局暂停 / 任务数）再写盘 */
 async function updateBadge() {
   void applyKeepAwake(); /* 任务增删/暂停的所有路径都经过这里 */
   try {
@@ -1253,9 +1255,12 @@ async function updateBadge() {
     for (const t of Object.values(tasks)) {
       if (t.autoPaused) { anyAutoPaused = true; break; }
     }
-    /* 五态优先级：掉线 ! 红 > 自动暂停 ⚠ 橙 > 全部暂停 ‖ 灰 > 计数 蓝 > 空 */
-    const color = anyLost ? "#dc2626" : anyAutoPaused ? "#d97706" : paused ? "#6b7280" : "#2563eb";
-    const text = anyLost ? "!" : anyAutoPaused ? "⚠" : paused && n > 0 ? "‖" : n > 0 ? String(n) : "";
+    const { color, text } = decideBadge({
+      probeLost: anyLost,
+      autoPaused: anyAutoPaused,
+      pausedAll: paused,
+      count: n,
+    });
     await chrome.action.setBadgeBackgroundColor({ color });
     await chrome.action.setBadgeText({ text });
   } catch (e) {

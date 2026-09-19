@@ -182,7 +182,21 @@
 - 后台对 `tasks` 的读改写必须走 `withTaskLock` 串行队列。锁的**作用域**与串行同样要紧：锁内只碰存储与内存快照，绝不排队等网络——`withTaskLock` 是全站共享的一把锁，压在锁上等外发时别的标签页连「开始/停止」都要排队。`startTask` 的首次 `backupCookies` 因此排在整条锁内流程之后（它会一路 `await` 到 `notifyOut` 的两笔 fetch，15 秒超时、微信还要先取令牌），但**仍然 `await`**，不改成裸甩。门禁 `tests/tab-auto-refresh/start-task-lock.test.mjs`
 - 快捷键 `toggle-refresh`（Alt+Shift+R）复用 `settings.lastIntervalSec`，没有记录时回退 5 分钟；右键菜单 contexts 是 `["tab", "page"]`
 - 手动开始任务（弹窗、右键、快捷键）会解除 `pausedAll`；暂停期间 alarm 跳过触发，恢复后按原周期继续
-- 角标四态在 `updateBadge` 一处切换：掉线 `!` 红 > 自动暂停 `⚠` 橙 > 暂停 `‖` 灰 > 数量 蓝 > 空。所有任务增删路径都要经过它，`chrome.power` 锁的收敛也挂在那里（`void applyKeepAwake()`），另一条入口是 `reconcileKeepAlive` 末尾那一笔，管开关真变化的时候。`applyKeepAwake` 三条判据不许凭读代码相信：申请 `system` 不申请 `display`、持锁标记走会话态所以一个生命周期最多申请一次、**释放那一头无条件**（锁跨 SW 回收存活而标记只在本会话，靠标记决定释不释放就会漏掉回收后这一次）。门禁 `tests/tab-auto-refresh/keep-awake.test.mjs`，桩件按序列记 `env.calls.keepAwake`
+- 角标五态的**优先级与取值全在 `shared/logic.js` 的 `decideBadge`**（纯函数，纪律 1 的又一处兑现），
+  `background.js` 的 `updateBadge` 只把四件事实取齐再写盘。
+  顺序：掉线 `!` 红 > 自动暂停 `⚠` 橙 > 全部暂停 `‖` 灰 > 数量 蓝 > 空。
+  两条链的支数刻意不一样多（颜色不看数量、文字要 `count > 0` 才给
+  `‖`），所以"全局暂停且一张任务都没有"是灰底配空字而不是某一态——别把它压成对称形状，
+  用例把这件事钉着（第十九轮之前这两行嵌套三元式零判据：换一位优先级、删掉 `pausedAll` 那一支、
+  把上面那行顺序整个倒过来写、把自动暂停与数量两态的色值对调，四类改法全套门禁全绿——
+  实测记在 `badge-state.test.mjs` 末尾，其中"全绿"按"除本轮条目自身那一条 `doc-anchors` 路径红之外"算）。
+  所有任务增删路径都要经过它，`chrome.power`
+  锁的收敛也挂在那里（`void applyKeepAwake()`），另一条入口是 `reconcileKeepAlive` 末尾那一笔，
+  管开关真变化的时候。`applyKeepAwake` 三条判据不许凭读代码相信：申请 `system` 不申请 `display`、
+  持锁标记走会话态所以一个生命周期最多申请一次、**释放那一头无条件**（锁跨 SW 回收存活而标记只在
+  本会话，靠标记决定释不释放就会漏掉回收后这一次）。门禁 `tests/tab-auto-refresh/keep-awake.test.mjs`
+  （桩件按序列记 `env.calls.keepAwake`）与 `tests/tab-auto-refresh/badge-state.test.mjs`，
+  **新增一态要三处同时改**：`decideBadge` 的分支、上面那行说明的顺序、以及那面门禁的态清单
 - 单独关掉一张被监控的页会按任务里记录的网址**在后台重开一张**并把任务搬到新 id（先 `setTasks` 落盘、再挂新 alarm、最后清旧 id 的两条 alarm）；`removeInfo.isWindowClosing` 为真时整个不动，交给启动恢复。`!task.url` 也不动，免得给旧格式任务开出幽灵页。门禁由 `tests/tab-auto-refresh/tab-removed.test.mjs` 钉住
 - `tabs.onUpdated` 先用内存里的任务 tabId 快照过滤，非监控标签页不读存储；快照在 `setTasks` 时更新，冷启动首次事件回读存储
 - `task.url` 的语义定死一次：**用户指定的监控对象**，不是"这一页此刻的地址"。`refreshTaskUrl` 因此只跟随**同站且不是登录页**的新地址，判据是纯函数 `shouldAdoptTaskUrl`（在 `logic.js`，纪律 1 的兑现处），门禁在 `tests/tab-auto-refresh/task-url.test.mjs`。让登录页参与改写会自指（A14）：站点一跳 `/login`，监控对象就成了登录页，而行为通道那句"监控对象本身就是登录页时此信号不适用"从此恒成立 → `sus` 被清零 → 2 次确认窗口再也走不到 `lost`，掉线检测自己把自己 disarm；同时关键词在登录页正文里找、心跳对着 `/login` 发、用户重新登录也不会自动回到原页面。跨站漂移同样不覆盖，好让自动重开回到用户填的那一家

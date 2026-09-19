@@ -787,6 +787,35 @@ export const ALARM_SKIP_REASONS = {
 };
 export const ALARM_SKIP_UNKNOWN_KEY = "skipReasonUnknown";
 
+/* 角标那五态集中在这里判（纯函数，纪律 1）。输入全是执行器已经取好的事实，
+   不做任何浏览器调用。五支的先后次序**不在这里逐条重抄**（那份清单住在 `AGENTS.md` 的
+   "角标五态"那一行，由 tests/tab-auto-refresh/badge-state.test.mjs 与真实分支现推的顺序比对），
+   这里只记两条不能换位的理由：
+   - 掉线排第一：它是"用户现在就得做点什么"，其余几态都不用
+   - 自动暂停排在人工暂停之前：前者是插件判出的故障，藏在一个用户自己按下的暂停按钮后面，
+     等于把故障撤回成正常
+
+   颜色那条链四支、文字那条链五支，这个不对称**不是笔误**：文字要 `count > 0` 才给 `‖`，
+   而颜色不看数量。于是"全局暂停且一张任务都没有"是灰底配空字——空字在 Chrome 那里就是
+   不显示角标，颜色看不见。下次有人把它压成对称的两条链，行为就会多出一态
+   （暂停且零任务时刷出一个灰色空角标），所以由用例把这个形状钉住。
+
+   返回 { color, text }，两个值都直接递给 chrome.action。 */
+export const BADGE_COLORS = {
+  LOST: "#dc2626",
+  AUTO_PAUSED: "#d97706",
+  PAUSED: "#6b7280",
+  COUNT: "#2563eb"
+};
+export const BADGE_TEXTS = { LOST: "!", AUTO_PAUSED: "⚠", PAUSED: "‖" };
+
+export function decideBadge({ probeLost = false, autoPaused = false, pausedAll = false, count = 0 } = {}) {
+  if (probeLost) return { color: BADGE_COLORS.LOST, text: BADGE_TEXTS.LOST };
+  if (autoPaused) return { color: BADGE_COLORS.AUTO_PAUSED, text: BADGE_TEXTS.AUTO_PAUSED };
+  if (pausedAll) return { color: BADGE_COLORS.PAUSED, text: count > 0 ? BADGE_TEXTS.PAUSED : "" };
+  return { color: BADGE_COLORS.COUNT, text: count > 0 ? String(count) : "" };
+}
+
 /* 凭据完整性：四样缺一不可。返回缺失项（键名），让弹窗能点名而不是笼统报错 */
 export function wechatConfigState(settings) {
   const s = settings || {};
