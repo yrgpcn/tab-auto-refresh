@@ -147,11 +147,36 @@ test("后台窗口里的标签页照刷：只有焦点窗口的当前页算看�
   assert.deepEqual(reloaded(env), [7]);
 });
 
-test("焦点在别的应用里时照刷：认不出来一律放行", async () => {
+test("浏览器退到后台但窗口还在：必须照常刷新", async () => {
+  /* 真实 Chrome 的三态里最难分的一态：焦点事件给了 WINDOW_ID_NONE（人切去别的应用了），
+     但窗口还在，此时 getLastFocused() 仍然返回最后聚焦的那个窗口。
+     旧写法把"已知无焦点"与"还不知道焦点在哪"合成同一个 null，于是这次补查会把
+     focusedWindowId 重新填成 tab.windowId → 判定"人正看着这页" → 用户走开期间的每一次
+     触发都被跳过，任务从此不再刷新，正是"认不出来一律放行"那句承诺的反面。
+     旧桩件在无焦点时直接让 getLastFocused 抛错，这一态在测试里压根造不出来 */
   const env = await bootAlarm({ tasks: { 7: TASK }, tabs: [{ id: 7, url: TASK.url, active: true, windowId: 1 }] });
-  env.focusWindow(null); /* WINDOW_ID_NONE：没有焦点窗口，getLastFocused 会抛 */
+  env.focusWindow(1); /* 人确实在这个窗口上 */
+  env.focusWindow(null); /* 切去别的应用：窗口还在，getLastFocused 仍返回窗口 1 */
   await env.fire.alarm("refresh-7");
-  assert.deepEqual(reloaded(env), [7], "拿不到焦点窗口被当成了「用户一直在这页」，任务永不刷新");
+  assert.deepEqual(reloaded(env), [7], "浏览器一退到后台就被判成「用户一直在这页」，任务永不刷新");
+  assert.deepEqual(rearmed(env), ["refresh-7"], "跳过这一拍也要续跑定时器");
+});
+
+test("冷启动且一个窗口都没有：补查失败就放行刷新", async () => {
+  const env = await bootAlarm({ tasks: { 7: TASK }, tabs: [{ id: 7, url: TASK.url, active: true, windowId: 1 }] });
+  env.closeAllWindows(); /* 从没收到过焦点事件，且 getLastFocused 会 reject */
+  await env.fire.alarm("refresh-7");
+  assert.deepEqual(reloaded(env), [7], "问不到焦点窗口被当成了「人一直在这页」");
+});
+
+test("冷启动且有最后聚焦的窗口：补查那一次要认得出人在看", async () => {
+  /* SW 被回收再唤醒时还没有任何焦点事件，这一态只能靠补查。
+     补查去掉之后这条会红——它是"退到后台不刷新"那条的反向配对，两条合起来才说明
+     分的是"不知道"与"知道不在前台"，而不是一律放行或一律拦下 */
+  const env = await bootAlarm({ tasks: { 7: TASK }, tabs: [{ id: 7, url: TASK.url, active: true, windowId: 1 }] });
+  env.chrome.windows.update(1, { focused: true }); /* 有窗口且它是最后聚焦的，但不发焦点事件 */
+  await env.fire.alarm("refresh-7");
+  assert.deepEqual(reloaded(env), [], "冷启动第一拍该认出人在看，却把页面重载了");
 });
 
 test("内容脚本上报的活动时间戳走会话态，跨 SW 回收仍然算数", async () => {
@@ -212,17 +237,26 @@ test("关掉'有活动时跳过'后不再去问窗口焦点", async () => {
 });
 
 /* 红→绿对照（整份复制到仓库外，在副本上改源码后跑本文件；做法见 prune-plan.test.mjs 末尾）
-   五处，2026-09-18 实跑，每次都只红在对应那一条、其余全绿：
+   1~3、5 于 2026-09-18 实跑过，每次都只红在对应那一条、其余全绿：
      1) decideAlarmAction 里把 pausedAll 与 !tab 两段调换
         → 红在"全局暂停排在页面存在性之前"
      2) 把 task.autoPaused 那段提到 !tab 之前
         → 红在"页面存在性排在自动暂停之前"
      3) `skipOnActivity && (tabIsVisible || recentlyUsed)` 去掉 tabIsVisible
         → 红在"注入没上报活动也认得出人在看"与"页正被用户看着时不重载"（纯函数与执行器各一条）
-     4) isTabOnScreen 里认不出焦点窗口时 return true（乐观）
-        → 红在"焦点在别的应用里时照刷"
      5) 去掉 `settings.skipOnActivity ? await isTabOnScreen(tab) : false` 的条件
         → 红在"关掉'有活动时跳过'后不再去问窗口焦点"
+   第 4、6 处于 2026-09-19 本机实跑（本机 node 装回来后门禁恢复；跑法见 harness 头部：
+   整份复制到仓库外，在副本上改源码，再用 TAR_BG 指过去跑本文件）：
+     6) 把 focusedWindowId 的三态压回两态：声明成 `= null`，并让 `focusedWindowId === null`
+        时又去回退问一次 getLastFocused（2.1.0 及以前的写法）
+        → 实跑只红在"浏览器退到后台但窗口还在"一条，其余 21 条全绿。
+           这一态要新桩件才造得出来（见 harness 的 focusWindow(null) 与 closeAllWindows 之分），
+           旧桩件下这条用例根本不存在，所以"有对照"和"对照得动"是两件事，
+           桩件建模反了的时候两者都白搭。
+     4) isTabOnScreen 里认不出焦点窗口时 return true（两处认不出都要改：已知无焦点、补查也问不到）
+        → 实跑红在"浏览器退到后台但窗口还在"与"冷启动且一个窗口都没有"两条。
+           只改前一处时第二条仍是绿的——两条合起来才盖住"认不出来一律放行"的两个入口。
    第 5 处第一次跑对照时是绿的：用例自己先 focusWindow(1) 把窗口 id 灌进了模块缓存，
    isTabOnScreen 走缓存就不再去问 getLastFocused，被数的调用一次也没发生。去掉那次
    focusWindow 之后才红。断言看着有、实际空跑，只有对照能抓出来。 */

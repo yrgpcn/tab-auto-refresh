@@ -76,7 +76,7 @@ Webhook 通知默认关闭。开启后，每当所选事件发生，插件会向
 
 ## 开发与测试
 
-- 仓库校验与单元测试：`node scripts/validate.mjs`、`node --test "tests/**/*.test.mjs"`，CI 自动执行
+- 仓库校验与单元测试：`node scripts/validate.mjs`、`node --test "tests/**/*.test.mjs"`，CI 自动执行。这两条不需要 `npm install`，脚本只用 Node 内置模块
 - 弹窗截图：`scripts/screenshot-popup.mjs`，mock chrome API 后用本机 Chrome 渲染
 - 发布：改 `tab-auto-refresh/manifest.json` 版本号并更新 `CHANGELOG.md`，打 tag `tab-auto-refresh/vX.Y.Z` 并推送，Actions 自动打包并创建 GitHub Release，只保留最新 Release 与 tag
 

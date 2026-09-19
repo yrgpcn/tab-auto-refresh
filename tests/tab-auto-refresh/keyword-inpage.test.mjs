@@ -11,13 +11,23 @@
      指向 HEAD 源码（还没有 matchInPage）→ 取源码那步直接抛错，整个文件判失败，不会假绿
      注入体改成调模块作用域的 keywordHit → 红「自包含」（ReferenceError），并被级联带红 4 条
      innerText 换成 textContent            → 红「innerText 约定」+ 语料等价性
-     把 slice(0, 300000) 截断加回来        → 红「深处的关键词检得到」+ 语料等价性 */
+     把 slice(0, 300000) 截断加回来        → 红「深处的关键词检得到」+ 语料等价性
+   2026-09-19 把「自包含」从四个名字的黑名单换成共享模块导出名的动态清单（logic.js 57 个 +
+   config.js 4 个），对同一份变异副本两边各判一次：
+     注入体改成调 hostOf（logic.js 的导出，旧黑名单里没有这个名字）
+       → 旧的「自包含」这一条判绿——它看不见 hostOf，红只落在靠执行发现的那几条用例上，
+         也就是说光读代码看不出"引用了模块作用域"，得等它在页面里炸掉；
+         新清单在同一条上直接点名 hostOf，并同样级联带红那 4 条。
+     踩过的坑只有四个，将来抽出去的共享函数不止四个，这就是换掉它的理由。 */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 
 import { keywordHit, presentOf, newlyOf } from "../../tab-auto-refresh/shared/logic.js";
+/* 整个模块的导出名集合：注入体里出现任何一个都是"引用了模块作用域"，页面里 undefined */
+import * as LOGIC from "../../tab-auto-refresh/shared/logic.js";
+import * as CONFIG from "../../tab-auto-refresh/shared/config.js";
 
 /* 红→绿对照用：TAR_BG_SRC 指到另一份 background.js 的路径（本文件只读它的文本，不 import）。
    CI 上不设这个变量 */
@@ -93,12 +103,17 @@ test("注入体与 presentOf 在同一批语料上逐条同结果", () => {
   assert.ok(compared >= 40, `只比了 ${compared} 组，覆盖面不足`);
 });
 
-test("注入体必须自包含：不得引用模块作用域的标识符", () => {
+test("注入体必须自包含：不得调用任何模块作用域的函数", () => {
   /* executeScript 是把函数体 toString() 后送到页面执行的，模块作用域里的东西在页面里
-     全是 undefined。引了就等于线上抛 ReferenceError、被外层 catch 吞掉、检测静默失效 */
-  for (const banned of ["keywordHit(", "presentOf(", "newlyOf(", "getTaskKeywords("]) {
-    assert.ok(!PAGE_SRC.includes(banned), `注入体引用了模块作用域的 ${banned}，页面里会是 undefined`);
-  }
+     全是 undefined。引了就等于线上抛 ReferenceError、被外层 catch 吞掉、检测静默失效。
+     判定集合取自两个共享模块的真实导出名，不是写死的四个名字——黑名单只防已经踩过的那几个，
+     以后每抽一个新共享函数都要记得回来补一行，忘了就是静默失效 */
+  const shared = new Set([...Object.keys(LOGIC), ...Object.keys(CONFIG)]);
+  const called = new Set(
+    [...PAGE_SRC.matchAll(/(?:^|[^\w$.])([A-Za-z_$][\w$]*)\s*\(/g)].map((m) => m[1])
+  );
+  const leaked = [...called].filter((n) => shared.has(n));
+  assert.deepEqual(leaked, [], "注入体调用了模块作用域的函数，页面里会是 undefined");
   /* 外部依赖只允许 document 一个 */
   assert.match(PAGE_SRC, /\bdocument\b/);
 });

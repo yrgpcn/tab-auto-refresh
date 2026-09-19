@@ -1223,17 +1223,28 @@ async function notifySessionLost(host) {
    焦点窗口 id 跟着 windows.onFocusChanged 记；SW 刚起来还没有事件时补查一次 getLastFocused。
    认不出来一律返回 false：宁可多刷一次，也绝不能反过来变成"永远不刷新"。
    不需要新权限，tabs 已经给到 tab.windowId */
-let focusedWindowId = null;
+
+/* 三态，不能压成两态：
+   undefined = 这个 SW 实例还没收到过任何焦点事件，焦点在哪真不知道；
+   null      = 最后一个事件是 WINDOW_ID_NONE，浏览器确实不在前台；
+   数字      = 那个窗口正有焦点。
+   把后两者合并成一个 null 会出事：Chrome 在焦点去了别的应用之后，getLastFocused() 仍然
+   返回最后聚焦的那个窗口（只有"一个窗口都没有"才 reject），于是"已知不在前台"会被这次补查
+   重新填成 tab.windowId，用户走开期间的每一次触发都判成"人正看着这页"，任务从此不再刷新——
+   恰好是上面那句"绝不能变成永不刷新"的反面。 */
+let focusedWindowId;
 chrome.windows.onFocusChanged.addListener((id) => {
   focusedWindowId = typeof id === "number" && id !== chrome.windows.WINDOW_ID_NONE ? id : null;
 });
 
 async function isTabOnScreen(tab) {
   if (!tab || !tab.active || typeof tab.windowId !== "number") return false;
-  if (focusedWindowId === null) {
+  if (focusedWindowId === null) return false; /* 已知浏览器不在前台：照刷 */
+  if (focusedWindowId === undefined) {
+    /* 冷启动且还没有焦点事件，补查这一次。reject（没有任何窗口）与"不在前台"同样放行 */
     const w = await chrome.windows.getLastFocused().catch(() => null);
     focusedWindowId = w && typeof w.id === "number" ? w.id : null;
-    if (focusedWindowId === null) return false; /* 没有焦点窗口（用户在别的应用里） */
+    if (focusedWindowId === null) return false;
   }
   return focusedWindowId === tab.windowId;
 }

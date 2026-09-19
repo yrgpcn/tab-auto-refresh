@@ -224,6 +224,27 @@ test("重开出来的任务保留关键词配置并挂上定时器", async () =>
   assert.ok(createdAlarms(env).includes("refresh-42"));
 });
 
+/* 旧格式任务（v1.4.3 及更早：只有间隔和创建时间、没有网址）在两条恢复入口上走向相反，
+   差别全在 prune(adoptLegacyUrls) 那一个实参上。纯函数侧早测过，执行器侧这里是第一次，
+   也是 env.fire.installed 第一次被用起来（它此前是个没人调用的死入口） */
+
+test("安装/更新那回给旧格式任务补记当前网址", async () => {
+  const env = await bootPrune({ tasks: { 7: task("") }, tabs: [{ id: 7, url: "https://a.test/board" }] });
+  const seen = stubCreates(env, []);
+  await env.fire.installed();
+  assert.equal(env.store.local.tasks[7].url, "https://a.test/board", "onInstalled 没补记当前网址");
+  assert.deepEqual(seen, [], "补记完之后任务页还在，不该重开");
+});
+
+test("浏览器重启那回不补记，只能淘汰", async () => {
+  /* 这时 tabId 已重新分配，7 这个号撞上谁纯看运气，凭它猜目标页面会把任务挂到无关页上 */
+  const env = await bootPrune({ tasks: { 7: task("") }, tabs: [{ id: 7, url: "https://a.test/board" }] });
+  const seen = stubCreates(env, []);
+  await runPrune(env);
+  assert.equal(env.store.local.tasks[7], undefined, "重启后还在给旧格式任务补记网址");
+  assert.deepEqual(seen, [], "没有网址也无从重开");
+});
+
 test("认领不到的页面在等待窗口里到位后不再重开", async () => {
   const env = await bootPrune({
     tasks: { 7: task("https://a.test/board") },
@@ -252,9 +273,12 @@ test("什么都没要改时不写盘", async () => {
     tasks: { 7: task("https://a.test/board") },
     tabs: [{ id: 7, url: "https://a.test/board" }]
   });
-  const before = JSON.stringify(env.store.local.tasks);
   await runPrune(env);
-  assert.equal(JSON.stringify(env.store.local.tasks), before);
+  /* 只比前后 JSON 是比不出"没写"的：set 是 Object.assign 合并，写一份一模一样的值
+     照样通过。所以这里正面数写入，而不是看落盘后的形状 */
+  const taskWrites = env.calls.localSet.filter((keys) => keys.includes("tasks"));
+  assert.deepEqual(taskWrites, [], "计划什么都没改，却还是写了 tasks 一笔");
+  assert.deepEqual(keys(env.store.local.tasks), [7], "不写盘的前提是任务确实还在原处");
 });
 
 test("三个认领不到的任务共享一个等待窗口，不是各等一遍", async () => {
@@ -303,7 +327,14 @@ test("三个认领不到的任务共享一个等待窗口，不是各等一遍",
            （后者数的是本轮开过几回临时监听，去掉共享窗口就回不到 1）
      4) shared/logic.js 里 `if (claims.has(t.id) || pending.has(t.id))` 去掉 `|| pending.has(t.id)`
         → 红在"认领不得踩到仍是其他未处理任务的键"
+   2026-09-19 为那两条旧格式任务的执行器用例又补了两处，同样每处只红一条、其余全绿：
+     5) onInstalled 的注册实参 `prune(true)` 改成 `prune(false)`
+        → 红在"安装/更新那回给旧格式任务补记当前网址"
+     6) onStartup 的注册实参 `prune(false)` 改成 `prune(true)`
+        → 红在"浏览器重启那回不补记，只能淘汰"
+   （5、6 改的是 background.js，用 TAR_BG 指副本，不需要把整棵 tests/ 也拷出去）
    另外三条被本文件依赖的机制也各自红过：桩件 tabs.onUpdated 少了 removeListener 时，
    三条走等待窗口的用例整条红（这正是 removeListener 补进共用桩件的原因）。
-   注意 shared/logic.js 是 CRLF 行尾、background.js 是 LF，跨行的替换要先归一化行尾，
+   行尾这件事别凭印象：本机 core.autocrlf=true，工作区里所有 .js（含 background.js，
+   2026-09-19 数过 CRLF 对确认）都是 CRLF，索引里存的才是 LF。跨行 needle 一律先归一化再匹配，
    否则会出现"没改到却以为改到了"的假对照。 */

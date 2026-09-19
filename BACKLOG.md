@@ -10,16 +10,20 @@
 维护方式：修完不删条目，整段移进 `CHANGELOG.md` 对应版本，本文件只留还在账上的。
 新增条目同样要带源码位置，不接受"某处可能有问题"这种形状。
 
+2026-09-19 一轮之后：A1（焦点三态）与 E1（本机 node 门禁）已修完并移进 `CHANGELOG.md` 的 `[未发布]`，
+编号不复用。A6 十二条里关掉十一条，只剩第 8 条的**执行器层用例**（`cookies.getAll` 那处桩件本身已经改对，
+缺的是 `backupCookies` 采集与冻结、`restoreCookies` 的 `hostOnly` 分支这组用例）。它随 A2 一起做：
+改 `domainChain` / `siteRoot` 正需要那批用例来验收。其余条目原样在账。
+
 ## 优先级一览
 
 | 编号 | 优先级 | 一句话 | 状态 |
 | --- | --- | --- | --- |
-| A1 | P0 | `isTabOnScreen` 焦点回退：人走开之后任务永不刷新 | 待做 |
 | A2 | P0 | 公共后缀使 cookie 备份越界采集到无关站点 | 待做 |
 | A3 | P1 | 关键词与验证墙检测只覆盖顶层框架 | 待做 |
 | A4 | P1 | 外发载荷带完整 query 网址；凭据存 sync 且明文 | 待做 |
 | A5 | P1 | 弹窗不回填任务的关键词/继续盯守/间隔 | 待做 |
-| A6 | P1 | 共享桩件 10 处偏离真实 Chrome，多条门禁实际空跑 | 待做 |
+| A6 | P1 | 桩件只剩"cookie 执行器层没有用例"一条 | 剩一条，随 A2 交付 |
 | A7 | P2 | `settings` 两条无锁读-改-写互相覆盖 | 待做 |
 | A8 | P2 | webhook 失败无痕，且没有"发送测试" | 待做 |
 | A9 | P2 | `onMessage` 不校验来源、设置键不做白名单 | 待做 |
@@ -27,31 +31,12 @@
 | A11 | P3 | 弹窗文本框只在失焦保存；测试按钮无 finally | 待做 |
 | A12 | P3 | SKIP 原因无痕；三处 `storage.local.get(null)` 全量扫描 | 待做 |
 | V1 | — | 2.1.0 真机手工验证（含下面三条只能真机验的检查） | 待做 |
-| E1 | — | 本机 node 门禁恢复 | 进行中 |
 | E2 | — | `_code-review/` 门禁是否迁入入库路径 | 待定 |
 
-建议动手顺序：A6 → A1 → A2 → A5 → A7 → A9 → 其余。
-A6 排最前是因为 A1/A3 的验收用例要先有"能真的变红"的桩件，否则改完仍然只是看着绿。
+建议动手顺序：A2 → A5 → A7 → A9 → 其余。A6 排在最前面那条理由（要先有"能真的变红"的桩件）
+已经兑现，它剩的那一条并入 A2 的验收；下一条就是 A2。
 
 ## P0：会让功能朝反方向静默失效
-
-### A1 `isTabOnScreen` 的焦点回退把"人在别的程序里"当成"人在看着这页"
-
-- 位置：`tab-auto-refresh/background.js:1226-1239`；桩件 `tests/helpers/background-harness.mjs:165-168`
-- 链条：焦点切到别的应用 → Chrome 发 `onFocusChanged(WINDOW_ID_NONE)` → `focusedWindowId = null`
-  → 下一次 alarm 走 `focusedWindowId === null` 分支去问 `getLastFocused()` → **真实 Chrome 在浏览器
-  没有前台窗口时仍然返回最后聚焦的那个窗口**（只有完全没有窗口才 reject）→ 回填成 `tab.windowId`
-  → 判定 `user-active` → 这一拍跳过。每次触发都重复，于是"用户走开之后永远不刷新"。
-- 为什么这是 P0：`shared/logic.js:524-525` 写明这条通道"认不出来一律 false，宁可多刷一次，
-  绝不能变成永不刷新"。实际代码在最常见的情形下（任务页是所在窗口的活动页，人去了 IDE）反着走。
-- 为什么没被发现：桩件的 `getLastFocused` 在 `focusedWindow === null` 时抛错，等于把"焦点在别的
-  应用里"建模成"完全没有窗口"。`tests/tab-auto-refresh/alarm-gate.test.mjs:151-155` 那条
-  "焦点在别的应用里时照刷"因此是为错误的原因变绿的——它的红→绿对照（同文件 226-228 记录的第 4 处）
-  改的是乐观分支返回值，碰不到这条真实路径。
-- 改法：把"从没收到过焦点事件"（冷启动，未知）与"最后一个事件说 WINDOW_ID_NONE"（已知无焦点）
-  分开。后者直接 `return false`，不再回退去问 `getLastFocused()`；只有前者才补查一次。
-- 验收：桩件补一种状态——`focusWindow(null)` 之后 `getLastFocused()` 仍解析出上一个窗口；
-  新增用例覆盖"浏览器退到后台但窗口还在"；对照改回现在的写法必须只红这一条。真机检查见 V1 (c)。
 
 ### A2 `siteRoot` 手写字表 + `domainChain` 下探过头，备份捞进无关站点的 cookie
 
@@ -122,37 +107,30 @@ A6 排最前是因为 A1/A3 的验收用例要先有"能真的变红"的桩件�
   只在首次打开或 `currentTab` 变化时回填，别覆盖用户正在输入的内容。
 - 验收：只能真机 + 弹窗 DOM 验，单测覆盖不到 popup。见 V1 (d)。
 
-### A6 共享桩件偏离真实 Chrome，多条门禁实际空跑
+### A6 共享桩件偏离真实 Chrome —— 只剩一条
 
-思路（每新增一个 `addListener` 就会让手写桩件在 import 那步抛错）是对的，但有十处与真实行为不一致。
-每修一处配一条红→绿对照，仓库里 `alarm-gate.test.mjs:226-228` 记的正是"断言看着有、实际空跑，
-只有对照能抓出来"这个教训：
+十一条已经修完，逐条的写法与红→绿对照记在 `CHANGELOG.md` 的 `[未发布] / Changed`，
+以及各测试文件末尾的对照清单里（`detect-chain` / `tab-removed` / `idle-resync` /
+`entry-points` / `heartbeat` / `outbound` 六个文件共 44 处实跑）。剩这一条：
 
-1. `storage.set` 无写日志（`harness:96-101`）。`prune-plan.test.mjs:250-258` 那条"什么都没要改时
-   不写盘"比的是前后 JSON 相等，而 `set` 是 `Object.assign` 合并——写一份完全相同的内容也过。
-   补 `calls.localSet` / `calls.syncSet`，断言改成写入次数为 0。
-2. `alarms.getAll` 不带 `scheduledTime`（`harness:120-121`）。`background.js:302-324` 的 idle 重挂
-   正是按 `scheduledTime` 判"已过期"，所以那整段在测试里永远走"没过期"分支，零覆盖。
-3. `executeScript` 恒返回 `[{result:false}]`（`harness:186-189`），而 `opts.__fixture` 全仓库无人用
-   （grep 只命中定义行）。后果：关键词命中分支（`background.js:688-703` → `onKeywordHit` 停任务/外发/
-   回写 `notifiedKeys`）与验证墙暂停分支（`probeCaptcha` → `pauseTaskAuto`）端到端从未被执行过。
-4. `env.send()` 只等 `sendResponse`，不看监听器返回值（`harness:249-253`）。`background.js:1736` 的
-   `return true` 是异步应答契约，没有任何东西钉住；哪天被删，弹窗拿到 undefined，测试仍全绿。
-5. i18n 回显键名（`harness:219-222`）。本身合理，但凡断言"文案里含站点名/关键词"都必须走 `subs`
-   分支（现在的 `key:a,b` 形式恰好能过）。把这条写进文件头注释，别将来放宽。
-6. `tabs.query` 忽略过滤（`harness:148-150`）：`{active:true, currentWindow:true}` 与 `{}` 同一批，
-   依赖这两类过滤的路径都测不到。至少支持 `active` / `windowId`。
-7. `contextMenus.onClicked: eventSink([])`（`harness:182`）没有登记表，测试无处派发，
-   右键菜单起停任务（`background.js:1497-1512`）零覆盖。并进 `listeners`。
-8. `cookies.getAll` 恒 `[]`（`harness:210-213`）：cookie 备份/恢复整套逻辑在 harness 下空跑。
-   纯函数层由 `logic.test.mjs` 覆盖着，执行器层（`backupCookies` 的采集与冻结、`restoreCookies`
-   的 `hostOnly` 分支）没有。
-9. 没有 fetch 桩件：`postWebhook` / `postWechat` / 静默心跳三条外发链路一条都没被执行过。
-10. `getLastFocused` 的建模反了，见 A1——这是本文件里唯一一处"与真实 Chrome 相反"的偏离，优先修。
-11. 死表面：`fire.tabRemoved`、`fire.installed`、`__fixture` 三个入口无人调用。要么补用例要么删掉；
-    留着比删掉更坏，因为它暗示"这条已经测了"。
-12. 顺带同类：`keyword-inpage.test.mjs:99` 的"注入体不得引用模块作用域"用的是四个名字的枚举禁用表，
-    将来任何新引用（`hostOf(`、`clipOneLine(` …）都能漏过去。改成扫标识符而不是列表黑名单。
+8. cookie 的**执行器层**没有用例。`cookies.getAll` 那处桩件已经改对（真按 `domain` 过滤、
+   `env.setCookies` 能放数据），但没人用它测过执行器：
+   - 位置：`background.js:959-1045`（`backupCookies` 的采集、根域判定、疑似掉线时冻结写入）、
+     `background.js:1046-1090`（`restoreCookies` 的 `hostOnly` 三分支：`true` 省略 `domain`、
+     `false` 传 `domain`、字段缺失的 v1 旧备份统一传 `domain`）
+   - 要钉的：纯函数层（`capCookies` / `decideBackupWrite`）`logic.test.mjs` 已经覆盖，
+     这里缺的是"真去 `chrome.cookies` 拿、真按拿到的条数写盘"那一段——
+     `hostOnly` 少一个分支就把 `__Host-` 票据写成全域 cookie 或者干脆写不进去，
+     而这正是备份唯一存在的理由
+   - 与 A2 同批交付：A2 要改的 `domainChain` 决定的就是"采集时按哪几个域查"，
+     没有这批用例，A2 改完仍然只能靠读代码判断对不对
+
+另外两条"看着是门禁、实际不是"的教训留在原地，别再踩：
+- 桩件 `fire.tabRemoved` 的先摘页再派发没有任何断言依赖它（把它改回去，本仓库没有一条用例会红），
+  这件事记在 `tab-removed.test.mjs` 末尾，不当已修
+- 只断言"没发、没写、没通知"的用例永远证明不了一条链路被执行过：摘掉 `globalThis.fetch` 之后，
+  `outbound.test.mjs` 绿的四条正好全是这种否定式用例（`heartbeat.test.mjs` 8/10 红、其余同理）。
+  写新用例时先问一句"这条链路的请求真发出去过吗"，能答上来的断言才算是门禁
 
 ## P2
 
