@@ -11,7 +11,7 @@
 - 插件文件夹内不放独立 README，功能、安装、使用边界、技术栈统一写在根 `README.md`
 - `.github/workflows/ci.yml`：push 与 PR 时用 Node 24 跑仓库校验与单元测试
 - `.github/workflows/release.yml`：tag 驱动发布，先跑校验与单测，再比对 tag 版本与 manifest 版本，任一失败即不发布
-- `scripts/validate.mjs` 仓库级校验（JSON、manifest、语言包、JS 语法、引用完整性、插件目录无未跟踪文件）；`scripts/screenshot-popup.mjs` 一次渲染 README 那两张弹窗截图，需要 playwright，CI 不跑，它那份 chrome mock 与弹窗用面的对齐由 `tests/tab-auto-refresh/screenshot-mock.test.mjs` 守着（见验证清单第 4 条）
+- `scripts/validate.mjs` 仓库级校验（JSON、manifest、语言包、JS 语法、引用完整性、插件目录无未跟踪文件）；`scripts/screenshot-popup.mjs` 一次渲染 README 那两张弹窗截图，需要 playwright，CI 不跑，它那份 chrome mock 与弹窗用面的对齐由 `tests/tab-auto-refresh/screenshot-mock.test.mjs` 守着（见验证清单第 4 条）；同一份脚本加 `--measure` 只量整页高度、一个字节图都不写（A28）
 - 上面那条"引用完整性"的判据全在 `scripts/validate-refs.mjs`（八个纯提取器：`manifestMsgKeys` 深走整份
   manifest 收 `__MSG_key__`、`htmlLocalRefs` 收本地 `src`/`href`、`htmlI18nKeys` 收 `data-i18n*` 三条通道、
   `jsMessageKeys` 只收 `getMessage` 的第一个实参、`i18nAliases` 现推别名包装、`stringLiterals` 收单双引号
@@ -185,7 +185,8 @@
 ### 弹窗
 
 - Chrome 弹窗外框上限 800×600，整页高度必须留在 600px 内。宽度 400px，10 个开关用 `repeat(2, minmax(0,1fr))` 双列网格（不能写成 `1fr`，`1fr` 的隐含下限是 `min-content`，长标签会把列撑成不等宽），所以标签必须短且一律单行
-- `body` 用 `flex` 加 `max-height: 600px` 兜底，唯一的弹性块是任务列表，列表封顶 108px，第 3 行露头当"下面还有"的提示
+- 这条 600px 上限怎么量（A28）：`node scripts/screenshot-popup.mjs --measure` 把弹窗按六个形状各真渲染一遍，打印**最深一条底边**并跟 600 比，任一超出就 exit 1。之所以量底边而不是"有没有滚动条"：`body` 是 `overflow: hidden`，超出部分不折叠也不出滚动条，**直接裁掉**，所以"弹窗不出滚动条"这句话判不了任何事。2026-09-19 实测六个形状 541 / 571 / 561 / 510 / 540 / 380px，最紧的是"填了合法 webhook 地址"那一种，预算 29px。**新增一条会显示的行就要回来加一个形状**（形状清单在脚本里的 `PROBES`，它引用哪个场景、补丁键真不真实由 `screenshot-mock.test.mjs` 钉住）
+- `body` 用 `flex` 加 `max-height: 600px` 兜底，唯一的弹性块是任务列表，列表封顶 108px，第 3 行露头当"下面还有"的提示。任务再多也不会拉长整页——那 108px 是硬封顶，所以 `--measure` 不逐任务数一样量
 - 微信配置走二级视图整页切换（`body.wx-mode`），四行输入框直接铺在主视图里必然顶破上限
 - `[hidden]` 会被作者样式里的 `display` 压过（`.row` 是 `display:flex`），已全局声明 `[hidden] { display: none !important }`
 - 弹窗每秒重新拉 alarm 列表再重绘倒计时，因为 alarm 周期触发不会触发 `storage.onChanged`；同一个循环里读一次跳过痕迹（`syncSkipTraces`，只点名读在场任务的 `rt:skip:<tabId>`）
@@ -206,8 +207,8 @@
 1. `node scripts/validate.mjs`。它会遍历整个仓库根做 JS 语法检查，所以 `_code-review/` 里的脚本语法错也会让它 exit=1；同一条理由适用于变异对照——**整仓副本必须放在仓库之外**，放在仓库里会被这次遍历当成待检文件（它还会报未跟踪文件）。
 2. `node --test "tests/**/*.test.mjs"`（引号必需）
 3. 改了对应功能后跑 `_code-review/` 里的回归脚本，清单与用法见 `_code-review/README.md`。这些脚本不在 CI 里跑，要手动跑；判退出码时别接管道（`| tail` 会把退出码换成 tail 的），需要看尾部输出就用 `${PIPESTATUS[0]}` 或先重定向到文件
-4. UI 改动后用 `scripts/screenshot-popup.mjs` 重新生成 README 那两张图（`docs/tab-auto-refresh/popup.png` 与 `popup-wechat.png`，脚本一次写两张，两张都必须由它产出——手工截的那张没有再生成路径，必然漂移）。它的 chrome mock 是弹窗用面的**手抄副本**：抄漏一面的表现不是报错，是"截图看着挺好、其实那一块根本没渲染"（真实事故：mock 没有 `storage.session`，于是 A12 那句"上次跳过：你在操作"在图上永远出不来）。这条对齐由 `tests/tab-auto-refresh/screenshot-mock.test.mjs` 钉住，弹窗新增一块 chrome 读取就要回来加。`viewport.width` 必须与 `popup.css` 的 `body width` 一致，否则截图被裁；跑完那一行 404 console 报错是 Chrome 自己要 `/favicon.ico`，与渲染无关
-5. 手工验证：在 `chrome://extensions` 开发者模式加载插件文件夹，验证设置与停止、倒计时归零后继续、右键菜单、立即刷新、角标、暂停恢复、快捷键记住上次间隔、自动清理通知（停任务、重开任务、重新登录后各自的通知要从通知中心消失，点通知要跳到对应标签页并带到前台）；30 秒任务下能在 DevTools 里看到注入的心跳事件，同站另开无关标签页无心跳；关键词命中弹通知并停任务；掉线后角标变红；验证墙与错误页自动暂停（含"验证码"字样但标题正常的页面不该被暂停；A3 之后再加两个面——整页挑战嵌在 iframe 里、顶层只剩空壳标题的要能自动暂停，页面上只有 reCAPTCHA 那种挂件小框的正常页面不该被暂停，见 `BACKLOG.md` V1 (f)）；webhook 填非法地址应立刻出现红字提示；任何任务数下弹窗本身都不该出现滚动条。启动恢复这条只能真机验：开几个任务后重启浏览器（或在 `chrome://extensions` 重新加载扩展），任务要全部挂回原页面、不额外多开标签页、弹窗不卡住，被恢复的任务在 DevTools 的 `chrome://extensions → 背景 → Alarms` 里要同时看到 `refresh-<id>` 与 `hb-<id>`（缺 `hb-` 就是心跳又被排到写盘前面了）。开着"尊重你的操作"时，把某个任务页摆在当前窗口前台等它到点，不该被重载。A18 那条设置回流同步只能双机验：B 机改设置时 A 机开着的弹窗勾选要跟着变；在 A 机的 webhook 地址框里打一半别停手，B 机再改设置不该吃掉那半行字
+4. UI 改动后用 `scripts/screenshot-popup.mjs` 重新生成 README 那两张图（`docs/tab-auto-refresh/popup.png` 与 `popup-wechat.png`，脚本一次写两张，两张都必须由它产出——手工截的那张没有再生成路径，必然漂移）。它的 chrome mock 是弹窗用面的**手抄副本**：抄漏一面的表现不是报错，是"截图看着挺好、其实那一块根本没渲染"（真实事故：mock 没有 `storage.session`，于是 A12 那句"上次跳过：你在操作"在图上永远出不来）。这条对齐由 `tests/tab-auto-refresh/screenshot-mock.test.mjs` 钉住，弹窗新增一块 chrome 读取就要回来加。`viewport.width` 必须与 `popup.css` 的 `body width` 一致，否则截图被裁；跑完那一行 404 console 报错是 Chrome 自己要 `/favicon.ico`，与渲染无关。改完 UI 顺手跑同一份脚本的 `--measure`（只量高度、一张图都不写）：六个形状各渲染一遍，最深一条底边超出 600px 就 exit 1，**新增一条会显示的行就要往 `PROBES` 里加对应形状**（形状清单旁边那条门禁钉的是"形状引用的场景真实、补丁键是真实设置键、清单非空"，不是"接线还在"）
+5. 手工验证：在 `chrome://extensions` 开发者模式加载插件文件夹，验证设置与停止、倒计时归零后继续、右键菜单、立即刷新、角标、暂停恢复、快捷键记住上次间隔、自动清理通知（停任务、重开任务、重新登录后各自的通知要从通知中心消失，点通知要跳到对应标签页并带到前台）；30 秒任务下能在 DevTools 里看到注入的心跳事件，同站另开无关标签页无心跳；关键词命中弹通知并停任务；掉线后角标变红；验证墙与错误页自动暂停（含"验证码"字样但标题正常的页面不该被暂停；A3 之后再加两个面——整页挑战嵌在 iframe 里、顶层只剩空壳标题的要能自动暂停，页面上只有 reCAPTCHA 那种挂件小框的正常页面不该被暂停，见 `BACKLOG.md` V1 (f)）；webhook 填非法地址应立刻出现红字提示；弹窗整页高度不用在真机上量了（A28 起由第 4 条那个 `--measure` 就地量六个形状），真机只需扫一眼系统字体与浏览器 zoom 之下最底下那几张卡片有没有被裁掉。启动恢复这条只能真机验：开几个任务后重启浏览器（或在 `chrome://extensions` 重新加载扩展），任务要全部挂回原页面、不额外多开标签页、弹窗不卡住，被恢复的任务在 DevTools 的 `chrome://extensions → 背景 → Alarms` 里要同时看到 `refresh-<id>` 与 `hb-<id>`（缺 `hb-` 就是心跳又被排到写盘前面了）。开着"尊重你的操作"时，把某个任务页摆在当前窗口前台等它到点，不该被重载。A18 那条设置回流同步只能双机验：B 机改设置时 A 机开着的弹窗勾选要跟着变；在 A 机的 webhook 地址框里打一半别停手，B 机再改设置不该吃掉那半行字
 
 ## 环境备注
 
@@ -235,5 +236,5 @@
 1. 别再试 `winget install OpenJS.NodeJS.LTS --disable-interactivity`：实测它一个字节都不输出、几十分钟不结束、也不装出任何东西——它在等一个非交互环境给不出的提权确认。换官方压缩包：`https://nodejs.org/dist/` 下取 `node-vX.Y.Z-win-x64.zip`（本机默认代理能直连 nodejs.org），解压到 `%LOCALAPPDATA%\node-tools\`，全程不需要管理员权限
 2. `node --version`（按绝对路径）要是 24.x，与 CI 的 `setup-node@v4 / node-version: 24` 对齐。22.x 也跑得起来，但那不等于 CI 的结果
 3. 验证清单第 1、2 条：`node scripts/validate.mjs` 与 `node --test "tests/**/*.test.mjs"`（引号必需，去掉就被 shell 吃掉），本机把 `node` 换成上面那个绝对路径。这两步**不需要 `npm install`**——`scripts/` 与 `tests/` 里除了 `node:` 内置模块没有任何第三方 import，根 `package.json` 也没有 dependencies。压缩包里确实带 npm，但 `node.exe npm` 直接调不行，要用 npm 得先把解压目录加进 PATH
-4. 只有截图（清单第 4 条）才需要 playwright，它是脚本运行时用 `createRequire` 现找的、不在仓库依赖里：`npm install -g playwright`，再在 PowerShell 里 `$env:NODE_PATH=(npm root -g)`，然后 `node scripts/screenshot-popup.mjs`。脚本里 Chrome 路径写死 `C:\Program Files\Google\Chrome\Application\chrome.exe`，本机该文件在；换机器要连着改
+4. 只有截图与量高度（清单第 4 条）才需要 playwright，它是脚本运行时用 `createRequire` 现找的、不在仓库依赖里：`npm install -g playwright`，再在 PowerShell 里 `$env:NODE_PATH=(npm root -g)`，然后 `node scripts/screenshot-popup.mjs`（加 `--measure` 就只量高度）。bash 那一头同一条命令写成 `NODE_PATH="<解压目录>\\node_modules" node scripts/screenshot-popup.mjs --measure`——本机 2026-09-19 实测过一遍，六个形状最深 571px。脚本里 Chrome 路径写死 `C:\Program Files\Google\Chrome\Application\chrome.exe`，本机该文件在；换机器要连着改
 5. 清单第 3 条不在这次恢复范围内：`_code-review/` 不入库，这台机器上从未存在，只能从原来那台拷过来，或按 CHANGELOG 里的描述重写门禁

@@ -248,14 +248,48 @@ test("README 引用的每张截图都由脚本产出，不存在手工截的孤�
 });
 
 test("每个场景给全 DEFAULT_SETTINGS 的每一个键，少一个就有一个开关在图上看着是关的", () => {
-  const blocks = [...SHOT_SRC.matchAll(/settings:\s*\{/g)];
+  const region = scenariosRegion(SHOT_SRC);
+  const blocks = [...region.matchAll(/settings:\s*\{/g)];
   assert.ok(blocks.length >= 2, `只找到 ${blocks.length} 个场景的 settings 块`);
   const want = Object.keys(DEFAULT_SETTINGS);
   for (const [i, m] of blocks.entries()) {
-    const keys = keysOf(sliceObject(SHOT_SRC.slice(m.index), "{"));
+    const keys = keysOf(sliceObject(region.slice(m.index), "{"));
     const missing = want.filter((k) => !keys.includes(k));
     assert.deepEqual(missing, [], `第 ${i + 1} 个场景的 settings 缺键`);
   }
+});
+
+/* 量高度的形状（PROBES）：给的是**补丁**，合并进完整场景之后才要求齐备，所以它不该进上面
+   那条判据——那条管的是"截图场景必须逐键给全"。上面那条因此只扫 SCENARIOS 那一段：
+   合并式 `settings: Object.assign(...)` 今天碰巧扫不中（后面不是 `{`），但那是巧合，
+   改个换行就会红成"第 3 个场景缺键"，指错方向 */
+function scenariosRegion(src) {
+  const start = src.indexOf("const SCENARIOS = [");
+  if (start < 0) throw new Error("源码里找不到 const SCENARIOS = [，上面那条判据的扫描范围要一起改");
+  const end = src.indexOf("\n];", start);
+  if (end < 0) throw new Error("SCENARIOS 没找到收尾");
+  return src.slice(start, end);
+}
+
+test("量高度的形状引用真实场景、补丁键是真实设置键（打错一个键就是白量一场）", () => {
+  const produced = new Set([...SHOT_SRC.matchAll(/file:\s*"([\w.-]+\.png)"/g)].map((m) => m[1]));
+  const shots = [...SHOT_SRC.matchAll(/shot:\s*"([\w.-]+\.png)"/g)].map((m) => m[1]);
+  assert.ok(shots.length >= 6, `只扫到 ${shots.length} 个量高度的形状，PROBES 的形状变了`);
+  assert.deepEqual(
+    shots.filter((f) => !produced.has(f)),
+    [],
+    "形状引用的截图场景不存在：scenarioFor 就地抛错，一个形状都量不到"
+  );
+  const patches = [...SHOT_SRC.matchAll(/patch:\s*\{/g)];
+  assert.ok(patches.length >= 3, `只扫到 ${patches.length} 个补丁，判据在对着空集合绿`);
+  const want = new Set(Object.keys(DEFAULT_SETTINGS));
+  const unknown = [];
+  for (const m of patches) {
+    for (const k of keysOf(sliceObject(SHOT_SRC.slice(m.index), "{"))) {
+      if (!want.has(k)) unknown.push(k);
+    }
+  }
+  assert.deepEqual(unknown, [], "补丁键不在 DEFAULT_SETTINGS 里：合并进去没人读，那一行根本不会出现");
 });
 
 /* ---------- 红→绿对照（2026-09-19 实跑，D:/Github/_tar_ctl_r5/run.mjs） ----------
@@ -305,3 +339,50 @@ test("每个场景给全 DEFAULT_SETTINGS 的每一个键，少一个就有一�
    "每个场景给全 DEFAULT_SETTINGS 的键"兜住，任务与会话态的取值形状仍然只能靠人看图。
    另一半原因是弹窗没有 DOM 库可测：`popup-repopulate.test.mjs` 那类门禁切的是源码形状，
    这张图是它们唯一能"真的渲染一遍"的通道，代价是它只能查形状、查不了语义。 */
+
+/* ---------- A28 加的那一条（第十轮）：对照与边界，2026-09-19 实跑 ----------
+
+   脚本 `D:/Github/_tar_ctl_r10/run.mjs`：整仓复制到仓库外、不带 .git 与 _code-review，一轮只改坏
+   副本里的 `scripts/screenshot-popup.mjs` 一处。跑两样：K* 跑副本的本文件（副本自己就是完整仓库，
+   三个输入默认全指到副本里，不用设 TAR_*）；R1 跑副本的 `--measure`，看 exit 码与逐形状报账。
+   基线：本文件 5 条全绿，`--measure` 六个形状全在 600px 内（最深 571px）。
+
+     K1 补丁键打一个字母（webhookUrl → webhookUrlX）→ 红 1，正是新那条
+     K2 形状引用的截图场景不存在（popup-wechatX.png）→ 红 1，同一条
+     K3 量高度的清单被清空（`const PROBES = []`）→ 红 1（正向见证 ≥6 / ≥3）。
+        这一处是这一类唯一的拦网：清单空了脚本照样跑、照样绿，只是什么都不量
+     K3n 只把 `const PROBES` 改名、不改使用处 → **全绿，这一处没抓住**。判据数的是 `shot:` 字面量，
+        不看声明与使用还在不在一处。留着这条记录是因为它看着像"对照通过"而实际是漏：可接受的理由
+        是脚本自己会 `PROBES is not defined` 抛错，那是响亮地崩，不是静默量不到
+     K4 两个截图场景各删掉一个 `keepAwake` 键 → 红 1（老那条"给全键"还活着）。
+        这一根是收窄的代价核对：把扫描范围从整份文件收进 SCENARIOS 那一段，容易顺手把判据弄没了
+     K5 反向：把 scenarioFor 的合并式改写成多行 `settings: {` → 全绿。改前的整文件扫法会把这处
+        当成"第三个场景缺键"，红指到一个不存在的场景上；收窄之后不红，这就是收窄要买的东西
+     K6 反向：补丁换成另一个真实设置键（skipOnActivity）→ 全绿。判据不是"改什么都红"
+     R1 上限常量 600 → 500，真渲染 → `--measure` exit 1，六个形状五个 ✖、只有二级视图那条 380px
+        仍 ✔。这一处是"✔ 全在 600 内"这句话不是空话的唯一证明：数字这一头没有别的门禁，
+        CI 上没有 Chrome，`node --test` 里跑不了像素
+
+   ---------- 一处写错的口径，以及它是怎么被推翻的（2026-09-19 晚） ----------
+
+   草稿的 CHANGELOG 与 BACKLOG 都写着"视口故意给到 400×640：视口只有 600 的话超出部分被视口
+   自己切掉，量不到真实深边"。这句话是凭直觉写的，没验。实测把它推翻了：`getBoundingClientRect()`
+   回的是布局盒，不被视口裁剪——同一份内容（body `max-height:600` + `overflow:hidden`，孩子累计
+   640px）在视口 600 与 640 下都报最深底边 640。所以 VIEWPORT 那条高度沿用截图本来的 640 就行，
+   与量得到量不到没关系；真正与 CSS 绑死的只有宽度（`popup.css` 的 body width，AGENTS.md 验证清单
+   第 4 条就是这一句）。两份文档已按实测改掉，脚本量高度那处的注释也补了一句，免得下次有人以为把
+   视口压回 600 会破坏测量。
+
+   为什么没走变异对照：那条要看的是"运行时量到多少"，跟本文件的判据无关，改坏副本里 VIEWPORT 高度
+   这一类编辑这次被权限策略挡了。改用一个自足的最小页面直接问 DOM（两个 div、两种视口高度、打印
+   rect.bottom），一次就分出真假——这属于"验一个事实"，不需要整仓副本。
+
+   已知边界（别当成已覆盖）：
+   - 本文件钉的是**形状**，不是高度。`POPUP_MAX_H` 改成任何数这里都全绿，认得它的只有 `--measure`
+     自己（R1 就是量这一句），所以它不进 CI 就等于没有强制——这是"只能本地跑"的固有代价，
+     与截图脚本同一档
+   - 形状清单与测量在同一条命令里：`--measure` 没跑过不等于形状没变，改了 UI 要回来重跑一次
+   - 探针只覆盖 PROBES 列的那几种"多出一行"的形状。任务数不逐一样量，`#taskList` 那 108px
+     是硬封顶加内部滚动，多开任务不会拉长整页——那是 CSS 保证的，不是这条判据保证的
+   - 量的是 mock 数据下的形状：真系统的字体回退、浏览器 zoom、更长的中文站点名仍只能真机看
+     （`BACKLOG.md` V1 (h) 因此收窄成这三样） */

@@ -4,6 +4,7 @@
    CI 不运行。playwright 用 createRequire 现找，不在仓库依赖里：
    $env:NODE_PATH=(npm root -g)
    node scripts/screenshot-popup.mjs
+   node scripts/screenshot-popup.mjs --measure
 
    这份 mock 是弹窗 chrome 用面的手抄副本，抄漏一面的表现不是报错而是"截图看着挺好、
    其实那一块根本没渲染"，所以弹窗每多读一块存储，下面 window.chrome 那一套就要跟着加。
@@ -12,7 +13,11 @@
    因此整套 mock 写在回调体内、只把纯数据传进去。
 
    跑完会有一行 404 的 console 报错：那是 Chrome 自己向临时服务器要 /favicon.ico，
-   插件目录里没有这个文件，与弹窗渲染无关。 */
+   插件目录里没有这个文件，与弹窗渲染无关。
+
+   --measure 只量高度、不写图：把弹窗按几个"多出一行"的形状各渲染一遍，量整页最深内容的
+   底边落在哪，跟 Chrome 弹窗外框的 600px 上限比。撑破它的症状是"底部那几张卡片看不见"，
+   CSS 里的 max-height 只挡住 body 自己，量不出真实深边，所以这一面此前只能靠人眼看图。 */
 
 import { mkdirSync, readFileSync } from "node:fs";
 import http from "node:http";
@@ -127,6 +132,49 @@ const SCENARIOS = [
   },
 ];
 
+/* Chrome 给扩展弹窗的外框上限：800 宽 × 600 高。超出部分不是"页面变长"，是底部直接看不见
+   （body 自己那条 max-height 只是把 body 的盒子夹在 600，孩子照样能从盒子底下漏出去） */
+const POPUP_MAX_H = 600;
+
+/* --measure 用的形状：在某个截图场景之上叠一小撮设置补丁，再按 id 点开二级视图。
+   补丁走的是**增量**，合并进完整场景之后才要求齐备，所以它不进那条"每个场景给全
+   DEFAULT_SETTINGS 的键"的门禁——那条只扫 SCENARIOS 那一段（测试文件里注明了为什么） */
+const PROBES = [
+  { name: "主视图：两张任务，其中一行带跳过解释", shot: "popup.png" },
+  {
+    name: "主视图 + webhook 填了合法地址（状态行与测试按钮出现）",
+    shot: "popup.png",
+    patch: { webhookUrl: "https://ntfy.sh/demo-topic" },
+  },
+  {
+    name: "主视图 + webhook 地址非法（只有红字那一行，测试按钮藏掉）",
+    shot: "popup.png",
+    patch: { webhookUrl: "localhost:8080/hook" },
+  },
+  { name: "主视图 + 微信直连开着（概览行出现）", shot: "popup-wechat.png" },
+  {
+    name: "主视图 + 微信概览行与 webhook 状态行同时出现（两条状态行都在）",
+    shot: "popup-wechat.png",
+    patch: { webhookUrl: "https://ntfy.sh/demo-topic" },
+  },
+  {
+    name: "微信二级视图：四项凭据 + 模板示范",
+    shot: "popup-wechat.png",
+    open: "wechatSetupBtn",
+  },
+];
+
+/* 截图场景是量高度的底座：补丁只改少数几个键，其余取值（任务数、跳过痕迹、微信最近结果）
+   连同"给全 DEFAULT_SETTINGS"那条门禁一起继承过来。
+   挑探针时别按"显示的行数最多"去挑：实测"两条状态行都在"那一种比"只有 webhook 状态行"矮 31
+   像素（540 / 571），因为前者引用的场景底座只有一张任务、后者两张。整页高度先看底座 */
+function scenarioFor(probe) {
+  const base = SCENARIOS.find((s) => s.file === probe.shot);
+  if (!base) throw new Error(`${probe.name} 引用了不存在的截图场景：${probe.shot}`);
+  if (!probe.patch) return base;
+  return Object.assign({}, base, { settings: Object.assign({}, base.settings, probe.patch) });
+}
+
 /* Chrome 禁止 file:// 页面加载 ES module，改用临时本地服务器 */
 const MIME = {
   ".html": "text/html",
@@ -156,12 +204,17 @@ await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const popupUrl = `http://127.0.0.1:${server.address().port}/popup.html`;
 
 const browser = await chromium.launch({ executablePath: chromePath });
-mkdirSync(outDir, { recursive: true });
-for (const scenario of SCENARIOS) {
+const MEASURE = process.argv.includes("--measure");
+if (!MEASURE) mkdirSync(outDir, { recursive: true });
+let worst = 0;
+let over = 0;
+for (const probe of MEASURE ? PROBES : SCENARIOS) {
+  const scenario = MEASURE ? scenarioFor(probe) : probe;
+  const label = MEASURE ? probe.name : scenario.file;
   const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 2 });
-  page.on("pageerror", (err) => console.error(`${scenario.file} pageerror:`, err.message));
+  page.on("pageerror", (err) => console.error(`${label} pageerror:`, err.message));
   page.on("console", (entry) => {
-    if (entry.type() === "error") console.error(`${scenario.file} console:`, entry.text());
+    if (entry.type() === "error") console.error(`${label} console:`, entry.text());
   });
   await page.addInitScript(({ scenario, tabs, msgs }) => {
     /* 真 Chrome 的 get 只回你问的那些键，mock 照做：整份返回会让"读了哪个键"这类改坏查不出来 */
@@ -244,6 +297,39 @@ for (const scenario of SCENARIOS) {
   await page.waitForSelector("#taskList li");
   /* 倒计时每秒重绘一次，等一下让那行数字与"被跳过"的解释落位 */
   await page.waitForTimeout(1200);
+  if (probe.open) await page.click(`#${probe.open}`);
+  if (MEASURE) {
+    /* 量的是"最深的一条底边"而不是 body 的高度：body 被自己的 max-height 夹在 600，
+       内容从盒子底下漏出去时它一个字都不报，只有孩子的矩形看得见。
+       rect 是布局盒、不被视口裁剪，所以这个数字跟 VIEWPORT.height 给多少没关系（同一份内容
+       在视口 600 与 640 下都报 640），别以为把视口压到 600 就量不到溢出 */
+    const m = await page.evaluate((max) => {
+      let deep = { b: 0, t: "body" };
+      for (const el of document.body.querySelectorAll("*")) {
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) continue;
+        if (r.bottom > deep.b) deep = { b: r.bottom, t: el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") };
+      }
+      const de = document.documentElement;
+      return {
+        deepest: Math.round(deep.b),
+        tag: deep.t,
+        bodyH: Math.round(document.body.getBoundingClientRect().height),
+        bodyMax: getComputedStyle(document.body).maxHeight,
+        docScroll: de.scrollHeight,
+        view: de.clientHeight,
+        over: deep.b > max,
+      };
+    }, POPUP_MAX_H);
+    worst = Math.max(worst, m.deepest);
+    if (m.over) over++;
+    console.log(
+      `${m.over ? "✖" : "✔"} ${label}\t最深底边 ${m.deepest}px / 上限 ${POPUP_MAX_H}px` +
+        `\t最狠的是 ${m.tag}\tbody ${m.bodyH}px（max ${m.bodyMax}）\tdoc ${m.docScroll}px 视口 ${m.view}px`
+    );
+    await page.close();
+    continue;
+  }
   const outFile = join(outDir, scenario.file);
   await page.locator("body").screenshot({ path: outFile });
   console.log(`截图已保存：${outFile}（${scenario.caption}）`);
@@ -252,3 +338,11 @@ for (const scenario of SCENARIOS) {
 
 server.close();
 await browser.close();
+if (MEASURE) {
+  console.log(
+    over
+      ? `✖ ${over} / ${PROBES.length} 个形状撑破了 ${POPUP_MAX_H}px（最深 ${worst}px）`
+      : `✔ ${PROBES.length} 个形状都在 ${POPUP_MAX_H}px 内（最深 ${worst}px）`
+  );
+  if (over) process.exit(1);
+}
