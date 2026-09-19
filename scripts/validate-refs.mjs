@@ -10,7 +10,11 @@
    validate.mjs 那头"每个语言包键都得有人引用"的反向判据兜住——两头一夹，拼错键名
    要么"引用了不存在的键"红，要么"这个键没人用"红，两条路各堵一半。
    反向判据兜不住的是"语言包里根本没有的键"：它不在集合里，反向无账可查，正向这一头
-   又因为走的是别名而看不见，于是一笔都不红。第五通道堵的正是这个洞 */
+   又因为走的是别名而看不见，于是一笔都不红。第五通道堵的正是这个洞
+   第六判据是另一根轴（A27）：localePlaceholderFacts 从语言包量出"这句要几个替换值"，
+   jsMessageCalls 从调用点量出"这次给了几个"，validate.mjs 把两边对上。前五条通道问的
+   都是"键在不在"，位数对不上时它们全绿——键明明存在，Chrome 却把没填上的占位符原样
+   吐进界面。抽取器一律判不了时表现也是不报错，所以那边配了数量下限 */
 
 const LITERAL_RE = /"([^"\\\n]*)"|'([^'\\\n]*)'/g;
 const MSG_RE = /__MSG_([A-Za-z0-9_]+)__/g;
@@ -83,13 +87,12 @@ export function htmlI18nKeys(src) {
   return out;
 }
 
-/* JS 里某个函数被调用时传进去的**第一个实参文本**：字面量由调用方再抽。
+/* 一次调用被传进去的**实参文本清单**（按顶层逗号切开，括号与方括号与花括号都算一层）。
    前一个字符是标识符字符（含 $）的不算命中——那叫 anotherMsg( 与 setMsg(，
    是别的名字，把它们当成 msg( 会把无关字面量报成键名（假报警）。
    `chrome.i18n.getMessage(` 的前一个字符是点，那是真调用，要收。
-   第二个实参是 subs，那里的字面量是文案要填进去的值，不是键名，拿它去比对语言包
-   必然假报警，所以深度归零前遇到逗号就停 */
-function firstArgs(src, name) {
+   调用文本不完整也收：i18nAliases 喂进来的函数体是切出来的片段，右括号常常不在里面 */
+function callArgsList(src, name) {
   const out = [];
   const needle = name + "(";
   let at = 0;
@@ -101,6 +104,7 @@ function firstArgs(src, name) {
     }
     let i = at + needle.length;
     let depth = 1;
+    const args = [];
     let arg = "";
     for (; i < src.length; i++) {
       const c = src[i];
@@ -108,19 +112,99 @@ function firstArgs(src, name) {
       else if (c === ")" || c === "]" || c === "}") {
         depth--;
         if (depth === 0) break;
-      } else if (c === "," && depth === 1) break; /* 第一个实参到此为止 */
+      } else if (c === "," && depth === 1) {
+        args.push(arg);
+        arg = "";
+        continue;
+      }
       arg += c;
     }
-    out.push(arg);
-    at = i;
+    args.push(arg);
+    out.push(args);
+    /* 扫描点只推进到本次调用名的左括号之后，不跳到右括号：实参里嵌套的同名调用
+       （msg("a", msg("b"))）也是真调用，跳过去就静默少收一条 */
+    at = at + needle.length;
   }
   return out;
+}
+
+function firstArgs(src, name) {
+  return callArgsList(src, name).map((args) => args[0]);
 }
 
 /* 默认认 getMessage 这条直写通道；第二参数传别名可以把同一个抽取器指向包装函数 */
 export function jsMessageKeys(src, fnName = "getMessage") {
   const out = [];
   for (const arg of firstArgs(src, fnName)) out.push(...stringLiterals(branchesOf(arg)));
+  return out;
+}
+
+/* 一个实参文本里有几个替换值：数组字面量数顶层逗号（空数组 0 个），
+   非空的其它写法在 Chrome 里就是"一个替换值"（getMessage(key, "x") 合法），
+   但**变量与展开**给不了保证——数组还是字符串静态不知道，这种一律回 null 表示判不了。
+   判不了不报错是可以的，判不了却被当成"对得上"不行，所以调用方要把 null 单独算一类 */
+function substitutionCount(argText) {
+  const arg = String(argText || "").trim();
+  if (arg === "") return 0;
+  if (arg.startsWith("[")) {
+    const close = arg.lastIndexOf("]");
+    const inner = arg.slice(1, close === -1 ? undefined : close).trim();
+    if (inner === "") return 0;
+    if (/\.\.\./.test(inner)) return null; /* 展开出来的个数判不了 */
+    let depth = 0;
+    let n = 1;
+    for (const c of inner) {
+      if (c === "(" || c === "[" || c === "{") depth++;
+      else if (c === ")" || c === "]" || c === "}") depth--;
+      else if (c === "," && depth === 0) n++;
+    }
+    return n;
+  }
+  if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(arg)) return null; /* 单个标识符：可能是数组 */
+  return 1;
+}
+
+/* 字面键调用点：{ key, subs }。subs 是替换值个数，null 表示静态判不了。
+   与 jsMessageKeys 的分工在那儿说清楚过：那一条要"凡是像键的都收下来"（宁可多收去比语言包），
+   这一条要"只认整个第一个实参就是一个键"（三元与变量都对不上具体键，比对位数就是假报警）。
+   第一个实参里带引号但不是纯键的（`"a" + x`）也落不进来，那是判不了的一类，不是违规 */
+export function jsMessageCalls(src, fnName = "getMessage") {
+  const out = [];
+  for (const args of callArgsList(src, fnName)) {
+    const first = String(args[0] || "").trim();
+    const m = first.match(/^(?:"([^"\\\n]*)"|'([^'\\\n]*)')$/);
+    if (!m) continue;
+    out.push({ key: m[1] === undefined ? m[2] : m[1], subs: substitutionCount(args[1]) });
+  }
+  return out;
+}
+
+/* 语言包一侧的占位符事实：每个键回 { arity, undeclared, unused }。
+   arity 是要传几个替换值；undeclared 是消息里写了 $NAME$ 却没在 placeholders 里声明，
+   Chrome 的原样吐出来给用户看；unused 是声明了却没人在消息里引用，填进去的值无处可去。
+   名字大小写按 Chrome 的口径忽略（消息里写 $SITE$、声明里叫 site 是合法的） */
+export function localePlaceholderFacts(messages) {
+  const out = [];
+  for (const [key, entry] of Object.entries(messages || {})) {
+    const msg = String((entry && entry.message) || "");
+    const block = entry && entry.placeholders && typeof entry.placeholders === "object" ? entry.placeholders : {};
+    const names = Object.keys(block);
+    const used = [...msg.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)\$/g)].map((m) => m[1].toLowerCase());
+    const positional = [...msg.matchAll(/\$(\d+)(?!\w)/g)].map((m) => Number(m[1]));
+    let arity = positional.length ? Math.max(...positional) : 0;
+    for (const name of names) {
+      const content = String((block[name] && block[name].content) || "");
+      const m = content.match(/^\$(\d+)$/);
+      if (m) arity = Math.max(arity, Number(m[1]));
+    }
+    out.push({
+      key,
+      arity,
+      declared: names.length,
+      undeclared: [...new Set(used)].filter((n) => !names.some((d) => d.toLowerCase() === n)),
+      unused: names.filter((d) => !used.includes(d.toLowerCase())),
+    });
+  }
   return out;
 }
 

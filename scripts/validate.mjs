@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /* 仓库级校验：JSON 可解析、JS 语法通过 node --check、manifest 与语言包键完整、
-   文件与文案键的引用完整性（manifest / HTML / JS 三条通道，加"每条文案都有人引用"的反向判据）。
+   文件与文案键的引用完整性（manifest / HTML / JS 三条通道，加"每条文案都有人引用"的反向判据），
+   以及占位符的位数（语言包要几个替换值、两份语言包齐不齐、调用点给了几个）。
    抽取判据的正则住在 scripts/validate-refs.mjs，那边有单测钉着；这里只做遍历与报账。 */
 
 import { spawnSync } from "node:child_process";
@@ -20,7 +21,9 @@ import {
   htmlI18nKeys,
   htmlLocalRefs,
   i18nAliases,
+  jsMessageCalls,
   jsMessageKeys,
+  localePlaceholderFacts,
   manifestMsgKeys,
   stringLiterals,
 } from "./validate-refs.mjs";
@@ -103,6 +106,9 @@ for (const [path, manifest] of jsonFiles) {
   const defaultKeySet = jsonFiles.get(defaultMessagesPath)
     ? new Set(Object.keys(jsonFiles.get(defaultMessagesPath)))
     : null;
+  /* 每份语言包的占位符事实，键 -> {arity,...}。下面两条新判据要跨语言包比，
+     所以先全部收齐再报，不能边读边比（readdir 的顺序不保证默认语言包第一个到） */
+  const factsByLocale = new Map();
   for (const locale of readdirSync(localesDir)) {
     const messagesPath = join(localesDir, locale, "messages.json");
     if (!existsSync(messagesPath)) {
@@ -116,6 +122,10 @@ for (const [path, manifest] of jsonFiles) {
         problems.push(`${messagesPath}: ${key} 缺少 message 字段`);
       }
     }
+    factsByLocale.set(
+      messagesPath,
+      new Map(localePlaceholderFacts(messages).map((f) => [f.key, f]))
+    );
     /* 非默认语言包必须与默认语言包键集合完全齐平，防止新增文案漏翻译 */
     if (defaultKeySet && locale !== manifest.default_locale) {
       for (const key of defaultKeySet) {
@@ -127,6 +137,32 @@ for (const [path, manifest] of jsonFiles) {
         if (!defaultKeySet.has(key)) {
           problems.push(`${messagesPath}: 多出默认语言包中没有的键 ${key}`);
         }
+      }
+    }
+  }
+
+  /* 占位符自己的账。这一类失败全是静默的：消息里写了 $SITE$ 而 placeholders 里没有 site，
+     Chrome 不报错也不替换，界面上就是"$SITE$"这六个字符；声明了却没用到，填进去的值无处可去，
+     显示出来的是一句缺了主语的文案。两份语言包的位数还要相等——调用点只写一次实参，
+     一位对一位错就等于同一句中文能渲染、英文渲染出裸占位符 */
+  const defaultFacts = factsByLocale.get(defaultMessagesPath);
+  for (const [messagesPath, facts] of factsByLocale) {
+    for (const [key, f] of facts) {
+      if (f.undeclared.length) {
+        problems.push(
+          `${messagesPath}: 键 ${key} 的消息里用了 ${f.undeclared.map((n) => "$" + n.toUpperCase() + "$").join("、")}，但 placeholders 里没有声明`
+        );
+      }
+      if (f.unused.length) {
+        problems.push(`${messagesPath}: 键 ${key} 声明了占位符 ${f.unused.join("、")}，但消息里没有一处引用它`);
+      }
+    }
+    if (!defaultFacts || messagesPath === defaultMessagesPath) continue;
+    for (const [key, base] of defaultFacts) {
+      const other = facts.get(key);
+      if (!other) continue; /* 键缺失已在上面那条报过 */
+      if (other.arity !== base.arity) {
+        problems.push(`${messagesPath}: 键 ${key} 的替换值位数与默认语言包不一致（${base.arity} 对 ${other.arity}）`);
       }
     }
   }
@@ -205,10 +241,18 @@ for (const [path, manifest] of jsonFiles) {
   const messages = jsonFiles.get(messagesPath);
   if (!messages) continue; /* JSON 错误与缺失已在上面记录 */
   const known = new Set(Object.keys(messages));
+  /* 每个键要传几个替换值。语言包内部的自洽与两份之间的位数齐平已在上面那一圈查过，
+     这里拿它当基准去核对调用点 */
+  const arityOf = new Map(localePlaceholderFacts(messages).map((f) => [f.key, f.arity]));
 
   const msgRefs = manifestMsgKeys(manifest);
   for (const { path: field, key } of msgRefs) {
     if (!known.has(key)) problems.push(`${path}: manifest ${field} 引用了语言包里没有的键 ${key}`);
+    /* manifest 里的 __MSG_key__ 没有传参通道：需要替换值的键写在这里，
+       Chrome 不报错，界面上露的就是"$SITE$"这六个字符 */
+    else if (arityOf.get(key) > 0) {
+      problems.push(`${path}: manifest ${field} 用了需要 ${arityOf.get(key)} 个替换值的键 ${key}，manifest 里没有传参通道`);
+    }
   }
 
   const referenced = new Set(msgRefs.map((r) => r.key));
@@ -226,7 +270,13 @@ for (const [path, manifest] of jsonFiles) {
         }
       }
       for (const key of htmlI18nKeys(src)) {
-        if (!known.has(key)) problems.push(`${file}: data-i18n 引用了语言包里没有的键 ${key}`);
+        if (!known.has(key)) {
+          problems.push(`${file}: data-i18n 引用了语言包里没有的键 ${key}`);
+        } else if (arityOf.get(key) > 0) {
+          /* 注入器只递交上的键、没有实参（popup.js 的 msg(el.dataset.i18n)），
+             需要替换值的键放进来等于把"$SITE$"摆到界面上 */
+          problems.push(`${file}: data-i18n 用了需要 ${arityOf.get(key)} 个替换值的键 ${key}，这条通道不传参`);
+        }
       }
     }
     for (const key of jsMessageKeys(src)) {
@@ -237,9 +287,24 @@ for (const [path, manifest] of jsonFiles) {
        这一条不补，"新增一个语言包里根本没有的键"在两条判据上都不红：正向看不见别名，
        反向只查"语言包里的键有没有人提到"，而那个键压根不在语言包里。
        实测症状不致命（msg() 有 `|| key` 兜底，界面上露的是原始键名），但它是静默的 */
-    for (const alias of isJs ? i18nAliases(src) : []) {
+    const aliases = isJs ? i18nAliases(src) : [];
+    for (const alias of aliases) {
       for (const key of jsMessageKeys(src, alias)) {
         if (!known.has(key)) problems.push(`${file}: ${alias}() 引用了语言包里没有的键 ${key}`);
+      }
+    }
+    /* 替换值的位数：少给一位，Chrome 把没填上的占位符原样吐出来（界面上是"$TIME$"这六个
+       字符）；多给一位，多出来的无处可去。两条通道（直写 getMessage 与别名包装）都核对，
+       实参数从语言包现推，不在源码里另写一份"这个键要几位"*/
+    for (const fn of ["getMessage", ...aliases]) {
+      for (const { key, subs } of jsMessageCalls(src, fn)) {
+        const need = arityOf.get(key);
+        if (need === undefined || subs === null) continue; /* 键不存在与判不了各有归属 */
+        if (subs !== need) {
+          problems.push(
+            `${file}: ${fn}("${key}") 需要 ${need} 个替换值，实参给了 ${subs} 个`
+          );
+        }
       }
     }
   });
