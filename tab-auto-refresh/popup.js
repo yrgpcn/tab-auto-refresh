@@ -403,6 +403,9 @@ function initPresetSelect() {
    而重开那次读的是空框，原来那条监控就此静默消失。
    只在 init 里做一次——currentTab 是 init 里 query 出来的，弹窗活着期间不会变，
    而 storage.onChanged 会反复回流，挂在回流链上等于随时抹掉用户正在输入的字。
+   设置那半边（populateSettingsFields）从 A18 起确实挂在回流链上，靠的是"焦点 + 待写盘"
+   两条判据挡住抹输入；这里没有等价判据可用，而 currentTab 不会变，所以仍只跑一次，
+   别顺手把它也挂上去。
    间隔的两个入口（预设下拉 / 秒数框）已由 bindIntervalInputs 做成互斥，
    这里按同一套约定写：命中预设就选它并清空框，否则下拉走"自定义"、框里放实际值 */
 function populateTaskFields() {
@@ -572,6 +575,49 @@ function renderWechat() {
   $("wechatViewState").hidden = !st;
 }
 
+/* 把 settings 铺回控件。init 里跑一次，另一台设备的改动经 storage.onChanged 回流时再跑一次
+   （A18）。不跑的后果不是"少刷一行显示"：saveSettings 读的就是这 15 个控件，于是这台机器上
+   那个"看着还开着"的旧值会被整份写回去，把另一台设备刚关掉的开关静默翻回来——弹窗开着多久，
+   另一台设备的改动就被撤销多久。
+   两条约束：
+   ① 五个走 settings 的文本框在获得焦点、或有去抖写盘还挂在路上时一律跳过，
+      而且整组一起跳、不逐框判断：凭据四项是一把钥匙的四段，按新值填三段留一段正在打的
+      会拼出一个两边都不认识的组合，而它马上被去抖那一笔写进存储。
+      A11 的 input 去抖是为了不抹输入，这一条是为了不被别人的值抹输入，两者必须是同一个判据。
+   ② 复选框没有"正在输入"这种中间态（change 即时写盘），照常同步。
+   刻意写成单个自包含函数：弹窗门禁按花括号切真实源码跑 */
+function populateSettingsFields() {
+  const editing =
+    saveTimer !== null || TEXT_SETTING_INPUT_IDS.some((id) => $(id) === document.activeElement);
+  const evs = notifyEventsOf(settings);
+  $("bypassCheck").checked = settings.bypassCache !== false;
+  $("skipDiscardedCheck").checked = !!settings.skipDiscarded;
+  $("cookieBackupCheck").checked = !!settings.cookieBackup;
+  $("keepAliveCheck").checked = !!settings.keepAlive;
+  $("httpHeartbeatCheck").checked = !!settings.httpHeartbeat;
+  $("skipOnActivityCheck").checked = !!settings.skipOnActivity;
+  $("keepAwakeCheck").checked = !!settings.keepAwake;
+  $("captchaGuardCheck").checked = settings.captchaGuard !== false;
+  $("webhookEvSession").checked = evs.includes("session-lost");
+  $("webhookEvKeyword").checked = evs.includes("keyword");
+  $("webhookEvStopped").checked = evs.includes("task-stopped");
+  $("webhookEvPaused").checked = evs.includes("task-paused");
+  $("wechatEnabledCheck").checked = !!settings.wechatEnabled;
+  if (!editing) {
+    $("webhookUrlInput").value = settings.webhookUrl || "";
+    $("wechatAppIdInput").value = settings.wechatAppId || "";
+    $("wechatSecretInput").value = settings.wechatAppSecret || "";
+    $("wechatOpenIdInput").value = settings.wechatOpenId || "";
+    $("wechatTplInput").value = settings.wechatTemplateId || "";
+  }
+  /* 远程关掉微信直连时退出配置视图：那一页只为配它而存在，留在里面等于让人对着四个输入框
+     继续填一个已经关上的功能，而下一次保存带的仍是 wechatEnabled: false。
+     反向不成立——远程打开不该把用户从当前页面上拽走 */
+  if (!settings.wechatEnabled) document.body.classList.remove("wx-mode");
+  renderWebhook();
+  renderWechat();
+}
+
 async function init() {
   applyI18n();
   /* 后台异步清理失效任务，结果经 storage.onChanged 回填，不阻塞首屏渲染 */
@@ -585,29 +631,7 @@ async function init() {
   /* 排在这里而不是 initPresetSelect 前面：它按 settings.lastIntervalSec 预填，
      当前标签页真正在跑的间隔要盖掉那个"最近一次手动值" */
   populateTaskFields();
-  $("bypassCheck").checked = settings.bypassCache !== false;
-  $("skipDiscardedCheck").checked = !!settings.skipDiscarded;
-  $("cookieBackupCheck").checked = !!settings.cookieBackup;
-  $("keepAliveCheck").checked = !!settings.keepAlive;
-  $("httpHeartbeatCheck").checked = !!settings.httpHeartbeat;
-  $("skipOnActivityCheck").checked = !!settings.skipOnActivity;
-  $("keepAwakeCheck").checked = !!settings.keepAwake;
-  $("captchaGuardCheck").checked = settings.captchaGuard !== false;
-  $("webhookUrlInput").value = settings.webhookUrl || "";
-  renderWebhook();
-  {
-    const evs = notifyEventsOf(settings);
-    $("webhookEvSession").checked = evs.includes("session-lost");
-    $("webhookEvKeyword").checked = evs.includes("keyword");
-    $("webhookEvStopped").checked = evs.includes("task-stopped");
-    $("webhookEvPaused").checked = evs.includes("task-paused");
-  }
-  $("wechatEnabledCheck").checked = !!settings.wechatEnabled;
-  $("wechatAppIdInput").value = settings.wechatAppId || "";
-  $("wechatSecretInput").value = settings.wechatAppSecret || "";
-  $("wechatOpenIdInput").value = settings.wechatOpenId || "";
-  $("wechatTplInput").value = settings.wechatTemplateId || "";
-  renderWechat();
+  populateSettingsFields();
   await renderAll();
 
   $("toggleBtn").addEventListener("click", async () => {
@@ -754,7 +778,9 @@ async function init() {
     renderCountdowns();
   }, 1000);
 
-  /* 只在任务 / 暂停 / 设置变化时重绘；cookie 备份等高频键的写入不触发全量刷新 */
+  /* 只在任务 / 暂停 / 设置变化时重绘；cookie 备份等高频键的写入不触发全量刷新。
+     设置这一路还要顺手把控件按新值铺一遍（A18）：不铺的话这台机器读到的是打开弹窗那一刻的
+     快照，而 saveSettings 整份覆盖，另一台设备的改动会被这里的下一次保存静默撤销 */
   chrome.storage.onChanged.addListener(async (changes) => {
     /* 推送结果也要跟着刷新，否则弹窗开着时状态永远停在打开那一刻 */
     if (changes.wechatLastResult) {
@@ -767,6 +793,8 @@ async function init() {
     }
     if (!changes.tasks && !changes.pausedAll && !changes.settings) return;
     await refreshState();
+    /* 排在 refreshState 之后：它读的是那个刚重新归一化过的 settings */
+    if (changes.settings) populateSettingsFields();
     await renderAll();
   });
 }

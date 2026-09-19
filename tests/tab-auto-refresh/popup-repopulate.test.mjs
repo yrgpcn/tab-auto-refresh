@@ -267,9 +267,15 @@ test("renderWebhook 的五处调用各在各自的事件里", () => {
      4 处是 A8 的形状；A11 给文本框补 input 绑定后是 5 处（初绘、input、change、点测试、留痕变化） */
   const calls = [...POPUP_SRC.matchAll(/^\s*renderWebhook\(\);$/gm)];
   assert.equal(calls.length, 5, `调用点该是 5 处（初绘、input、change、点测试、留痕变化），实到 ${calls.length} 处`);
-  /* 初绘必须紧跟在地址回填之后：它读的是输入框当前值，排在前面就等于永远显示"未配置" */
+  /* 初绘必须排在地址回填之后：它读的是输入框当前值，排在前面就等于永远显示"未配置"。
+     A18 起两者同住 populateSettingsFields，回填被包进 if (!editing) 块、后面还跟着凭据四项，
+     所以不能再按"紧跟"量距离，改成钉"在同一段里、且先后对" */
   const fill = POPUP_SRC.indexOf('$("webhookUrlInput").value = settings.webhookUrl');
-  assert.ok(fill > 0 && POPUP_SRC.indexOf("renderWebhook();", fill) - fill < 80, "初绘没紧跟在地址回填后面");
+  assert.ok(fill > 0 && POPUP_SRC.indexOf("renderWebhook();", fill) > fill, "初绘排在地址回填之前");
+  const sync = sliceFunction(POPUP_SRC, "populateSettingsFields");
+  const syncFill = sync.indexOf('$("webhookUrlInput").value = settings.webhookUrl');
+  assert.ok(syncFill > 0, "回填已被挪出同步函数");
+  assert.ok(sync.indexOf("renderWebhook();") > syncFill, "同步函数里初绘排在回填之前");
   /* 改了 webhookLast 的两个地方要各跟一次重绘，否则状态行停在旧值上 */
   for (const needle of ["webhookLast = res.result;", "webhookLast = changes.webhookLastResult.newValue || null;"]) {
     const at = POPUP_SRC.indexOf(needle);

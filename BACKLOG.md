@@ -52,8 +52,7 @@ A 系列第一批十二条至此清账；当天在其后又跑了两轮审计，
 
 | 编号 | 优先级 | 一句话 | 状态 |
 | --- | --- | --- | --- |
-| A18 | P2 | 弹窗的 settings 回流只重绘任务区，控件与二级视图停在打开那一刻，下一次保存整份写回会撤回对面设备的改动 | 待做 |
-| A19 | P3 | `renderWechat` 与 `fmtClock` 在全套门禁里一次也没被执行过（改坏零红） | 待做 |
+| A19 | P3 | `fmtClock` 在全套门禁里一次也没被执行过（改坏零红）。原先这条还带着 `renderWechat`，A18 的新门禁把那一半关掉了 | 待做 |
 | A20 | P3 | 停任务时那句 `keepalive-off` 零门禁：整行删掉全套一条都不红 | 待做 |
 | V1 | — | 2.1.0 真机手工验证（含下面几条只能真机验的检查） | 待做 |
 | E2 | — | `_code-review/` 门禁是否迁入入库路径（A10 已照此把 `verify-wechat-template-doc` 换成入库的 `wechat-copy.test.mjs`，剩下的按这个形状挑） | 待定 |
@@ -131,53 +130,52 @@ pristine 350 全绿、**没有零红项**：删掉 startTask 的作废红 2、�
 于是我写的 `rtTabKeys` 漏拼 `:tabId`（删的是根本不存在的 `"rt:activity"`）从它眼皮底下过掉，
 是行为用例先红的——改成求值再对账之后这类形状才拦得住，记在同一个文件末尾。
 
-## P2
-
-### A18 弹窗的 settings 回流只重绘任务区；下一次保存按打开那一刻的 DOM 整份写回
-
-- 位置：`popup.js` 的 `storage.onChanged` 监听（758-771）里 `changes.settings` 那一支、`saveSettings()`
-  （已确认它把 15 个键全部从 DOM 现值拼成整份对象发出）、`background.js` 的 `save-settings` 处理
-  （`chrome.storage.sync.set({ settings: msg.settings })`，整份覆盖，注释写明"不做陈旧读"）
-- 症状：控件与二级视图的显隐只在 `init()` 里按当时的 settings 填过一次，`settings` 回流只走
-  `refreshState()` + `renderAll()`，而 `renderAll` = `renderCurrentTab` + `renderTasks` + `renderCountdowns`，
-  一个字都不碰设置区。于是弹窗显示的是打开那一刻的开关状态；用户在这个弹窗里点任意一个开关，
-  `saveSettings` 就把那 15 个键按旧 DOM 整份写回，把对面设备改掉的那几键撤回
-- 最坏的一格是凭据：B 设备刚在微信页填完 appID/appsecret/openid/模板 ID，A 设备上一个更早打开的
-  弹窗里这四个框还是空的，此时在 A 随手勾一下"绕过缓存"→ B 的凭据整份被抹，而且没有任何提示，
-  下一次推送才会以"凭据不全"的形式露出来
-- 同一个监听器在 760-767 行**确实**为 `wechatLastResult` / `webhookLastResult` 各重绘了一次状态行，
-  所以缺的不是能力，是 `settings` 那一支没做同样的事
-- 为什么测不出来：弹窗侧的门禁（`popup-repopulate` / `popup-save-timing` / `skip-trace`）都是切片调用单个函数，
-  没有任何一条把"外部写进来一笔 settings 变化"喂给监听器；`settings-cache.test.mjs` 的
-  "另一台设备写的，不派发 onChanged"钉的是**后台**的快照失效，两头各管半边，中间这条链没人接
-- 改法方向：`changes.settings` 到达时把控件按新值同步一遍（含 `body.wx-mode` 的显隐与两行状态）。
-  两条约束：① 不许吃掉用户正在输入的字——`webhookUrl` 与微信四个框在获得焦点、或有去抖写盘还挂在路上时
-  一律跳过（A11 的 `input` 去抖就是为了不抹输入，两者不能互相打架）；② 别顺手改成"弹窗只发差异键"，
-  `save-settings` 的整份覆盖是有意的（后台那条注释），要动就得连 `patchSettings` 的锁方向一起重新论证
-- 触发要两台桌面 Chrome 登录同一账号、且弹窗一直开着。本机复现不了，能复现的是那条监听器用例：
-  喂一次 `changes.settings`，断言十个复选框与四个凭据框跟着变
+A18 同日结案：弹窗的 15 个设置控件有了唯一的填充函数 `populateSettingsFields()`，`init` 与
+`storage.onChanged` 的 `settings` 分支各调一次，回流那一次排在 `refreshState()` 之后（读的是刚
+重新归一化过的 `settings`，默认值合并与 1.7.0 `webhookEvents` 迁移都在 `normalizeStoredSettings` 里，
+直接吃 `changes.newValue` 会绕过它们）。约束①按"共用同一把判据"落地：五个走 settings 的文本框在
+获得焦点、或 `saveTimer` 还挂着（A11 的去抖那一拍）时**整组**跳过——不逐框判断，因为凭据四项是
+一把钥匙的四段，填三段留一段会拼出一个两边都不认识的组合，而它马上被那笔待写的盘提交；
+复选框没有输入中间态（`change` 即时写盘），照常同步。约束②原样保留：`saveSettings` 仍发整份快照，
+所以这次修的是"撤销窗口"的长度（从"弹窗开着多久"缩到"一次往返"），不是竞态本身，那条注释里
+写着的重新论证要求没被绕开。顺带把 `body.wx-mode` 一起收敛了：远程关掉微信直连就退出那一页，
+反向刻意不做（远程打开不该把用户从当前页面上拽走）。
+新增 `tests/tab-auto-refresh/popup-settings-sync.test.mjs` 14 条：同步函数、`wechatStatus`、
+两个渲染、`storage.onChanged` 那个箭头监听器块全切真实源码跑，监听器那条喂四种回流断言整条链的
+顺序与不触发；另有一条"清单同源"守卫，从 `saveSettings` 源码认出它读的 18 个控件与同步函数写的
+18 个求对称差，以后新增设置项只写进一头就红。15 处改坏实跑（变异全在 popup.js 文本里，
+`TAR_POPUP_SRC` 指过去即可，不必整份复制仓库）pristine 364 全绿、**没有零红项**：红 1~10 条不等，
+最多的是"同步函数末尾顺手写一次盘"红 10。其中一处第一次只红 1 条——假 DOM 的复选框初值全勾着、
+用例喂的又是全真的 `settings`，"复选框照同步"成了 true 比 true，改成喂反方向的值之后红 3 条，
+与 A5/A8 记的"桩件比真实输入更干净"是同一类，记在同一个文件末尾。
+这批还顺手关掉 A19 的前半：`renderWechat` 现在被门禁按真实源码执行（探针重跑：把它改成立刻
+`return` → 红 1 条），而 `fmtClock` 那一半在 364 条下仍然零红，A19 因此缩成只剩 `fmtClock`。
 
 ## P3
 
-### A19 `renderWechat` 与 `fmtClock` 在门禁里一次也没被执行过
+### A19 `fmtClock` 在门禁里一次也没被执行过（同条的 `renderWechat` 半边已由 A18 的门禁关闭）
 
-- 位置：`tab-auto-refresh/popup.js` 的 `renderWechat()`（564）、`fmtClock()`（78）；
-  见证用例在 `popup-repopulate.test.mjs`（172 起切的是 `renderWebhook`）与 `skip-trace.test.mjs`（243、267）
+- 位置：`tab-auto-refresh/popup.js` 的 `fmtClock()`（78）；见证用例在 `skip-trace.test.mjs`（243、267）。
+  原条目还带着 `renderWechat()`，A18 新增的 `popup-settings-sync.test.mjs` 已经把它按真实源码切出来跑了
 - 实测（整仓副本 + `TAR_POPUP_SRC` 指向副本 popup.js，每轮只改坏一处，跑全套 324 条）：
   - `function renderWechat() { return; ... }` → **零红**，324 条全绿
+    ※ 2026-09-19 A18 落地后重测（同一跑法，全套 364 条）：这一处改为**红 1 条**
+      （"两行状态跟着新值重算"），本条的前半因此结案
   - `function fmtClock(ms) { return ""; ... }` → **零红**，324 条全绿
+    ※ 同日重测仍然**零红**，364 条全绿 —— 剩下的缺口就是这一处
   - 同一套跑法下 `function renderWebhook() { return; ... }` → 红 1 条（"渲染空跑守卫：状态文字确实被
     renderWebhook 写进元素"）。这条对照是判读前提：它证明重定向与改坏都真的生效了，上面两个零红不是没跑成
 - `skip-trace.test.mjs` 有 9 条用例名字里带 `fmtClock`，但它们把 `fmtClock` 当**形参**注进去，
   给的是 `const clock = (ms) => "T" + ms`（243 行）——测的是"时刻有没有传到 `title` 这一路"，
   真实那个函数的补零与本地时区一次也没被调用过。名字容易让人以为这块有门禁
-- 为什么是这两处：`renderWechat` 与 `renderWebhook` 是一对（微信/webhook 各自的状态行），
-  后者有显式空跑守卫，前者没有；`fmtClock` 是 A12 第 1 条新引进的显示件，当时的 22 处对照
-  全部打在"选哪个文案键、代入顺序对不对"上，没有一处打在时刻本身
-- 改法方向：`popup-repopulate.test.mjs` 已经在切 `renderWebhook`，照同一段形状给 `renderWechat`
-  补一条空跑守卫加两三条状态判据（未启用 → 整行藏起来；凭据不全 → 报缺失；配置齐 → 报后台最近一次结果）；
-  `fmtClock` 补纯函数用例，喂固定时刻钉住补零与"只取时分"。两处都属于"改了不会红"的欠账，
-  不是当下有 bug：今天这两个函数的实现都是对的
+- 为什么剩下这两处：`fmtClock` 是 A12 第 1 条新引进的显示件，当时的 22 处对照全部打在"选哪个文案键、
+  代入顺序对不对"上，没有一处打在时刻本身。`renderWechat` 那一半是 A18 顺带覆盖的，不是为它补的：
+  三条状态判据里 A18 跑到的是"未启用 → 整行藏起来"与"配置齐 → 报后台最近一次结果"，
+  "凭据不全 → 报缺失"那一条仍然没人跑过
+- 改法方向：`fmtClock` 补纯函数用例，喂固定时刻钉住补零与"只取时分"（它是 `toLocaleTimeString` 的包装，
+  用例要不受本机时区影响就得自己算期望值或显式设 `TZ`）；再照 `popup-repopulate.test.mjs` 切
+  `renderWebhook` 的那段形状给 `wechatStatus` 补"凭据不全 → 报缺失项名字"一条。两处都属于
+  "改了不会红"的欠账，不是当下有 bug：今天这两个函数的实现都是对的
 - 同一批探针顺手排掉的三个假警报（记下来免得再报一遍）：`sortTasks` 这个函数**根本不存在**；
   `getTaskKeywords` 丢掉旧单串 `keyword` 的兼容读 → 红 2 条（有门禁）；`looksLikeLoginPage` 恒返回 false →
   红 4 条，其中一条是 `outbound.test.mjs` 的"两个出口一共只发出 0 笔，下面的断言会空跑"
