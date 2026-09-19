@@ -474,6 +474,11 @@ const RT_AWAKE = "rt:awake";
 /* 上一拍到点被跳过的 {reason, at}（A12）。放会话态而不是 local：它每拍都在重写，
    而 local 是每个刷新周期都要动的键区；它的寿命也不超过这次浏览器会话 */
 const RT_SKIP = SKIP_RT_PREFIX;
+/* 这一轮浏览器会话的启动恢复（prune）跑完没有。弹窗那条清理网按它决定动不动手（A16）：
+   没跑完之前"取不到标签页"完全可能只是会话恢复还没到，这时候删任务等于把用户正在恢复的
+   监控静默停掉。放会话态与它要回答的问题同寿命——活过 SW 回收（弹窗可能在 prune 跑完之后
+   很久才打开，那时这个实例是新的），随浏览器重启清零（下一轮恢复要重新等） */
+const RT_PRUNE_DONE = "rt:pruneDone";
 const rtTab = (base, tabId) => base + ":" + tabId;
 
 /* 读写走独立串行队列：与 tasks 的 withTaskLock 无关（在锁内再入队会死锁），
@@ -1490,13 +1495,26 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   reopenTaskTab(tabId);
 });
 
-/* 清理标签页已不存在的任务（弹窗打开时调用） */
+/* 清理标签页已不存在的任务（弹窗打开时调用）。
+   "这一页取不到"与"这一页再也不会回来"是两件事（A16）：浏览器重启后会话恢复晚到的那几秒里
+   chrome.tabs.get 就是失败的，而同一时刻并跑的 prune 正因为知道这件事才先等 1500 毫秒、
+   再给未认领任务一个共享的认领窗口。两个函数对同一件事的假设不能相反——所以这一条网在
+   本轮启动恢复收尾之前一条都不动，交回 prune；真删的时候要发通知，静默消失是这类 bug 里
+   最难被用户报告的一种 */
 async function cleanupInvalidTasks() {
   const tasks = await getTasks();
+  const missing = [];
   for (const key of Object.keys(tasks)) {
     const tabId = Number(key);
     const existing = await chrome.tabs.get(tabId).catch(() => null);
-    if (!existing) await stopTask(tabId);
+    if (!existing) missing.push(tabId);
+  }
+  if (missing.length && (await rtGet(RT_PRUNE_DONE))) {
+    const gone = missing.map((tabId) => ({ tabId, url: tasks[tabId].url || "" }));
+    for (const { tabId } of gone) await stopTask(tabId);
+    /* 通知排在全部停完之后：notifyTaskStopped 里那一笔外发是 await 的，逐条"停一条发一条"
+       会让挂住的网络把后面几条任务的停止一起堵在外面。停要当场停完，留痕晚一点没有代价 */
+    for (const { tabId, url } of gone) await notifyTaskStopped(tabId, url);
   }
   await updateBadge();
 }
@@ -1632,6 +1650,10 @@ async function prune(adoptLegacyUrls = false) {
   });
 
   await updateBadge();
+  /* 本轮启动恢复收尾（A16）。排在最后：只有整套认领/重挂/重开都走完了，"这一轮会话恢复
+     已经过去了"才成立。中途抛错就不写——那种情况下宁可让弹窗的清理网继续推迟（幽灵任务
+     多留一会儿），也不要在恢复现场上删任务 */
+  await rtSet(RT_PRUNE_DONE, Date.now());
 }
 
 /* 显式传参而不是直接 addListener(prune)：onInstalled 会把事件详情对象当第一个实参传进来，
