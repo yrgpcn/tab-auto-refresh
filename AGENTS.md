@@ -155,11 +155,12 @@
 
 ## 环境备注
 
-- 推送失败先看这里：先直接试 `git push`。2026-09-18 发布 2.1.0 时不带任何代理参数，推 main 与推 tag 都在几秒内成功。只有它失败才走下面那条摘变量的路。
+- 推送失败先看这里：先直接试 `git push`。2026-09-18 发布 2.1.0 时不带任何代理参数，推 main 与推 tag 都在几秒内成功。只有它失败才走下面那条 SOCKS 的路。
 - 宿主有时会注入 `http_proxy` / `https_proxy` / `HTTP_PROXY` / `HTTPS_PROXY` 四个环境变量，全指向 `http://127.0.0.1:51734`，该通道到 GitHub 直接 502。环境变量优先级高于 git 的 `http.proxy` 配置，所以光加 `-c http.proxy=...` 不管用，必须先把四个变量摘掉，再走本机 10808 的 SOCKS：
   `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY git -c http.proxy=socks5://127.0.0.1:10808 push origin main`
-  三种症状的区分办法：报 502 是环境变量那个死代理；一直挂着没输出，先分清是网络还是凭据（见下条）。
-- 上面那条摘变量的命令有一种更难查的失败：一个字节都不输出、退出码还是 0，实际什么都没推上去（2026-09-18 实遇到，靠 `git ls-remote` 才发现远端仍是旧 commit）。所以推送成功与否一律按下条用 `git ls-remote` 复核，别按退出码收工。
+  先 `env | grep -i proxy` 确认变量在不在。2026-09-19 实测这一次四个变量一个都没有，直连报的是 `curl 28 Recv failure: Connection was reset`、`ls-remote` 报 `Failed to connect to github.com port 443`，同一条命令带上 10808 SOCKS 立刻成功——所以摘变量只是变量在场时才需要，路走不通先试 SOCKS，别默认病因一定是那几个环境变量。
+  症状区分：报 502 是环境变量那个死代理；报 connection reset / 连不上 443 是直连路本身不通，SOCKS 可解；一直挂着没输出，先分清是网络还是凭据（见下条）。
+- 上面那条推送命令有两种更难查的假成功：一是**一个字节都不输出**、退出码还是 0，实际什么都没推上去（2026-09-18 实遇到）；二是**照常打印 `Everything up-to-date`** 并返回 0，而同一次 push 前面已经写着 `RPC failed; curl 28`、`fatal: the remote end hung up unexpectedly`（2026-09-19 实遇到，远端仍停在旧 commit）。所以推送成功与否一律按下条用 `git ls-remote` 复核，别按退出码或按那行 up-to-date 收工。
 - 推送挂住不动时，先确认到底是网络还是凭据，别默认是代理问题。2026-09-14 实测：`ls-remote` 与 `curl -X POST .../git-receive-pack` 都正常（后者 1.3 秒返回 401），说明网络通、缺的是凭据。而本机的凭据助手是 `git-credential-manager.exe`，它拿不到缓存的凭据时会去开交互界面，在非交互环境里表现为**一直挂住**（`git credential fill` 超时也返回不了任何东西）。快速判别：
   `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c http.proxy=socks5://127.0.0.1:10808 push origin main`
   立刻报 `could not read Username` 就是凭据缺失，需要在能弹界面的终端里推一次（或改用带 PAT 的地址），与代理无关。
