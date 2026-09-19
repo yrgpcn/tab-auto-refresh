@@ -52,7 +52,6 @@ A 系列第一批十二条至此清账；当天在其后又跑了两轮审计，
 
 | 编号 | 优先级 | 一句话 | 状态 |
 | --- | --- | --- | --- |
-| A17 | P3 | 连击计数跨任务生命周期存活（重开标签页、重新开始任务、关再开验证墙开关） | 待做 |
 | A18 | P2 | 弹窗的 settings 回流只重绘任务区，控件与二级视图停在打开那一刻，下一次保存整份写回会撤回对面设备的改动 | 待做 |
 | A19 | P3 | `renderWechat` 与 `fmtClock` 在全套门禁里一次也没被执行过（改坏零红） | 待做 |
 | A20 | P3 | 停任务时那句 `keepalive-off` 零门禁：整行删掉全套一条都不红 | 待做 |
@@ -112,6 +111,26 @@ A16 同日结案：`cleanupInvalidTasks` 的两条判据分开了——"这一�
 对照那处（删掉清理网末尾的 `updateBadge`）红 2，专门验两处"本用例是空跑"的哨兵不是在装饰。
 这批没有零红项。
 
+A17 同日结案：会话态里按 tabId 存的键有了两份清单，`rtRoundKeys(tabId)` 是"上一轮的结论"
+（`rt:error` + `rt:captcha` + `rt:skip`），`rtTabKeys(tabId)` = `rt:activity` + 上一份。
+三处清理时机对齐到这两份清单上：`stopTask` 与 `reopenTaskTab` 用全量那份（旧 id 整批拆掉），
+`startTask` 用结论那份（同一个 id 上重新开始就是不经过 `stopTask` 的那条路，此前它清了三条通知
+却没清三个计数，验证墙阈值从三次悄悄变成一次）。`rt:activity` 刻意留在作废清单之外——它是
+"用户最后一次真在这个页面上操作"的事实而不是结论，跟着清会让下一拍刷到用户眼前，它自己按
+`ACTIVITY_SKIP_MS` 过期。`probeCaptcha` 在守卫关闭那一支先复位再 `return`：关着的这段时间里页面
+正常加载过若干次，重新打开守卫不该从残留值往上加。`reopenTaskTab` 那句删除排在 `setTasks` 之前，
+因为 `setTasks → armRefresh` 之间那段是 A15 记下的"写完紧接着挂"的窗口，不往里添新的等待。
+新增 `tests/tab-auto-refresh/rt-lifecycle.test.mjs` 10 条：停任务清整批、同 id 重新开始作废、
+`rt:activity` 不跟着清的反向守卫、重新开始后验证墙仍要数满三次、守卫关闭时复位、关掉再打开守卫后
+第一次命中不算第三次、重开标签页拆旧 id 且新 id 干净、只搬一张页时别的标签页不受影响的反向守卫、
+一条种子哨兵、一条把清单取出来求值再与字面量键对账的守卫。9 处改坏在仓库外副本实跑，
+pristine 350 全绿、**没有零红项**：删掉 startTask 的作废红 2、清单漏 captcha 红 5、把活动戳也清掉红 3、
+全量清单退回手写且与结论清单分叉红 3、守卫关闭不复位红 2、reopenTaskTab 不拆旧 id 红 1、
+改成 `session.clear()` 红 1、新增一族键没进清单红 1、行为不变但退回手写数组红 1。
+这批自己也被抓了一次：清单守卫第一版只按正则扫 `rtTabKeys` 那一行有没有出现 `RT_ACTIVITY` 这个名字，
+于是我写的 `rtTabKeys` 漏拼 `:tabId`（删的是根本不存在的 `"rt:activity"`）从它眼皮底下过掉，
+是行为用例先红的——改成求值再对账之后这类形状才拦得住，记在同一个文件末尾。
+
 ## P2
 
 ### A18 弹窗的 settings 回流只重绘任务区；下一次保存按打开那一刻的 DOM 整份写回
@@ -139,21 +158,6 @@ A16 同日结案：`cleanupInvalidTasks` 的两条判据分开了——"这一�
   喂一次 `changes.settings`，断言十个复选框与四个凭据框跟着变
 
 ## P3
-
-### A17 连击计数跨任务生命周期存活：重开标签页与重新开始任务都不清零
-
-- 位置：`reopenTaskTab`（搬 tabId，不清 `rt:captcha|error|activity|skip:<旧 id>`）、`startTask`（清三条通知
-  却不清 `rt:*`）、`probeCaptcha`（`captchaGuard` 关闭时在复位那一行之前就 `return`）
-- 症状三则：① 用户在同一标签页上停掉再开始任务，上一轮 `rt:captcha` 连击还在，验证墙只需 1 次命中就自动暂停
-  （本该 3 次），错误页同理（2 次变 1 次）；② 关掉"验证墙保护"再打开，中途残留的连击照样生效，用户以为开关
-  复位了；③ `reopenTaskTab` 之后旧 id 的整批 `rt:*` 留在会话态，同一浏览器会话里反复重开会持续累积
-  （tabId 在会话内不回收，所以 ③ 只是脏数据，不是误判）
-- 实测：`rt:captcha:7=2`、`rt:error:7=1`、`rt:skip:7` 就位后 `env.fire.tabRemoved(7)` → 任务搬到 101、
-  `refresh-7`/`hb-7` 被清，四条 `rt:*:7` 一条不少；此时全套门禁全绿（那是 A13 之前的 330 条）
-- 为什么测不出来：没有一条断言扫过 `storage.session` 的键集合；`tab-removed.test.mjs` 钉的是"任务搬过去、
-  alarm 重挂"，没往会话态里看
-- 改法方向：`rt:*` 的清理时机与 `stopTask` 对齐（凡是把任务搬离一个 id、或在同一 id 上重新开始，
-  都按 `stopTask` 那份清单清一遍）；`captchaGuard` 关闭时也要先复位计数再返回
 
 ### A19 `renderWechat` 与 `fmtClock` 在门禁里一次也没被执行过
 

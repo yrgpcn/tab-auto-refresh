@@ -118,6 +118,7 @@
 - 判据面只取标题与挑战域名（Cloudflare / reCAPTCHA / hCaptcha）：注入体 `captchaProbe` 只回**原始事实**（是否顶层、`document.title`、自身 `location.href`、自身视口宽高、挂在文档里的 iframe/frame/script 网址），两条正则一个都不下页面，判定全在 `logic.js` 的 `decideWallFromFrames`。与 `matchInPage` 那份"必须自包含所以重复实现"相反，这里刻意让页内不做判断，就没有会漂移的第二份实现。顶层判据与 A3 之前逐条一致；**子框架多过一道视口地板**（`WALL_FRAME_MIN_W`/`_H`，400×250）：reCAPTCHA 复选框 304×78、Turnstile 300×65、hCaptcha 300×88、隐藏框架 0×0 都在地板之下，整页挑战是视口尺寸，地板只挡得住前者。不扫正文：正文里的"验证码""access denied"是日常词，登录框提示、帮助文案、页脚都会命中。401/403 的登录墙语义另走掉线通道，这里不重复判定
 - 暂停期间 alarm 照常续跑，`onAlarm` 见到 `autoPaused` 早退，恢复零重建。`onAlarm` 里标签页存在性检查排在 `autoPaused` 之前，否则被自动暂停的任务在标签页关掉后没人清理
 - 计数存会话态，不进 `sessionProbe`，不污染备份冻结语义
+- 两条连击计数与 `rt:skip` 是**上一轮的结论**，不是站点状态：凡任务搬离一个 tabId（`reopenTaskTab`）、停止任务、或在同一个 tabId 上重新开始（`startTask` 不经过 `stopTask`），都要作废，否则阈值被悄悄调低（旧计数剩 2 时一次命中就暂停，本该三次）。清单只有一个来源：`rtRoundKeys(tabId)` 是结论那份，`rtTabKeys(tabId)` = `rt:activity` + 结论那份，删除处不许再手写键数组。`rt:activity` 不在作废清单里——它是"用户最后一次真在这个页面上操作"的**事实**，重开一个周期不改变它，跟着清反而会让下一拍刷到用户眼前，它自己按 `ACTIVITY_SKIP_MS` 过期。`captchaGuard` 关闭时 `probeCaptcha` 也要先复位计数再返回：关着的这段时间里页面正常加载过，重新打开守卫不该从残留值往上加。门禁 `tests/tab-auto-refresh/rt-lifecycle.test.mjs`
 
 ### 通知外发
 
@@ -163,7 +164,7 @@
 
 ### 跨 SW 实例的运行时状态
 
-- MV3 的 service worker 闲置 30 秒即终止（收到事件或调扩展 API 会重置计时器），任何两端间隔为分钟级的累计或标记都不能放内存变量，否则计数每次从 0 起、功能静默失效。全部走 `chrome.storage.session`，读写用独立的串行队列 `rt()`。它与 `withTaskLock` 无关，在锁内再入队会死锁
+- MV3 的 service worker 闲置 30 秒即终止（收到事件或调扩展 API 会重置计时器），任何两端间隔为分钟级的累计或标记都不能放内存变量，否则计数每次从 0 起、功能静默失效。全部走 `chrome.storage.session`，读写用独立的串行队列 `rt()`。它与 `withTaskLock` 无关，在锁内再入队会死锁。新增一族按 tabId 存的键要同时进 `background.js` 的 `rtRoundKeys`，否则停任务与重开标签页都不清它——那就是 A17 的形状，由 `rt-lifecycle.test.mjs` 把清单取出来求值再对账钉住
 
 ## 验证清单
 

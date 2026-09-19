@@ -299,6 +299,10 @@ async function startTask(tabId, seconds, keyword, keepWatching) {
     clearNotice(NOTIF_ID.keywordHit(tabId));
     clearNotice(NOTIF_ID.taskStopped(tabId));
     clearNotice(NOTIF_ID.taskPaused(tabId));
+    /* 上一轮的结论不止通知：连击计数与 rt:skip 同样要作废（A17）。只清通知等于漏了另一半——
+       用户在同一个标签页上改个间隔再点开始，rt:captcha 还留着 2，下一面墙只需一次命中
+       就把任务停了（本该三次）。rt:activity 按 rtRoundKeys 里写的理由留着 */
+    await rt(() => chrome.storage.session.remove(rtRoundKeys(tabId)));
     await syncKeepAliveConfig(tabId);
     await chrome.storage.local.set({ pausedAll: false });
     await updateBadge();
@@ -324,17 +328,10 @@ function stopTask(tabId) {
        不清 keyword-hit 与 task-stopped：前者往往是 stopTask 的起因（命中即停是默认行为），
        在这里清等于把用户刚收到的那条通知立刻撤回；后者正是这次停止本身的通知 */
     clearNotice(NOTIF_ID.taskPaused(tabId));
-    /* 运行时状态一并清（会话态）：真假人活动时间戳、错误/验证墙连击与"上次跳过的理由"
-       都归属该标签页。第三条其实不清也不会显示（弹窗只按在场任务读这一族键），
-       但它一个标签页一行地在会话态里攒着，停任务时顺手一起删 */
-    await rt(() =>
-      chrome.storage.session.remove([
-        rtTab(RT_ACTIVITY, tabId),
-        rtTab(RT_ERROR, tabId),
-        rtTab(RT_CAPTCHA, tabId),
-        rtTab(RT_SKIP, tabId),
-      ])
-    );
+    /* 运行时状态一并清（会话态）：真假人活动时间戳、错误/验证墙连击与 rt:skip 都归属该标签页。
+       最后一条其实不清也不会显示（弹窗只按在场任务读这一族键），但它一个标签页一行地
+       在会话态里攒着，停任务时顺手一起删。清单只有一个来源，见 rtTabKeys */
+    await rt(() => chrome.storage.session.remove(rtTabKeys(tabId)));
     delete tasks[tabId];
     await setTasks(tasks);
     await chrome.alarms.clear(alarmName(tabId));
@@ -480,6 +477,15 @@ const RT_SKIP = SKIP_RT_PREFIX;
    很久才打开，那时这个实例是新的），随浏览器重启清零（下一轮恢复要重新等） */
 const RT_PRUNE_DONE = "rt:pruneDone";
 const rtTab = (base, tabId) => base + ":" + tabId;
+/* 一个标签页在会话态里的键分两份清单（A17）。rtRoundKeys 是"上一轮的结论"：两条连击计数
+   加上"上次到点为什么被跳过"。凡任务搬离一个 id、或在同一个 id 上重新开始，这几条就都不成立
+   了，必须作废——残留最阴的地方是它不报错，只是让阈值悄悄变低（还剩 2 时一次命中就暂停）。
+   rt:activity 刻意不在里面：它是"用户最后一次真在这个页面上操作"的事实，重开一个监控周期
+   并不改变这个事实，跟着清反而会让下一次到点立刻刷到用户眼前；它自己按 ACTIVITY_SKIP_MS 过期。
+   两份清单是包含关系，新增一族按标签页存放的会话态键只要进 rtRoundKeys，
+   停任务与重开标签页那两处就自动跟着清。由 tests/tab-auto-refresh/rt-lifecycle.test.mjs 扫源码钉住 */
+const rtRoundKeys = (tabId) => [RT_ERROR, RT_CAPTCHA, RT_SKIP].map((base) => rtTab(base, tabId));
+const rtTabKeys = (tabId) => [rtTab(RT_ACTIVITY, tabId), ...rtRoundKeys(tabId)];
 
 /* 读写走独立串行队列：与 tasks 的 withTaskLock 无关（在锁内再入队会死锁），
    但同一键的读-改-写必须串起来，否则并发加一会丢计数 */
@@ -1476,6 +1482,11 @@ function reopenTaskTab(oldTabId) {
       .create({ url: task.url, active: false })
       .catch(() => null);
     if (!newTab || typeof newTab.id !== "number") return false;
+    /* 旧 id 的会话态整批跟着拆（A17）：连击计数与活动戳都按 tabId 存，任务搬走之后就没人再读它们，
+       而同一次浏览器会话里 tabId 不回收，反复重开就一路攒脏键。更要紧的是新 id 要一份干净的现场
+       ——不然是把"差一次就暂停"的旧计数搬过去接着数。
+       排在写盘之前：setTasks 到 armRefresh 之间那段是"写完紧接着挂"的窗口，不往里添新的等待 */
+    await rt(() => chrome.storage.session.remove(rtTabKeys(oldTabId)));
     delete tasks[oldTabId];
     tasks[newTab.id] = task;
     await setTasks(tasks);
@@ -1788,7 +1799,13 @@ function captchaProbe() {
    探测受 settings.captchaGuard 控制，默认开 */
 async function probeCaptcha(tabId) {
   try {
-    if (!(await getSettings()).captchaGuard) return; /* 关闭时不注入、不判定 */
+    if (!(await getSettings()).captchaGuard) {
+      /* 关闭时不注入、不判定，但连击要复位（A17）：这一拍确实没确认到墙，把计数留在 2
+         等着，等于用户重新打开开关后一次命中就暂停（本该三次）。守卫关着的这段时间里
+         页面正常加载过若干次却不清零，就是"开关复位了"和"计数复位了"两件事被分开了 */
+      if ((await getTasks())[tabId]) await rtSet(rtTab(RT_CAPTCHA, tabId), 0);
+      return;
+    }
     const task = (await getTasks())[tabId];
     if (!task) return;
     /* 全部框架都探：整页是墙的挑战页常嵌在一层 iframe 里，顶层文档只剩一个空壳标题，
