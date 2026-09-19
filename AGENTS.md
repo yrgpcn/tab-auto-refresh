@@ -37,6 +37,7 @@
 - 三条外发链路（webhook、微信、静默心跳）的用例必须经桩件 `env.reply(spec)` 给出真应答：共享桩件在 `bootBackground` 里同时装 `globalThis.chrome` 与 `globalThis.fetch`，只设 `env.reply` 而拿不到 `fetch` 等于请求根本没发出去
 - 凡是只断言"没发、没写、没通知"的用例，永远不可能证明那条链路被执行过——新写用例要先有一条"链路确实跑到了"的正向断言，再叠加"这条路径不该跑"的负向断言。红→绿对照的做法记在每个测试文件末尾
 - 断言本地化过的显示（时刻、日期、数字）时不许写字面量期望值：本机与 CI 的 locale 与时区不同，`"09:07"` 与 `"09:07 AM"` 只能在其中一边成立。钉形状（数字分组的个数与位数）、按本地分量构造喂进去的时刻。A19 那批用例照这个形状写，理由写在用例里
+- 挑对照（改坏哪一处）要挑**净结果变了**的那一种。互补的两行代码上有一类改法会被下一行原样抵消——A20 里"heartbeat 为 false 时顺手 `stopActivityWatch()`"实跑零红，因为紧接着一行 `if (cfg.activityWatch) startActivityWatch()` 又把监听器起回来了，行为与原文完全一致；换成删掉 `else stopActivityWatch()` 才红。零红先分清是门禁缺口还是等价变异，把判读写进文件末尾，别急着记成缺口
 
 ## 插件要点
 
@@ -98,7 +99,7 @@
 ### 会话保活与掉线检测
 
 - 保活（`keepAlive`，默认开）按标签页注入 `content/keepalive.js`。不用 `registerContentScripts`：matches 是站点级会溢出到同站无关标签页，而且站点注册 id 与任务 id 语义分裂，重启后停任务清不掉
-- 注入点是 startTask 即时一次，加 `tabs.onUpdated` 每次加载完成补注入；停止任务发 `keepalive-off` 让页面内脚本自停；`reconcileKeepAlive` 在启动与开关真变化时收敛存量任务页
+- 注入点是 startTask 即时一次，加 `tabs.onUpdated` 每次加载完成补注入；停止任务发 `keepalive-off` 让页面内脚本自停；`reconcileKeepAlive` 在启动与开关真变化时收敛存量任务页（关掉开关时页面不会重新加载，`onUpdated` 那张网永远不来，这条是唯一能让存量任务页停下来的路径）。**注入必须排在配置推送之前**：脚本正是这次调用注进去的，推送早于注入时页面上还没有监听器；两笔调用在桩件里是两条独立记录列，看不出先后，用例要把它们并进同一条流水再比。`executeScript` 整次被站点拒绝时静默降级、绝不阻塞任务主流程——那一拍在 `withTaskLock` 里 await 着，抛出来就是"点开始没反应"。两头都有门禁：`tests/tab-auto-refresh/keepalive-channel.test.mjs` 把 `content/keepalive.js` 整份源码在假 window / document / chrome 上真跑一遍（该文件此前从未被执行过），另有一条拿后台真发出来的载荷喂给页面侧真监听器——类型名只改一头时两侧各自的用例都还会绿，这条会。对照入口是 `TAR_BG` 与 `TAR_KEEPALIVE`，CI 上都不设
 - 内容脚本向 `document` 派发 `mousemove` / `keydown`，document 级派发经冒泡同时覆盖挂 document 与 window 的监听器。首个心跳 12~20 秒（短刷新周期下慢心跳永远来不及触发），之后 45~75 秒随机
 - 静默心跳（`httpHeartbeat`，默认开）：每 4 分钟对任务 URL 发 `fetch(credentials: "include", cache: "no-store", headers: { Range: "bytes=0-1023" })`，15 秒超时。Range 值必须保持 `bytes=数字-数字` 这个 CORS 安全名单形式，改成 `bytes=-1024` 之类会引入预检。站点回 416 时去掉 Range 重试一次
 - 掉线检测有两条通道。状态通道由 `decideBackupWrite` 驱动：会话票据从有到无先记疑似，疑似采样只并入计数、不覆盖好备份，连续 2 次才冻结该站点备份并按 6 小时节流通知。行为通道由 `reportSessionSignal` 写 `sessionProbe`：任务页落在登录页 URL、心跳被重定向到登录页或返回 401/403，计入同一个 2 次确认窗口。确认后角标变红，重新登录即恢复
