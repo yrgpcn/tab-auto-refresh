@@ -30,9 +30,9 @@ import {
   planBackupConvergence,
   planPrune,
   looksLikeLoginPage,
-  sameHost,
   sameSite,
   siteRoot,
+  shouldAdoptTaskUrl,
   tabShowsUrl,
   tokenFresh,
   webhookResultOf,
@@ -1151,15 +1151,15 @@ async function backupCookies(tabId) {
   }
 }
 
-/* 登录完成后地址通常离开登录页；保持任务里的网址最新，自动重开才会打开实际页面 */
+/* 登录完成后地址通常离开登录页；保持任务里的网址最新，自动重开才会打开实际页面。
+   判据是纯函数 shouldAdoptTaskUrl：同站、且新地址不是登录页（A14） */
 function refreshTaskUrl(tabId) {
   return withTaskLock(async () => {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     const tasks = await getTasks();
     const t = tasks[tabId];
     if (!tab || !tab.url || !t || !t.url) return;
-    /* 仅在同站时跟随更新目标网址，跨站漂移不覆盖，保留原始监控对象以便自动返回 */
-    if (t.url !== tab.url && sameHost(hostOf(tab.url), hostOf(t.url))) {
+    if (shouldAdoptTaskUrl(t.url, tab.url)) {
       tasks[tabId] = Object.assign({}, t, { url: tab.url });
       await setTasks(tasks);
     }

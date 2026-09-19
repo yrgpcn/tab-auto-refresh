@@ -327,6 +327,21 @@ export function looksLikeLoginPage(u) {
   }
 }
 
+/* 任务网址的跟随判据（纯函数，A14）。task.url 的语义是"用户指定的监控对象"，不是"这一页此刻的地址"。
+   同站才跟随，这条原有；新加的是后半句：登录页不当监控对象。少了它，站点一跳 /login 就把 task.url
+   改写成登录页，而行为通道那句"监控对象本身就是登录页时此信号不适用"从此恒成立 → 信号永远报正常
+   → sus 清零 → 确认窗口（2 次）再也走不到，掉线检测自己把自己 disarm。
+   不跟随也不耽误原意：登录成功之后页面离开登录路径，那一刻照样更新成真实目标页 */
+export function shouldAdoptTaskUrl(taskUrl, tabUrl) {
+  if (!taskUrl || !tabUrl || taskUrl === tabUrl) return false;
+  try {
+    if (!sameHost(new URL(tabUrl).hostname, new URL(taskUrl).hostname)) return false;
+  } catch (e) {
+    return false;
+  }
+  return !looksLikeLoginPage(tabUrl);
+}
+
 /* 用户输入解析：逗号/换行分隔，去空、按小写去重，每条 ≤100 字、上限 10 条 */
 export function parseKeywords(input) {
   const out = [];

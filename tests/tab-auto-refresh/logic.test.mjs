@@ -33,6 +33,7 @@ import {
   hasSessionCookie,
   sameHost,
   sameSite,
+  shouldAdoptTaskUrl,
   sessionLostDetected,
   siteRoot,
   planBackupConvergence,
@@ -131,6 +132,28 @@ test("sameHost is stricter than sameSite: sibling SSO subdomains differ", () => 
   assert.ok(sameHost("app.example.org.cn", "example.org.cn"));
   assert.ok(sameHost("example.org.cn", "app.example.org.cn"));
   assert.ok(!sameHost("sso.example.org.cn", "app.example.org.cn"));
+});
+
+/* A14：task.url 的语义是"用户指定的监控对象"，不是"这一页此刻的地址"。
+   一旦让它跟着页面跳到登录页，行为通道那句"监控对象本身就是登录页时信号不适用"
+   就恒成立，掉线检测自己把自己 disarm */
+test("shouldAdoptTaskUrl follows same-host business pages but never adopts a login page", () => {
+  /* 同站业务页正常跟随：登录完成后地址离开登录页，那一刻还是要更新成真实目标页 */
+  assert.equal(shouldAdoptTaskUrl("https://shop.example.co.nz/board", "https://shop.example.co.nz/board?page=2"), true);
+  assert.equal(shouldAdoptTaskUrl("https://example.co.nz/board", "https://shop.example.co.nz/board"), true);
+  /* 同站跳登录页：这正是要钉住的那一步，A14 之前它返回 true */
+  assert.equal(shouldAdoptTaskUrl("https://shop.example.co.nz/board", "https://shop.example.co.nz/login"), false);
+  assert.equal(shouldAdoptTaskUrl("https://shop.example.co.nz/board", "https://shop.example.co.nz/signin?next=%2Fboard"), false);
+  /* 从登录页回到业务页也要能更新回去，否则"任务记录的永远是登录页"没法自愈 */
+  assert.equal(shouldAdoptTaskUrl("https://shop.example.co.nz/login", "https://shop.example.co.nz/board"), true);
+  /* 跨站不覆盖，保留原始监控对象以便自动返回 */
+  assert.equal(shouldAdoptTaskUrl("https://shop.example.co.nz/board", "https://other.example.co.nz/board"), false);
+  /* 没变化就别写盘：探针那套"值没变就不写"的纪律在这儿同样成立 */
+  assert.equal(shouldAdoptTaskUrl("https://shop.example.co.nz/board", "https://shop.example.co.nz/board"), false);
+  assert.equal(shouldAdoptTaskUrl(null, "https://shop.example.co.nz/board"), false);
+  assert.equal(shouldAdoptTaskUrl("https://shop.example.co.nz/board", ""), false);
+  /* 畸形网址：不跟随，也不抛 */
+  assert.equal(shouldAdoptTaskUrl("https://shop.example.co.nz/board", "not a url"), false);
 });
 
 test("hostOf extracts hostname from URL and rejects junk", () => {

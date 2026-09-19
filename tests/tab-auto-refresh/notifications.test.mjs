@@ -145,9 +145,8 @@ test("掉线通知的 ID 归一到注册域，SSO 子域不会各发一条", asy
     settings: { keepAlive: false, captchaGuard: false }
   });
   env.putTab(7, "https://www.example.com/board");
-  /* 落在登录页这件事由 changeInfo.url 带，标签页本身仍停在监控目标：
-     否则第一次事件里的 refreshTaskUrl 会把任务网址跟到 /login 上，
-     第二次就被"监控对象本身就是登录页"这条豁免挡掉，确认窗口根本走不到 */
+  /* 这条测的是"登录页地址由 changeInfo.url 带、标签页本身仍停在监控目标"的形状。
+     页面自己就停在 /login（真实现场，也是 A14 之前会自指的那一步）由 task-url.test.mjs 钉 */
   const atLogin = { status: "complete", url: "https://www.example.com/login" };
   await env.fire.tabUpdated(7, atLogin);
   await env.fire.tabUpdated(7, atLogin);
