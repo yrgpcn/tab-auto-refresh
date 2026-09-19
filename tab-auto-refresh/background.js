@@ -103,8 +103,10 @@ async function ensureTaskTabIds() {
    存盘设置 → 生效设置一律走 shared/logic.js 的 normalizeStoredSettings，弹窗同款。
    生效值带内存快照：一次任务页加载周期里 getSettings 被调到 5~7 次（保活同步、验证墙
    探测、cookie 备份、刷新、心跳、备份收敛各一次），原先每次都发两笔存储读。
-   三个写盘点（迁移、rememberLastInterval、save-settings）与 storage.onChanged 都要显式
-   invalidateSettings()，漏一个就会读到过期快照，见各自的调用注释 */
+   写盘有两个失效点（patchSettings 读之前、写之后各一次）加上 storage.onChanged，漏一个
+   就会读到过期快照。新增的 sync 设置写入一律走 patchSettings，别自己 get/set：
+   它同时管住失效与两个入口之间的交错（见下面 withSettingsLock）。唯一不经它的是
+   local→sync 迁移那一次整份写入，原因写在 loadSettings 里 */
 let settingsCache = null;
 let settingsLoading = null; /* 并发去重：同一时刻只跑一笔真读 */
 let settingsEpoch = 0; /* 读盘期间发生过失效，那次结果就不能回填 */
@@ -124,6 +126,9 @@ async function loadSettings() {
   const localData = await chrome.storage.local.get("settings");
   if (localData.settings) {
     const migrated = normalizeStoredSettings(localData.settings, DEFAULT_SETTINGS);
+    /* patchSettings 之外仅剩的一个 sync 写点，刻意不走它：它写的是整份规范化结果，且只在 sync 为空时
+       发生一次，没有"读别人刚写的基座"要串行；更要紧的是这里在 getSettings 的调用栈里，
+       而 patchSettings 正是锁内调 getSettings——改成走它就是自己等自己死锁 */
     await chrome.storage.sync.set({ settings: migrated });
     await chrome.storage.local.remove("settings");
     return migrated;
@@ -165,6 +170,39 @@ function withTaskLock(fn) {
   const run = taskQueue.then(fn);
   taskQueue = run.then(() => {}, () => {});
   return run;
+}
+
+/* settings 的读-改-写走另一把锁，理由与上面同形：`getSettings()` → `Object.assign` →
+   整份 `sync.set` 这条链有两个入口（点"开始"的 rememberLastInterval、切开关的 save-settings），
+   各自读一份合并基座再整份写回，交错时后落地的会把前一条刚改的值按旧值写回去——
+   表现为"我明明勾了，它又自己弹回去"。invalidateSettings() 只保证读到最新落盘值，
+   管不了两个读-改-写之间的交错，所以必须串行。
+   锁内只碰存储与快照，绝不排队等 withTaskLock，两把锁不会互相等死
+   （rememberLastInterval 确实是在任务锁里被 await 的，那是单向等待）。
+   这个方向由 tests/tab-auto-refresh/settings-cache.test.mjs 的「手动起任务与切开关并发」钉住 */
+let settingsQueue = Promise.resolve();
+function withSettingsLock(fn) {
+  const run = settingsQueue.then(fn);
+  settingsQueue = run.then(() => {}, () => {});
+  return run;
+}
+
+/* settings 唯一的写入口。partial 给对象就是直接合并；给函数则按当前设置决定增量，
+   返回 null 表示"这次不用写"——判断与写盘在同一把锁里，所以"没变就不写"不会被并发写打断。
+   两头各失效一次：读之前不失效会拿过期快照当基座，把用户这次没碰的开关按旧值写回去；
+   写之后不失效则 onChanged 回流前的一切读取都还是写前的值（弹窗"发送测试"await 到这里，
+   正是靠这一次才读得到刚填的凭据） */
+function patchSettings(partial) {
+  return withSettingsLock(async () => {
+    invalidateSettings();
+    const settings = await getSettings();
+    const delta = typeof partial === "function" ? partial(settings) : partial;
+    if (!delta) return settings;
+    const merged = Object.assign({}, settings, delta);
+    await chrome.storage.sync.set({ settings: merged });
+    invalidateSettings();
+    return merged;
+  });
 }
 
 /* 掉线探测的行为通道（思路与 staying_alive 一致）：任务页落在登录页 URL、
@@ -587,15 +625,10 @@ async function reconcileKeepAlive() {
 /* 快捷键没有显式间隔，复用最近一次手动任务的实际间隔 */
 async function rememberLastInterval(seconds) {
   try {
-    /* 读之前先失效：这次读的是合并基座，拿过期快照会把别的开关按旧值一并写回 sync。
-       只有手动建任务会走到这里（startTask），不是每个刷新周期，代价是一次重读 */
-    invalidateSettings();
-    const settings = await getSettings();
-    if (settings.lastIntervalSec === seconds) return; /* 没变不写，避免无谓的 sync 变更风暴 */
-    await chrome.storage.sync.set({
-      settings: Object.assign({}, settings, { lastIntervalSec: seconds })
-    });
-    invalidateSettings();
+    /* 只有手动建任务会走到这里（startTask），不是每个刷新周期。
+       "没变就不写"的判断放进 patchSettings 的函数式增量里，与写盘同处一把锁：
+       在外面先读再判，读到的可能不是落盘时的基座，等于把这条链又变回无锁读-改-写 */
+    await patchSettings((s) => (s.lastIntervalSec === seconds ? null : { lastIntervalSec: seconds }));
   } catch (e) {
     /* 保存偏好失败不应阻止当前任务启动 */
   }
@@ -1717,17 +1750,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await updateBadge();
         sendResponse({ ok: true, pausedAll: paused });
       } else if (msg.type === "save-settings") {
-        /* 两头都要失效。读之前：msg.settings 是增量，合并基座必须是盘上的当前值，
-           拿过期快照会把用户这次没碰的开关按旧值写回去。
-           写之后：onChanged 回流有延迟，中间任何读取都不该再拿到写前的值。
-           弹窗的"发送测试消息"会 await 到这里 sendResponse 才发出，正是靠这一次失效
-           才读得到刚填的凭据（2.0.0 修过的时序竞态，不能被缓存重新引入） */
-        invalidateSettings();
-        const settings = await getSettings();
-        await chrome.storage.sync.set({
-          settings: Object.assign({}, settings, msg.settings)
-        });
-        invalidateSettings();
+        /* 必须走 patchSettings 而不是在这里自己 get/set：它和 rememberLastInterval 是两条
+           "读基座 → 整份写回"的链，不串行时后落地的会把前一条刚改的开关按旧值写回去。
+           两头失效的契约在 patchSettings 里。弹窗的"发送测试消息"会 await 到这里才发出，
+           靠的正是写盘后那次失效（2.0.0 修过的时序竞态，不能被缓存重新引入） */
+        await patchSettings(msg.settings || {});
         sendResponse({ ok: true });
       } else if (msg.type === "keepalive-query") {
         /* 页面脚本注入后拉配置快照（心跳/活动监听各自开关） */

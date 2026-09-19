@@ -56,6 +56,29 @@
     （`tests/tab-auto-refresh/popup-repopulate.test.mjs`，10 条），形状与 `keyword-inpage.test.mjs` 一致；
     其中"函数真的被 init 调用，且排在 `initPresetSelect()` 之后"那条守的是死入口与顺序。七处红→绿对照实跑过。
     真机仍要验一次：控件确实被填上、以及"先停后起"不丢关键词，这两点切片用例给不了（`BACKLOG.md` V1 (d)）
+- `settings` 的两条"读基座 → 整份写回"链互相覆盖（`BACKLOG.md` A7）。点"开始"记间隔的 `rememberLastInterval`
+  与切开关的 `save-settings` 各自 `getSettings()` → `Object.assign` → `sync.set({ settings: 整份 })`
+  （`tasks` 有 `withTaskLock`，`settings` 一直没有），交错时后落地的把先落地那笔按旧值写回去——
+  表现为"我明明勾了，它又自己弹回去"，而且 sync 会把这份错的合并结果漫游到其它设备。
+  `invalidateSettings()` 只保证读到最新落盘值，管不了两个读-改-写之间的交错，所以必须串行
+  - 两条链收进同一个 `patchSettings`，由新增的 `withSettingsLock` 串行（与 `withTaskLock` 同形状、各自独立的一把锁）。
+    读写两头各失效一次，各管一件事：读之前不失效就会拿过期快照当合并基座（`onChanged` 回流有延迟，
+    那个窗口真实存在）；写之后不失效则回流前的一切读取仍是写前的值——弹窗"发送测试消息"await 到写盘完成
+    才发出，靠的正是这一次（2.0.0 修过的时序竞态，不能被 2.1.0 的快照重新引入）
+  - 「间隔没变就不写」的判断挪进锁内，与写盘同处一把锁：在外面先读再判，读到的可能不是落盘时的基座，
+    等于把这条链又变回无锁读-改-写。`partial` 给函数时返回 `null` 即"这次不用写"
+  - 锁的方向是契约：`startTask` 在任务锁内 `await` 设置写盘，那是单向等待；反过来（设置锁内再排任务锁）
+    两条锁互相等死，弹窗表现为一直卡住。`loadSettings` 的 local→sync 迁移是**唯一**不经 `patchSettings`
+    的写点，因为它在 `getSettings` 的调用栈里，改成走它就是自己等自己
+  - 门禁：`settings-cache.test.mjs` 新增四条——两个并发的 `save-settings` 不互相覆盖（锁本身）、
+    `onChanged` 还没回流时不许拿内存快照当基座（读前失效）、手动起任务与切开关并发谁都不许把对方等死
+    （锁的方向）、间隔没变就不写盘且这条判断仍在锁内。六处红→绿对照实跑过，每处恰好红一条。
+    两处第一次不合格并记在文件末尾：去读前失效那处当时**没有任何用例判得到**（唯一的失效用例喂的是
+    回流已到达的情况，补了"还没回流"那条才红），反向成环那处前两版一个跑绿（变异与 `startTask`
+    是同一等待方向，不成环）、一个把整份 suite 挂住（无条件插环会连单向那条一起吊死，而跑手只等退出码，
+    于是加了 90 秒超时并把挂住单独报出来）
+  - 纪律 3：默认值、存储键、存盘数据结构一个都没动。受影响路径只有上面两条写盘入口，
+    老用户已有的 `lastIntervalSec` 与其它开关从此不再被并发写丢掉
 
 ### Changed
 - 共享测试桩件 `tests/helpers/background-harness.mjs` 按真实 Chrome 语义补齐十一处，为的是让"看着绿、实际空跑"
