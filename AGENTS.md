@@ -57,7 +57,7 @@
 ### 三条改法纪律
 
 1. 含"先读后写、跨异步步骤共享状态"的流程要把顺序决策抽成纯函数、执行器只负责写盘，让顺序能被单测直接断言，而不是靠读代码推断。已按这条落地的是 `planPrune`（启动恢复）、`decideAlarmAction`（到点处置）、`decideBackupWrite`（备份写入），以及检测链的 `aggregateFrameHits` + `decideWallFromFrames`（多框架结果怎么合并、逐框架怎么判墙）——页内注入体只回原始事实，判断一概留在 `logic.js`。新写的同类流程照这个形状做
-2. 权限与功能成对记账：新增权限要在 CHANGELOG 该版本 Added 里点名，并更新下面的权限清单；新增需要权限的功能同样要更新权限说明
+2. 权限与功能成对记账：新增权限要在 CHANGELOG 该版本 Added 里点名，并更新下面的权限清单；新增需要权限的功能同样要更新权限说明（这本账现在四段都对得上，见"权限这本账有四段"那一条）
 3. 默认值（开关、阈值、间隔）任何变动都要逐条列出受影响路径和"用户已显式设过值"的分支，确认不会改变既有用户的行为
 
 ### 测试纪律
@@ -76,6 +76,7 @@
 ### 权限与版本
 
 - 权限：alarms / storage / tabs / contextMenus / notifications / cookies / scripting / idle / power
+- 权限这本账有四段：上面那行清单 ↔ `manifest.json` ↔ 源码里的真实调用点 ↔ 共享桩件暴露的 chrome 表面。第一段由 `doc-numbers.test.mjs` 钉，后三段由 `tests/tab-auto-refresh/permission-map.test.mjs` 钉——它带一张 `API_PERMISSION` 表（哪个 API 要哪一项权限，抄自 Chrome 官方文档，仓库里不再抄第二份清单）。**新增一处 API 用法先去查它要哪一项权限**：漏配不会响亮地崩，调用点多数带 catch，表现是那块功能就是不生效；而桩件那份 chrome 对象抄的是"代码用了什么"、不是"代码被允许什么"，所以测试照绿（实测：删掉 power 权限并同步改掉上面那行清单，改前的整套 500 条全绿）。删功能同理要连权限一起删——manifest 里一项没人用的就是白要，`host_permissions` 那一笔由源码里两类"按任意网址干活"的调用点（裸 fetch 与 executeScript）背书
 - host 权限常驻 `host_permissions: ["<all_urls>"]`，不要再改成按需申请。试过，硬伤是系统授权框弹出即夺走焦点、关掉扩展弹窗，发起申请的脚本随之销毁，授权完成后任务不会自动开始，用户必须再点一次"开始"。本插件自用分发、不上商店，按需申请没有合规收益。将来真要上商店再做，且必须监听 `permissions.onAdded` 在授权完成后自动续跑
 - `minimum_chrome_version: 120`，30 秒级 alarms 依赖它
 
