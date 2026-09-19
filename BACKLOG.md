@@ -52,11 +52,118 @@ A 系列十二条至此清账，剩下的 V1（真机手工验证）与 E2（门
 
 | 编号 | 优先级 | 一句话 | 状态 |
 | --- | --- | --- | --- |
+| A13 | P1 | 备份索引把存档变成删不掉的孤儿，关开关也留明文（A12 第 2 条引入的回归） | 待做 |
+| A14 | P1 | 目标网址被改写成登录页后，行为通道再也确认不了掉线 | 待做 |
+| A15 | P2 | `startTask` 在任务锁里等外发，任务已落盘却没有 alarm | 待做 |
+| A16 | P2 | 弹窗一打开就把会话恢复还没到位的任务静默停掉 | 待做 |
+| A17 | P3 | 连击计数跨任务生命周期存活（重开标签页、重新开始任务、关再开验证墙开关） | 待做 |
 | V1 | — | 2.1.0 真机手工验证（含下面几条只能真机验的检查） | 待做 |
 | E2 | — | `_code-review/` 门禁是否迁入入库路径（A10 已照此把 `verify-wechat-template-doc` 换成入库的 `wechat-copy.test.mjs`，剩下的按这个形状挑） | 待定 |
+| E3 | — | 桩件缺 `chrome.power` 与 Promise 型 `fetch` 两块记录面，两类 bug 结构上测不出来 | 待做 |
 
-A1~A12 十二条全部移进 `CHANGELOG.md`，本文件不再有"改代码就能收口"的条目。剩下两条都得等人：
-V1 要在真机上按下面那份清单逐条看，E2 是流程决定（哪几份门禁值得入库）。
+A1~A12 十二条全部移进 `CHANGELOG.md`。2026-09-19 当天在 A12 落地之后的代码上又跑了一轮审计（同样不采信文档、
+逐条对着源码确认，怀疑点用真 `background.js` + 共享桩件跑出来，或按红→绿对照做变异），新增 A13~A17 与 E3。
+其中 A13 是 A12 第 2 条自己引入的回归，优先级最高。
+
+## P1
+
+### A13 备份索引会把存档变成删不掉的孤儿（2026-09-19 当日引入的回归）
+
+- 位置：`background.js` 的 `listBackupEntries` / `syncBackupIndex` / `ensureBackupIndex` / `dropBackupIndexHosts` /
+  `pruneCookieBackups`，纯函数 `planBackupFetch` / `planBackupIndex`（`shared/logic.js`），索引键 `cookieBackupHosts`
+- 症状：只要一家存档的键名没进索引，它对**所有写侧路径都不再可见**——关开关时的"清空全部备份"删不掉它、
+  站点不再被监控删不掉它、30 天 TTL 删不掉它、20 站额度也不数它。跑真 `background.js` + 共享桩件实测：
+  - `cookieBackup:false` + 索引 `["…另一家…"]` + 孤儿 `cookieBackup:mail.example.org` → 走完 `onStartup`
+    之后明文存档还在、索引已归零。README 与 `AGENTS.md` 那句"关闭时不留死数据"就此不成立
+  - 三家孤儿 + 零任务 → 三家全留着，索引 `[]`
+- 孤儿怎么来的：`ensureBackupIndex` 是"读索引 → 拼一串 → 整份写回"，两次 `backupCookies` 并发（启动时几个
+  任务页同时加载完成）会互相盖掉，落败那家的登记就丢了；SW 在"写完存档、还没登记"之间被回收是同一种丢失。
+  补登记只在**那一页再次加载并再次写成存档**时发生（实测确实会补上），所以丢的是这一段窗口——
+  而它正好盖住"重启浏览器后要恢复登录"的那一刻
+- 为什么测不出来：`cookie-backup.test.mjs` 那 6 条索引用例每次都把索引与存档同源摆好，没有一条从
+  "两者不同源"起步；本轮红→绿对照改的是索引自己的算法，改不到"索引不完整时下游怎么办"
+- 改法方向：索引可以是**读的捷径**，不能是**删除的唯一依据**。要么把"写存档 + 登记"原子化到同一把锁里、
+  且开关关闭那一支仍按实测键集合清空；要么彻底不引入第二个真相来源，把一趟启动里的三次全量读并成一次。
+  判据固定成一句：**删除集合只能来自 `get(null)` 读到的实际键**。要能写出"先造孤儿、再证明它被删掉"的用例
+
+### A14 目标网址被改写成登录页之后，行为通道再也确认不了掉线
+
+- 位置：`tabs.onUpdated` 里 `reportSessionSignal(...)` 与 `refreshTaskUrl(...)` 的先后、`looksLikeLoginPage`、
+  `sessionProbe`、`sameHost`
+- 症状：站点把"会话过期"表现成**同主机**跳到 `/login`（很常见；正因同主机，站点锁定不介入）。第一拍
+  `reportSessionSignal` 记 `sus:1`，紧接着 `refreshTaskUrl` 因 `sameHost` 成立把 `task.url` 改写成 `…/login`。
+  第二拍起 `!looksLikeLoginPage(task.url)` 恒假 → 信号永远报"正常" → `sus` 被清零，`lost` 到不了。
+  确认窗口要 2 次采样，于是这条通道**自己把自己 disarm 了**
+- 实测：第一次加载后 `tasks[7].url` 变成 `https://shop.example.co.nz/login`，`sessionProbe` 从
+  `{sus:1,lost:false}` 翻回 `{sus:0}`；连跳三拍之后没有通知、角标不红
+- 双重后果：监控目标从此就是那张登录页——关键词在登录页正文里找、心跳对着 `/login` 发、用户真登录成功之后
+  也不会自动回到原页面；而 `httpHeartbeat` 关着的用户只剩这一条通道，等于完全没有掉线检测
+- 为什么测不出来：`heartbeat.test.mjs` 只驱动 fetch 那一侧；行为通道的用例给的是"每次都是新登录页 +
+  `task.url` 始终是业务页"的现场，恰好绕开"自己把自己改写"这一步
+- 改法方向：`task.url` 的语义要定死一次——它是**用户指定的监控对象**还是**这一页此刻的地址**？
+  现在两个都要，于是出现自指。候选：登录页不参与改写（`looksLikeLoginPage(cur)` 时只记信号不动 url），
+  或把用户填的目标单列一个字段，`loginSuspect` 按它判
+
+## P2
+
+### A15 `startTask` 在任务锁里等外发；这段时间任务已落盘却没有 alarm
+
+- 位置：`startTask` → `withTaskLock` → `setTasks` → `backupCookies` → `notifySessionLost` →
+  `notifyOut`/`postWebhook`/`postWechat`，之后才是 `armRefresh` / `ensureHeartbeat`
+- 症状：开了"cookie 备份 + webhook（或微信）"、且这一拍恰好确认掉线的用户点「开始」之后：`tasks` 里已经有
+  这条任务，`refresh-<id>` 与 `hb-<id>` 一条都没建，弹窗按钮卡在"开始"上，**其它标签页的起停全排在同一把锁后面**。
+  外发是 fetch，15 秒超时，微信还要多取一次令牌，最坏几十秒。MV3 的 SW 若在等待中被回收，就留下
+  `AGENTS.md` 里那句"任务在、永不刷新"的僵尸
+- 实测：把 `globalThis.fetch` 换成永不 resolve 的桩（必须在 `bootBackground` 之后覆盖，桩件安装时会替换它）→
+  `start(7)` 与另一家站点的 `start(9)` 同时 PENDING，`calls.alarmsCreated` 为空，而 `tasks` 已是 `["7"]`
+- 为什么测不出来：桩件的 `fetch` 从不返回 Promise（见 E3），`outbound.test.mjs` 判的是请求形状与留痕，
+  不看"锁是不是压在网络上面"
+- 改法方向：把外发挪出任务锁（`setTasks` 之后与 alarm 一起收尾，或在锁外 `await` 一条独立事件队列）；
+  `armRefresh` / `ensureHeartbeat` 排在任何可失败的等待之前——这与 `prune` 里"先写盘再挂心跳"是同一条纪律的另一半。
+  **别顺手把 `await notifyOut` 改成裸甩**，那正是它当初被 await 的理由（SW 回收会截断）
+
+### A16 弹窗一打开就把"会话恢复还没到位"的任务静默停掉
+
+- 位置：`cleanupInvalidTasks`（消息类型 `prune-now`，`popup.js` 每次打开弹窗都发一次）、`stopTask`
+- 症状：浏览器重启后立刻点弹窗。`chrome.tabs.get(tabId)` 对还没恢复出来的标签页会报错 → 每条这样的任务被
+  `stopTask` 删掉、两条 alarm 清掉，**没有任何通知**（走的是 `stopTask` 而不是 `stopTaskWithNotice`）。
+  同一时刻并跑的 `prune` 正因为知道"恢复会晚到"才先等 1500ms、再给未认领任务共享 20 秒窗口——
+  两个函数对同一件事的假设正好相反
+- 实测：`tasks:{7:…}` 而桩件里没有该标签页 → 发 `prune-now` → `tasks` 变 `{}`、`alarmsCleared` 是
+  `["refresh-7","hb-7"]`、`notifCreated` 为空
+- 为什么测不出来：`message-gate.test.mjs` 只把 `prune-now` 当消息白名单里的一个 token 过了一遍，
+  没有一条用例叫得出 `cleanupInvalidTasks`
+- 改法方向：把"标签页不存在"与"会话恢复还没到"分成两种判据（启动后一段时间内不删，或干脆交给 `planPrune`
+  的认领窗口统一收尾）；真删的时候要通知——静默消失是这类 bug 里最难被用户报告的一种
+
+## P3
+
+### A17 连击计数跨任务生命周期存活：重开标签页与重新开始任务都不清零
+
+- 位置：`reopenTaskTab`（搬 tabId，不清 `rt:captcha|error|activity|skip:<旧 id>`）、`startTask`（清三条通知
+  却不清 `rt:*`）、`probeCaptcha`（`captchaGuard` 关闭时在复位那一行之前就 `return`）
+- 症状三则：① 用户在同一标签页上停掉再开始任务，上一轮 `rt:captcha` 连击还在，验证墙只需 1 次命中就自动暂停
+  （本该 3 次），错误页同理（2 次变 1 次）；② 关掉"验证墙保护"再打开，中途残留的连击照样生效，用户以为开关
+  复位了；③ `reopenTaskTab` 之后旧 id 的整批 `rt:*` 留在会话态，同一浏览器会话里反复重开会持续累积
+  （tabId 在会话内不回收，所以 ③ 只是脏数据，不是误判）
+- 实测：`rt:captcha:7=2`、`rt:error:7=1`、`rt:skip:7` 就位后 `env.fire.tabRemoved(7)` → 任务搬到 101、
+  `refresh-7`/`hb-7` 被清，四条 `rt:*:7` 一条不少；此时全套 330 条门禁全绿
+- 为什么测不出来：没有一条断言扫过 `storage.session` 的键集合；`tab-removed.test.mjs` 钉的是"任务搬过去、
+  alarm 重挂"，没往会话态里看
+- 改法方向：`rt:*` 的清理时机与 `stopTask` 对齐（凡是把任务搬离一个 id、或在同一 id 上重新开始，
+  都按 `stopTask` 那份清单清一遍）；`captchaGuard` 关闭时也要先复位计数再返回
+
+## 工程账（E）
+
+### E3 桩件缺两块记录面，有几类 bug 结构上测不出来
+
+- `tests/helpers/background-harness.mjs` 的 `power` 是两个空函数、没有调用日志，于是 `applyKeepAwake` 的
+  "持锁标记靠 `rt:awake` 兜底、一个 SW 生命周期最多 request 一次"写不出用例（`AGENTS.md` 说 power 锁的收敛
+  挂在 `updateBadge`，这条链目前只能靠读代码相信）。补齐形状与 `calls.alarmsCleared` 同形：记
+  `requestKeepAwake` / `releaseKeepAwake` 的调用序列
+- `fetch` 桩不 await Promise 型应答，所以"外发挂住时后台正在做什么"（A15）在现有桩件下永远测不出来。
+  `env.onFetch` 要允许返回一个由测试握着的 promise（配合"永不 resolve"与"到点 resolve"两种现场）
+- 两条都是先补面、再谈各自那条链的判据；补面时要连带记一句"哪几条门禁因此从空跑变成真跑"
 
 ## 只能真机验（V1）
 
