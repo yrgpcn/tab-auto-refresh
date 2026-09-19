@@ -58,7 +58,7 @@ header {
 .row-check.compact { font-size: 11px; margin: 0; }
 .hint.warn { color: #b45309; }
 .hint.error { color: #b91c1c; }
-#webhookInvalid { margin: -4px 0 6px; }
+#webhookRow { margin-top: -2px; }
 .row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
 .row .label { flex: none; color: #374151; }
 select {

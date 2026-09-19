@@ -14,7 +14,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 
 import { PRESETS } from "../../tab-auto-refresh/shared/config.js";
-import { clampInterval, getTaskKeywords } from "../../tab-auto-refresh/shared/logic.js";
+import { clampInterval, getTaskKeywords, normalizeWebhookUrl } from "../../tab-auto-refresh/shared/logic.js";
 
 /* 红→绿对照用：TAR_POPUP_SRC 指到另一份 popup.js（只读文本，不 import）。CI 上不设 */
 const POPUP_PATH = process.env.TAR_POPUP_SRC
@@ -163,6 +163,124 @@ test("密钥输入框是 type=\"password\"：旁边有人时读不到用户粘�
   assert.match(tag[0], /\btype="password"/, "密钥框回退成明文回显");
 });
 
+/* ---------- A8：webhook 状态行与"发送测试" ----------
+   与上面 populateTaskFields 同一做法：切 renderWebhook() 的真实源码来跑。
+   webhookLast 在 popup.js 里是模块级 let，切出来的函数体中它是自由变量，
+   把它当形参注入就能逐例喂值。fmtClock 给确定性的桩：这条要钉的是"选哪个文案键、
+   传的是不是 at、按钮该不该藏"，不是时刻怎么格式化（那份实现微信侧早就在用）。 */
+
+const WH_FN_SRC = sliceFunction(POPUP_SRC, "renderWebhook");
+const whClock = (ms) => "⏱" + ms;
+const whMsg = (key, subs) => key + (subs && subs.length ? ":" + subs.join("|") : "");
+
+function runWh({ raw, last }) {
+  /* 初值刻意带上一次残留：全给空串，"地址清空时要抹掉旧文字/旧颜色"这一半就永远测不到
+     （对照 P2 第一次跑就是绿的，原因在此） */
+  const dom = {
+    webhookUrlInput: { value: raw },
+    webhookRow: { hidden: true },
+    webhookTestBtn: { hidden: true, disabled: false, textContent: "" },
+    webhookState: { textContent: "webhookErrAuth", className: "wx-state error" }
+  };
+  new Function(
+    "$", "msg", "fmtClock", "normalizeWebhookUrl", "webhookLast",
+    `${WH_FN_SRC}; return renderWebhook;`
+  )((id) => dom[id], whMsg, whClock, normalizeWebhookUrl, last)();
+  return dom;
+}
+
+test("空跑守卫：确实切到了 renderWebhook 源码", () => {
+  assert.ok(WH_FN_SRC.length > 200, "切出来的源码过短，等于什么都没测");
+  assert.match(WH_FN_SRC, /^function renderWebhook\(\)/);
+});
+
+test("没填地址：整行藏起来，状态文字清空", () => {
+  for (const raw of ["", "   "]) {
+    const dom = runWh({ raw, last: { ok: false, errorKey: "webhookErrAuth", at: 1 } });
+    assert.equal(dom.webhookRow.hidden, true, `地址 ${JSON.stringify(raw)} 还占着一行高度`);
+    assert.equal(dom.webhookState.textContent, "", "藏起来的行里还留着上一次的失败文字");
+    assert.equal(dom.webhookState.className, "wx-state", "修饰类没清，下次显示时带着旧颜色");
+  }
+});
+
+test("地址非法：红字提示留着，测试按钮藏掉（摆个假按钮比不摆更糟）", () => {
+  const dom = runWh({ raw: "javascript:alert(1)", last: null });
+  assert.equal(dom.webhookRow.hidden, false);
+  assert.equal(dom.webhookState.textContent, "webhookInvalid");
+  assert.match(dom.webhookState.className, /\berror\b/);
+  assert.equal(dom.webhookTestBtn.hidden, true);
+});
+
+test("地址合法但从没投过：说“等待首次推送”，按钮可用", () => {
+  const dom = runWh({ raw: "https://h.example/x", last: null });
+  assert.equal(dom.webhookRow.hidden, false);
+  assert.equal(dom.webhookState.textContent, "webhookStateIdle");
+  assert.doesNotMatch(dom.webhookState.className, /ok|error/, "没投过就别上色，那是灰态");
+  assert.equal(dom.webhookTestBtn.hidden, false);
+});
+
+test("最近一次投递成功：绿态并给出时刻，取的是留痕里的 at", () => {
+  const dom = runWh({ raw: "https://h.example/x", last: { ok: true, status: 204, at: 1234 } });
+  assert.equal(dom.webhookState.textContent, "webhookStateOk:⏱1234");
+  assert.match(dom.webhookState.className, /\bok\b/);
+});
+
+test("最近一次投递失败：按 errorKey 取文案，红态", () => {
+  /* 真实留痕里非网络层的失败一律带 status（webhookResultOf 给的），
+     这里不省略它，"判成功看 ok 还是看 status"才有区分度（对照 P3 的教训） */
+  const dom = runWh({
+    raw: "https://h.example/x",
+    last: { ok: false, kind: "auth", status: 403, errorKey: "webhookErrAuth", at: 1 }
+  });
+  assert.equal(dom.webhookState.textContent, "webhookErrAuth");
+  assert.match(dom.webhookState.className, /\berror\b/);
+});
+
+test("失败留痕没带 errorKey：兜底文案，不能显示 undefined", () => {
+  /* 后台留痕的字段是拼出来的，少给一个键就该落到兜底，而不是把 "undefined" 摆在弹窗里 */
+  const dom = runWh({ raw: "https://h.example/x", last: { ok: false, kind: "weird", status: 418, at: 1 } });
+  assert.equal(dom.webhookState.textContent, "webhookErrOther");
+  assert.doesNotMatch(dom.webhookState.textContent, /undefined/);
+});
+
+test("renderWebhook 用到的控件在 popup.html 里都在，状态行默认藏着", () => {
+  const ids = [...WH_FN_SRC.matchAll(/\$\("([A-Za-z0-9_]+)"\)/g)].map((m) => m[1]);
+  assert.ok(ids.length >= 4, `只切出 ${ids.length} 个控件 id，本条是空跑`);
+  for (const id of new Set(ids)) {
+    assert.ok(POPUP_HTML.includes(`id="${id}"`), `popup.js 用 $('${id}')，HTML 里没有这个控件（运行时 $ 返回 null 直接抛）`);
+  }
+  assert.match(POPUP_HTML, /<div id="webhookRow"[^>]*\bhidden\b/, "状态行默认不藏着：没填地址的用户白占一行高度");
+});
+
+test("两个颜色类在 CSS 里真的存在：类挂上了却没样式等于没有反馈", () => {
+  const CSS = readFileSync(
+    new URL("../../tab-auto-refresh/popup.css", import.meta.url),
+    "utf8"
+  ).replace(/\r\n/g, "\n");
+  for (const cls of ["ok", "error"]) {
+    assert.ok(CSS.includes(`.wx-state.${cls}`), `.wx-state.${cls} 没了，${cls} 态跟灰态长得一样`);
+  }
+});
+
+test("renderWebhook 的四处调用各在各自的事件里", () => {
+  /* 定义那一行也写成 renderWebhook() {，所以只数独占一句的调用 */
+  const calls = [...POPUP_SRC.matchAll(/^\s*renderWebhook\(\);$/gm)];
+  assert.equal(calls.length, 4, `调用点该是 4 处（初绘、改地址、点测试、留痕变化），实到 ${calls.length} 处`);
+  /* 初绘必须紧跟在地址回填之后：它读的是输入框当前值，排在前面就等于永远显示"未配置" */
+  const fill = POPUP_SRC.indexOf('$("webhookUrlInput").value = settings.webhookUrl');
+  assert.ok(fill > 0 && POPUP_SRC.indexOf("renderWebhook();", fill) - fill < 80, "初绘没紧跟在地址回填后面");
+  /* 改了 webhookLast 的两个地方要各跟一次重绘，否则状态行停在旧值上 */
+  for (const needle of ["webhookLast = res.result;", "webhookLast = changes.webhookLastResult.newValue || null;"]) {
+    const at = POPUP_SRC.indexOf(needle);
+    assert.ok(at > 0, `找不到 ${needle}，赋值点被改写后这条循环就空跑了`);
+    assert.ok(POPUP_SRC.slice(at, at + 120).includes("renderWebhook();"), `${needle} 后面没重绘`);
+  }
+  /* 读盘若少了这一个键，弹窗会永远停在"等待首次推送" */
+  const rs = sliceFunction(POPUP_SRC, "refreshState");
+  assert.match(rs, /"webhookLastResult"/, "refreshState 不再读 webhookLastResult");
+  assert.match(rs, /webhookLast = local\.webhookLastResult \|\| null/);
+});
+
 /* ---------- 红→绿对照（2026-09-19 实跑，node v24.21.0） ----------
 
    做法：只把 popup.js 复制到仓库外一份、逐处改坏，TAR_POPUP_SRC 指给本文件跑。
@@ -186,4 +304,28 @@ test("密钥输入框是 type=\"password\"：旁边有人时读不到用户粘�
         这一处先按"整仓复制、在副本里跑"验过一遍，又用 TAR_POPUP_HTML 指着一份临时改坏的
         popup.html 再跑一遍——新增的重定向入口本身也要跑一次，否则它就是 A6 记的那种死入口
 
-   八处各只红在它点名的那一条（处 3 两条），没有一条变异能同时躲过顺序守卫与早退守卫。 */
+   ---------- A8（webhook 状态行）的对照，同一天实跑，脚本在仓库外 ctl-a8/ ----------
+   这批变异要同时落在 popup.js / popup.html / popup.css，而"没填地址时抹掉残留文字"这一条
+   光靠文本变异测不到（见处 10），所以改走整仓复制、在副本里跑本文件；
+   TAR_POPUP_SRC 与 TAR_POPUP_HTML 两个入口本轮没用上，它们在处 1~8 已被跑过，不是死入口。
+
+   处 9  P1 地址非法时不藏测试按钮          → 红 1 条：地址非法…
+   处 10 P2 地址清空时不抹状态文字
+        → 第一次跑是绿的：假 DOM 的 textContent 初值就是 ""，"抹掉"与"什么都不做"拿到同一个值。
+          把初值换成上一轮残留（"webhookErrAuth" + error 类）之后重跑 → 红 1 条：没填地址…
+          顺带让灰态那条 doesNotMatch(className, /ok|error/) 也真的有了区分度
+   处 11 P3 成功/失败判据从 ok 换成 status
+        → 第一次跑也是绿的：那条用例喂的失败留痕没带 status（真实留痕必带），
+          于是 status 为 undefined、照旧落到失败分支。补上 status: 403 / 418 之后
+          → 红 2 条：最近一次投递失败…、失败留痕没带 errorKey…
+        两处"第一次绿"是同一个形状：桩件比真实输入更干净，判据退化就看不出来
+   处 12 P4 读盘清单里的键写成 webhookLast  → 红 1 条：renderWebhook 的四处调用…（它兼查 refreshState）
+   处 13 P5 删掉 init 那次初绘              → 红 1 条：同上一条（调用点数从 4 变 3）
+   处 14 P6 留痕变化后不重绘                → 红 1 条：同上一条（needle 循环查不到紧随的重绘）
+        13/14 红的是同一条用例，但红的原因不同：一处数个数、一处查相邻性，缺一个断言另一处就溜过去
+   处 15 H1 状态行去掉 hidden               → 红 1 条：renderWebhook 用到的控件在 popup.html 里都在…
+   处 16 H2 状态文字控件改名                → 红 1 条：同上那条（id 覆盖那半边）
+   处 17 H3 删掉 CSS 里的 .wx-state.ok      → 红 1 条：两个颜色类在 CSS 里真的存在…
+
+   处 1~8 各只红在它点名的那一条（处 3 两条），没有一处变异能同时躲过顺序守卫与早退守卫；
+   处 9~17 同样各红 1~2 条，且红的全是本条点名的用例——两处绿是补了输入形状才变红的。 */

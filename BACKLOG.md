@@ -14,7 +14,7 @@
 
 2026-09-19 当日累计：A1（焦点三态）、A2（公共后缀越界采集）、A3（检测只覆盖顶层框架）、
 A4（外发载荷带 query、凭据暴露面）、A5（弹窗不回填任务级字段）、A6（桩件十二条全部）、
-A7（`settings` 两条无锁读-改-写互相覆盖）、
+A7（`settings` 两条无锁读-改-写互相覆盖）、A8（webhook 失败无痕、没有"发送测试"）、
 A9（`onMessage` 不认来源、设置键无白名单）、E1（本机 node 门禁）已修完并移进 `CHANGELOG.md`
 的 `[未发布]`，编号不复用。
 A6 第 8 条欠的 cookie 执行器用例随 A2 一起交付（`tests/tab-auto-refresh/cookie-backup.test.mjs` 13 条）；
@@ -26,39 +26,32 @@ A3 新增 `frame-scan.test.mjs` 27 条（多框架聚合与逐框架判定的纯
 A4 剪枝落在 `notifyOut` 一处（不是三个调用点），`outbound.test.mjs` 补 4 条事件级用例并把全文件通用的
 任务网址换成带令牌的形状、`logic.test.mjs` 补 `outboundUrl` 1 条、`popup-repopulate.test.mjs` 补 1 条
 扫 `popup.html` 的守卫，七处对照记在两个文件末尾。
-下一条动手是 A8。其余条目原样在账。
+A8 两个出口对齐：`outbound.test.mjs` 补 10 条（留痕形状、覆盖、正文里的拒绝、逐码归桶、不留痕的两种、
+两出口互不干扰、"发送测试"的边界）、`logic.test.mjs` 补 5 条 `webhookResultOf` 纯函数用例、
+`popup-repopulate.test.mjs` 补 10 条（切 `renderWebhook` 真实源码 + 扫 `popup.html` 控件与 `popup.css` 颜色类）、
+`message-gate.test.mjs` 补 1 条反向登记守卫（分发链每条弹窗专用分支都必须在 `POPUP_ONLY` 里），
+23 处对照记在这四个文件末尾，其中两处第一次跑是绿的、补了输入形状才红。
+下一条动手是 A10。其余条目原样在账。
 
 ## 优先级一览
 
 | 编号 | 优先级 | 一句话 | 状态 |
 | --- | --- | --- | --- |
-| A8 | P2 | webhook 失败无痕，且没有"发送测试" | 待做 |
 | A10 | P3 | 语言包内部自相矛盾（四项/三项、英文冒号/中文冒号） | 待做 |
 | A11 | P3 | 弹窗文本框只在失焦保存；测试按钮无 finally | 待做 |
 | A12 | P3 | SKIP 原因无痕；三处 `storage.local.get(null)` 全量扫描 | 待做 |
 | V1 | — | 2.1.0 真机手工验证（含下面几条只能真机验的检查） | 待做 |
 | E2 | — | `_code-review/` 门禁是否迁入入库路径 | 待定 |
 
-建议动手顺序：A8 → 其余。A6 排在最前面那条理由（要先有"能真的变红"的桩件）
-已经兑现，A1、A2、A3、A4、A5、A6、A7、A9 八条都已移进 `CHANGELOG.md`。
-
-## P2
-
-### A8 webhook 失败完全无痕，且没有与微信对等的"发送测试"
-
-- 位置：`background.js` 的 `postWebhook`，对照 `postWechat`（后者有 `wechatLastResult`、`errorKey`、弹窗显示）
-- `await fetch` 之后不看 `res.ok`（Discord webhook 过期、Slack 被踢都算成功）；不记录任何结果；
-  弹窗只有微信有测试按钮。三条不对称，同一后果：用户以为"配好了、在发"。
-- 改法：与微信同构——`{ok, status, errorKey, at}` 写 `chrome.storage.local` 的 `webhookLastResult`，
-  弹窗复用 `wechatState` 那套显示；补 `webhook-test` 消息类型（`ignoreToggle` 语义同微信：
-  只要求地址合法，不受事件勾选约束）。HTTP 状态分类放 `shared/logic.js` 做纯函数。
+建议动手顺序：A10 → A11 → A12。A6 排在最前面那条理由（要先有"能真的变红"的桩件）
+已经兑现，A1~A9 九条都已移进 `CHANGELOG.md`；P2 及以上已经没有待做条目，剩下三条都是 P3。
 
 ## P3
 
 ### A10 语言包内部自相矛盾
 
 - 位置：`tab-auto-refresh/_locales/zh_CN/messages.json`（en 同步检查同名键）
-- 键齐平由 `scripts/validate.mjs` 守着（两边各 159 键、无未引用/无缺失），问题在内容打脸：
+- 键齐平由 `scripts/validate.mjs` 守着（两边键数相同、无未引用/无缺失；具体数字每版都变，不抄在这里），问题在内容打脸：
   1. `wechatIntro` 说"一次拿到四项"，`guideStep1Body2` 说"复制三项"；
   2. `guideFixTemplate` 教用户用**英文冒号**，而 `wechatTplHint`、`wechatTplBody` 两条文案与
      `WECHAT_TEMPLATE_KEYS` 的注释、
@@ -92,7 +85,7 @@ A4 剪枝落在 `notifyOut` 一处（不是三个调用点），`outbound.test.m
 
 ## 只能真机验（V1）
 
-在 `chrome://extensions` 加载插件目录，按 `AGENTS.md` 验证清单第 5 条走一遍，本批新增三条：
+在 `chrome://extensions` 加载插件目录，按 `AGENTS.md` 验证清单第 5 条走一遍，本批新增 (c)~(h) 六条：
 
 - (c) 开着"尊重你的操作"，把某任务页设为所在窗口的活动页，然后把焦点切到别的应用，等 2~3 个刷新
   周期——它**必须照常刷新**（对应 A1）。
@@ -110,6 +103,10 @@ A4 剪枝落在 `notifyOut` 一处（不是三个调用点），`outbound.test.m
   由 `outbound.test.mjs` 钉住了，"落点还是不是用户要找的那一页"只有真机说得清。
   要验的是这件事对日常使用到底碍不碍事——不碍事就维持现状，碍事再谈怎么在不回吐 query
   的前提下把深链带上（记在 `CHANGELOG.md` 的 A4 那条里）
+- (h) 在 webhook 框里填一个合法地址，弹窗要多出"发送测试 + 状态"那一行（A8）。要看的是**弹窗仍然不出
+  现滚动条**：设置卡片本就贴着 600px 外框上限，这一行只在填了地址时出现、约 10px。本机没有 playwright，
+  `scripts/screenshot-popup.mjs` 跑不了，量不了整页高度；`popup-repopulate.test.mjs` 钉的是显隐判据与
+  控件齐备，"多出来这一行会不会把页面顶破"只有真机（或装回 playwright 后截图量一次）说得清
 
 既有缺口不变：开几个任务后重启浏览器或重新加载扩展，任务要全挂回原页面、不多开标签页、弹窗不卡住，
 且 DevTools 背景页 Alarms 里 `refresh-<id>` 与 `hb-<id>` 同时存在（缺 `hb-` 说明心跳又被排到写盘前面）。

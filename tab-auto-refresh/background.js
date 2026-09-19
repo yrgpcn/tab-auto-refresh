@@ -35,6 +35,7 @@ import {
   siteRoot,
   tabShowsUrl,
   tokenFresh,
+  webhookResultOf,
   wechatConfigState,
   wechatErrorKey,
   wechatTitleOf,
@@ -799,32 +800,69 @@ async function onKeywordHit(tabId, task, newly, present) {
    origin+pathname，query 不在外发面上）。
    ntfy 不在此列：它只在根端点解析 JSON，POST 到 /<主题> 会把整个 JSON 当正文存下，
    而载荷里没有 topic 字段、也改不了填根端点，所以它收到的是原始 JSON 文本。
-   调用方必须 await：fetch 要挂在被 await 的链路上，否则 SW 被回收时请求会被截断 */
-async function postWebhook(event, payload) {
+   调用方必须 await：fetch 要挂在被 await 的链路上，否则 SW 被回收时请求会被截断
+
+   结果一律留痕在 chrome.storage.local 的 webhookLastResult，与微信的 wechatLastResult 对等：
+   原先 fetch 回来连状态码都不看，Discord 的 hook 被删、Slack 的频道被踢都算成功，
+   用户以为"配好了、在发"。两种"本该不发"的早退刻意不留痕——没配地址、事件没勾上，
+   写一笔反而把"这个出口是关着的"说成失败 */
+const WH_LAST_KEY = "webhookLastResult";
+
+/* 最近一次 webhook 投递结果（弹窗据此给可见反馈）。只留最近一次，不堆积 */
+async function setWebhookResult(result) {
+  try {
+    await chrome.storage.local.set({
+      [WH_LAST_KEY]: Object.assign({ at: Date.now() }, result),
+    });
+  } catch (e) {
+    /* 反馈写不进去不能反过来影响推送本身 */
+  }
+}
+
+async function postWebhook(event, payload, opts) {
   try {
     const settings = await getSettings();
     const url = normalizeWebhookUrl(settings.webhookUrl);
     if (!url) return;
+    /* ignoreToggle 与微信侧同义：弹窗的"发送测试"只看地址合不合法。
+       webhook 没有总开关（地址非空即开），所以这里绕过的只有事件勾选 */
+    const forced = !!(opts && opts.ignoreToggle);
     const events = notifyEventsOf(settings);
-    if (!events.includes(event)) return;
+    if (!forced && !events.includes(event)) return;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 15000);
+    let status = null;
+    let text = "";
     try {
       const body = Object.assign({ type: event, ts: Date.now() }, payload);
       body.content = payload.content || "";
       body.text = payload.text || payload.content || "";
       body.body = payload.body || payload.content || "";
-      await fetch(url, {
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         signal: ctrl.signal,
       });
+      status = res.status;
+      /* 只在 2xx 这一路读正文：那一路要靠正文里的 "ok":false 才认得出
+         "状态码说成功、接收端说没有"。非 2xx 按状态码归桶就够了，不必再信第三方写的字 */
+      if (res.ok) text = await res.text().catch(() => "");
     } finally {
       clearTimeout(timer);
     }
+    const verdict = webhookResultOf(status, text);
+    await setWebhookResult(Object.assign({ event }, verdict));
   } catch (e) {
-    /* 辅助链路：失败静默，绝不影响主流程 */
+    /* 到这里只剩"根本没拿到应答"：网络被拒、DNS 失败、15 秒到点 abort。
+       与微信侧同一处理——失败要留痕，但绝不影响主流程 */
+    await setWebhookResult({
+      ok: false,
+      kind: "network",
+      status: null,
+      errorKey: "webhookErrNetwork",
+      event,
+    });
   }
 }
 
@@ -1831,6 +1869,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await postWechat("test", {}, { ignoreToggle: true });
         const r = await chrome.storage.local.get(WX_LAST_KEY);
         sendResponse({ ok: true, result: r[WX_LAST_KEY] || null });
+      } else if (msg.type === "webhook-test") {
+        /* 与上一条对等：webhook 原先只有微信有测试按钮，配好之后能不能通只能等事件真发生。
+           句子取自 webhookTestBody，不由调用方给——否则弹窗能把任意文本塞进外发载荷 */
+        await postWebhook(
+          "test",
+          { content: chrome.i18n.getMessage("webhookTestBody") },
+          { ignoreToggle: true }
+        );
+        const r = await chrome.storage.local.get(WH_LAST_KEY);
+        sendResponse({ ok: true, result: r[WH_LAST_KEY] || null });
       } else if (msg.type === "resume-task") {
         await resumeTaskAuto(msg.tabId);
         sendResponse({ ok: true });

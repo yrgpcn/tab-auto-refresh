@@ -47,7 +47,7 @@
 
 ### 存储
 
-- `chrome.storage.local`：`tasks`（tabId → `{intervalSec, createdAt, url, keywords?, onHit?, notifiedKeys?, autoPaused?}`，旧数据的单串 `keyword` 由 `getTaskKeywords` 兼容读取，后台与弹窗共用这一个入口）、`pausedAll`、`sessionProbe`（根域 → `{sus, lost, lastNotifiedAt}`）、`cookieBackup:<host>`、`cookieBackupWarnedOnce`、`wechatLastResult`
+- `chrome.storage.local`：`tasks`（tabId → `{intervalSec, createdAt, url, keywords?, onHit?, notifiedKeys?, autoPaused?}`，旧数据的单串 `keyword` 由 `getTaskKeywords` 兼容读取，后台与弹窗共用这一个入口）、`pausedAll`、`sessionProbe`（根域 → `{sus, lost, lastNotifiedAt}`）、`cookieBackup:<host>`、`cookieBackupWarnedOnce`、`wechatLastResult`、`webhookLastResult`（两个出口各一份最近一次投递结果，只存本机、不走 sync）
 - `chrome.storage.session`：跨 SW 回收要活下来的运行时计数与标记，即 `rt:error:<tabId>` / `rt:captcha:<tabId>` / `rt:activity:<tabId>` / `rt:awake` / `wechatToken`。判断标准是要活过 SW 回收放这里，要活过浏览器重启才放 local
 - `chrome.storage.sync`：`settings`。默认值集中在 `shared/config.js` 的 `DEFAULT_SETTINGS`，弹窗与后台共用；sync 为空时会从 local 迁移旧设置
 - 后台的 `getSettings()` 带内存快照（`settingsCache` / `settingsLoading` / `settingsEpoch`）：一次任务页加载周期里它被调 5~7 次，原先每次都发两笔存储读。**新增的 `settings` 写入一律走 `patchSettings(partial)`，别自己 `get`/`set`**：它在 `withSettingsLock` 里读盘、合并、整份写回，读写两头各 `invalidateSettings()` 一次（读前不失效会拿过期快照当基座，把用户这次没碰的开关按旧值写回去；写后不失效则 `onChanged` 回流前的一切读取仍是写前的值）。`partial` 给函数时按当前设置决定增量、返回 `null` 即不写，"没变就不写"的判断因此与写盘同处一把锁。唯一例外是 `loadSettings` 的 local→sync 迁移（整份写入、只发生一次、且在 `getSettings` 调用栈内，走 `patchSettings` 等于自锁）。两把锁的方向是契约：`startTask` 在 `withTaskLock` 内 `await` 设置写盘（单向等待），设置锁内绝不排 `withTaskLock`，否则互相等死。失效点、串行、锁方向均由 `tests/tab-auto-refresh/settings-cache.test.mjs` 钉住，文件末尾记着红→绿对照与两处第一次不合格的对照
@@ -125,6 +125,8 @@
 - 微信平台的两条硬限制写死在常量与注释里，别凭直觉给大值。一是模板消息单个字段不超过 20 个字、不支持换行，超长由平台去掉且不给任何提示；二是模板正文里变量前必须有关键词加中文冒号，裸写变量会被平台整行丢弃，而接口照旧返回 errcode=0，用户收到的是一张空白卡片
 - 卡片标题用一套短事件名（`wechatEv*Short`），不复用弹窗复选框的长标签：标题要和站点一起挤在 20 字里，英文长标签会把预算吃光。站点放不下完整注册域时整段不显示，不给"…e.com"这样的碎片
 - 失败要留痕：错误码经 `wechatErrorKey` 翻成"该去哪改"的提示，最近一次结果写 `chrome.storage.local` 的 `wechatLastResult`，弹窗显示
+- webhook 那头同构：投递结果写 `local` 的 `webhookLastResult`（`{ok, kind, status, errorKey, event, at}`，只留最近一次），状态分类是 `shared/logic.js` 的纯函数 `webhookResultOf(status, text)`（纪律 1 的又一处落地：执行器只取事实，判据全在纯函数）。2xx 还要读正文，因为 Slack 那类接收端对"hook 已删除"照样回 200、失败只写在 `ok: false` 里；正文只看前 2000 字，非 2xx 一律不看正文。刻意**不**猜第三方纯文本错误（`no_service` 那一类）也不跟 302——宁可显示"200 成功"，也不要凭猜把正常投递报成失败，那样用户就不信这条状态行了。地址非法与事件没勾上这两种"本该不发"**一笔都不留痕**（配置态不是投递失败），这条是显式决定、由用例钉住
+- 两个出口都有「发送测试」（`wechat-test` / `webhook-test`，`ignoreToggle` 同语义：只要求凭据/地址本身能用，不受事件勾选与总开关约束），弹窗各自有一行条件显示的状态行，`{ok|error|} + 时刻` 的显示走同一套 `.wx-state`。**新增一条弹窗专用的 `onMessage` 分支必须同时登记进 `message-gate.test.mjs` 的 `POPUP_ONLY`**，该文件有一条扫分发链的守卫会红——"每条都拒"那条遍历的正是这张表，漏登记时它静默失去覆盖面
 - 凭据四项存在 `settings`（即 `chrome.storage.sync`），会随 Google 账号同步到其它桌面 Chrome，README 有说明。弹窗里密钥那一格是 `type="password"`（只挡回显，存储与同步一个字没变），这条由 `popup-repopulate.test.mjs` 扫 `popup.html` 源码钉住（该文件另给对照用加了 `TAR_POPUP_HTML` 重定向入口）
 
 ### 系统通知
@@ -149,6 +151,7 @@
 - 弹窗每秒重新拉 alarm 列表再重绘倒计时，因为 alarm 周期触发不会触发 `storage.onChanged`
 - 保存设置时要合并既有 `settings`，否则只改复选框会丢掉 `lastIntervalSec`
 - 当前标签页已有任务时，`init` 要把该任务的 `keywords`（走 `getTaskKeywords`，旧单串也认）、`onHit === "continue"`、实际间隔回填进输入控件（`populateTaskFields`）。不回填的后果是数据丢失而不是显示缺失：用户只能停掉再重开，而重开读的是空框，原来的关键词监控静默消失。回填只在 init 做一次、排在 `initPresetSelect()` 之后（要盖掉它按 `lastIntervalSec` 的预填），**不得挂到 `storage.onChanged` 的重绘回流上**——回流反复发生，挂上去会抹掉用户正在输入的字；没有任务时早退，一个字都不动。判据与顺序由 `tests/tab-auto-refresh/popup-repopulate.test.mjs` 钉住（切源码跑，popup 没有 DOM 库可测）
+- 两条状态行（`#wechatRow` / `#webhookRow`）都是"配了才出现"：整页贴着 600px 上限，平时不占高度，所以新增行一律走 `hidden` 而不是 CSS 折叠。状态文字统一挂 `.wx-state`（nowrap + ellipsis，文案必须短），颜色只有 `.wx-state.ok` / `.wx-state.error` 两种。`renderWebhook()` 刻意写成单个自包含函数（含地址非法那一半判断），因为门禁是按花括号配对切它的真实源码执行的，拆成两个函数就要多注入一个名字；它的用例同样记在 `popup-repopulate.test.mjs`，其中"假 DOM 的初值要带上一轮残留"是硬要求——初值全给空串时"清空"与"什么都不做"拿到同一个值，对照跑出来是绿的（该文件末尾处 10、处 11 两条教训）
 - i18n 通过 `data-i18n` / `data-i18n-placeholder` / `data-i18n-title` 注入，`title` 这条通道专门用来把开关的长解释挪出可见版面
 
 ### 跨 SW 实例的运行时状态

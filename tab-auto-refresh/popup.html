@@ -84,7 +84,13 @@
       <span class="label" data-i18n="webhookLabel"></span>
       <input id="webhookUrlInput" type="text" data-i18n-placeholder="webhookPlaceholder" data-i18n-title="webhookHint">
     </div>
-    <div id="webhookInvalid" class="hint error" hidden data-i18n="webhookInvalid"></div>
+    <!-- webhook 状态行：填了地址才出现（与 wechatRow 同法，平时不占高度——设置卡片贴着 600px 上限）。
+         同一行装两件事：地址非法时的红字（原先独占一行），以及最近一次投递结果 + 发送测试按钮。
+         地址非法时把按钮藏掉：往一个坏地址上点"测试"不会有任何结果，那是摆一个假按钮 -->
+    <div id="webhookRow" class="row wx-row" hidden>
+      <button id="webhookTestBtn" class="mini" type="button" data-i18n="webhookTestBtn"></button>
+      <span id="webhookState" class="wx-state"></span>
+    </div>
     <div class="row webhook-events">
       <label class="row-check compact">
         <input id="webhookEvSession" type="checkbox">

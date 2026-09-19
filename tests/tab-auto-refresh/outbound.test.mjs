@@ -98,6 +98,163 @@ test("地址非法一笔都不发", async () => {
   }
 });
 
+/* ---------- A8：webhook 投递结果要留痕 ----------
+   改之前 fetch 回来连状态码都不看：接收端删了 hook、把频道踢了，这一侧记的都是"没发生任何事"，
+   比记成失败更难查。下面这些用例钉的就是"每一次真发出去的投递都留下一笔"，
+   以及刻意**不**留痕的那两种"本该不发"（没配地址、事件没勾上）。 */
+
+const last = (env) => env.store.local.webhookLastResult;
+const whEnv = async () =>
+  boot({ settings: { webhookUrl: HOOK, notifyEvents: ["task-stopped"] } });
+/* task-stopped 是这文件里最便宜的触发口：refresh-7 到点时标签页已不在 */
+const sentHook = async (env, spec) => {
+  env.reply(spec);
+  await stoppedByAlarm(env);
+  return env;
+};
+
+test("投递成功也留痕：状态码、事件名、时间戳一起写", async () => {
+  const env = await sentHook(await whEnv(), { status: 204 });
+  assert.equal(sent(env).length, 1);
+  assert.equal(last(env).ok, true);
+  assert.equal(last(env).status, 204);
+  assert.equal(last(env).event, "task-stopped");
+  assert.equal(typeof last(env).at, "number", "没有时间戳就无法判断这是不是很久以前的一次成功");
+});
+
+test("第二次投递覆盖第一次：只留最近一次，不堆积", async () => {
+  /* 触发口用"发送测试"而不是再 fire 一次 alarm：上一笔 task-stopped 已经把任务删掉，
+     第二次到点根本不会外发，那样跑出来的是"没发出第二笔"的假绿 */
+  const env = await boot({ settings: { webhookUrl: HOOK, notifyEvents: [] } });
+  env.reply({ status: 204 });
+  await env.send({ type: "webhook-test" });
+  const first = last(env);
+  env.reply({ status: 500 });
+  await env.send({ type: "webhook-test" });
+  assert.equal(first.ok, true);
+  assert.equal(Array.isArray(last(env)), false, "写成数组了：弹窗那一行只能显示一条，其余是死数据");
+  assert.equal(last(env).ok, false, "新的一笔没盖掉旧的：那一行会一直停在上次成功");
+  assert.equal(last(env).kind, "server");
+});
+
+test("接收端回 200 却说没收到：只看 res.ok 会把这类记成成功", async () => {
+  /* Slack 对"hook 已删除 / 频道被踢"照样回 200，失败信号只在正文的 "ok":false 里 */
+  const env = await sentHook(await whEnv(), {
+    status: 200,
+    text: '{"ok":false,"error":"not_authed"}'
+  });
+  assert.equal(last(env).ok, false, "200 就当成功：这条改动的全部意义就在这儿");
+  assert.equal(last(env).kind, "rejected");
+  assert.equal(last(env).status, 200);
+  assert.equal(last(env).errorKey, "webhookErrRejected");
+});
+
+test("正常 200 与 204 不被正文猜成失败：正文里没有那句 ok:false", async () => {
+  for (const spec of [
+    { status: 200, text: "" },
+    { status: 200, text: "ok" },
+    { status: 200, text: '{"ok":true,"message":"sent"}' },
+    { status: 201, json: { id: "1" } }
+  ]) {
+    const env = await sentHook(await whEnv(), spec);
+    assert.equal(last(env).ok, true, `${JSON.stringify(spec)} 被判成失败：正则是过度匹配`);
+  }
+});
+
+test("按状态码归桶：每一桶都翻成用户照着能改的一句话", async () => {
+  for (const [status, kind, errorKey] of [
+    [401, "auth", "webhookErrAuth"],
+    [403, "auth", "webhookErrAuth"],
+    [404, "gone", "webhookErrGone"],
+    [410, "gone", "webhookErrGone"],
+    [400, "payload", "webhookErrPayload"],
+    [413, "payload", "webhookErrPayload"],
+    [429, "rate", "webhookErrRate"],
+    [500, "server", "webhookErrServer"],
+    [503, "server", "webhookErrServer"],
+    [418, "status", "webhookErrStatus"],
+    [302, "status", "webhookErrStatus"]
+  ]) {
+    const env = await sentHook(await whEnv(), { status, text: "" });
+    assert.equal(last(env).ok, false, `${status} 被记成成功`);
+    assert.equal(last(env).kind, kind, `${status} 归错桶`);
+    assert.equal(last(env).status, status);
+    assert.equal(last(env).errorKey, errorKey, `${status} 没翻译成文案键，弹窗只能显示一个数字`);
+  }
+});
+
+test("非 2xx 不读正文：404 的正文写着 ok:true 也算失败", async () => {
+  /* 钉的是刻意的不对称：2xx 那一路才需要正文，其余按状态码归桶就够，
+     不必再信第三方在错误页里写的任何字 */
+  const env = await sentHook(await whEnv(), { status: 404, text: '{"ok":true}' });
+  assert.equal(last(env).ok, false);
+  assert.equal(last(env).kind, "gone");
+});
+
+test("网络被拒：记 network 且状态码为 null，不假报成接口返回", async () => {
+  const env = await sentHook(await whEnv(), new Error("Failed to fetch"));
+  assert.equal(last(env).ok, false);
+  assert.equal(last(env).kind, "network");
+  assert.equal(last(env).status, null, "把没发生的请求写成有状态码，用户会去查那个不存在的码");
+  assert.equal(last(env).errorKey, "webhookErrNetwork");
+});
+
+test("没配地址、事件没勾上：这两种「本该不发」一笔都不留痕", async () => {
+  /* 留痕只针对真发出去的那一笔。关着的出口还去写"失败"，等于把"这是关的"说成"坏了" */
+  const off = await sentHook(
+    await boot({ settings: { webhookUrl: "", notifyEvents: ["task-stopped"] } }),
+    { status: 500 }
+  );
+  const notOn = await sentHook(
+    await boot({ settings: { webhookUrl: HOOK, notifyEvents: ["keyword"] } }),
+    { status: 500 }
+  );
+  for (const [name, env] of [["地址为空", off], ["事件没勾", notOn]]) {
+    assert.deepEqual(sent(env), [], `${name}却发了请求`);
+    assert.equal(env.store.local.webhookLastResult, undefined, `${name}却写了留痕`);
+    assert.deepEqual(
+      env.calls.localSet.filter((k) => k.includes("webhookLastResult")),
+      [],
+      `${name}却动了 webhookLastResult`
+    );
+  }
+});
+
+test("两个出口各写各的痕迹：webhook 失败不动微信那一行", async () => {
+  const env = await boot({
+    settings: Object.assign({}, WX, { webhookUrl: HOOK, notifyEvents: ["task-stopped"] })
+  });
+  env.reply((url) =>
+    tokenUrl(url)
+      ? { json: { access_token: "T1", expires_in: 7200 } }
+      : url.includes(HOOK)
+        ? { status: 404, text: "" }
+        : { json: { errcode: 0 } }
+  );
+  await stoppedByAlarm(env);
+  assert.equal(last(env).ok, false);
+  assert.equal(last(env).kind, "gone");
+  assert.equal(env.store.local.wechatLastResult.ok, true, "一个出口失败把另一个也标成红了");
+});
+
+test("「发送测试」不受事件勾选约束，也不惊动微信；真实事件照旧受约束", async () => {
+  const env = await boot({ settings: { webhookUrl: HOOK, notifyEvents: [] } });
+  env.reply({ status: 204 });
+  const r = await env.send({ type: "webhook-test" });
+  assert.equal(r.ok, true);
+  assert.equal(sent(env).length, 1, "测试按钮没发出去，或顺带把另一个出口也发了");
+  assert.equal(sent(env)[0].url, HOOK);
+  assert.equal(JSON.parse(sent(env)[0].init.body).type, "test");
+  /* 桩件的 getMessage 回显键名（刻意不翻译），所以这里断言的是"取自语言包"这个事实本身：
+     句子由后台给，弹窗不能把任意文本塞进外发载荷 */
+  assert.equal(JSON.parse(sent(env)[0].init.body).content, "webhookTestBody");
+  assert.equal(r.result.ok, true);
+  assert.equal(r.result.event, "test");
+  assert.equal(env.store.local.wechatLastResult, undefined, "webhook 的测试写了微信的键");
+  await stoppedByAlarm(env);
+  assert.equal(sent(env).length, 1, "测试绕过事件勾选，真实事件却也跟着绕过了");
+});
+
 /* ---------- 微信直连 ---------- */
 
 test("发送测试：先取 stable_token 再推模板消息，两头都留痕", async () => {
@@ -363,4 +520,19 @@ for (const [event, spec] of Object.entries(TRIGGERS)) {
         → 红 1：logic.test.mjs 的"outboundUrl 剪掉 query 与 hash，坏输入回空串"
      7) 密钥输入框改回 type="text"
         → 红 1：popup-repopulate.test.mjs 的"密钥输入框是 type=password"
-   七处每处都只红在它点名的那些条上，没有一处能把整份文件带崩。 */
+   七处每处都只红在它点名的那些条上，没有一处能把整份文件带崩。
+
+   ---------- A8（webhook 留痕与"发送测试"）的对照，同一天实跑，脚本在仓库外 ctl-a8/ ----------
+   整仓复制到仓库外，改坏副本里的 background.js，在副本里同时跑 outbound 与 message-gate
+   （后者是"新分支必须过来源守卫"的顺带检查）。基线（四个文件一起跑）122 条全绿。
+     B1 成功不留痕，只有失败才写   → 红 4：投递成功也留痕、第二次投递覆盖、正常 200 与 204…、发送测试。
+        message-gate 全绿——它不看留痕
+     B2 地址没配也写一条失败        → 只红 1：没配地址、事件没勾上…（这一条钉的是"本该不发就一笔不留"）
+     B3 ignoreToggle 失效           → 红 2：发送测试（正主）+ 第二次投递覆盖。
+        第二条是顺带红：那条用"发送测试"连点两次来制造第二次投递，绕过位没了它就再也发不出去
+     B4 webhook-test 的响应不带 result → 只红 1：发送测试（弹窗拿不到结果，状态行停在旧值）
+     B5 留痕键名写成 webhookLast    → 红 8：凡是去 local.webhookLastResult 读结果的那几条，
+        含"两个出口各写各的痕迹"。而「发送测试」不红——后台写与回读用的是同一个错键，
+        自洽；只有跨到弹窗那一侧的读者才发现。所以键名必须由存盘侧与读取侧各钉一次
+     B6 2xx 不读正文、交空串给分类器 → 只红 1：接收端回 200 却说没收到。
+        与逻辑层的 L1 红在同一条语义上，但一个坏在分类器、一个坏在执行器，两道各钉一头 */

@@ -32,6 +32,8 @@ let msgTimer = null;
 let renderSeq = 0;
 /* 最近一次微信推送结果（后台写 storage.local），用于"静默失败也要看得见" */
 let wechatLast = null;
+/* 同一个理由的第二份：webhook 原先连状态码都不看，投递失败在这台机器上不留任何痕迹 */
+let webhookLast = null;
 
 function msg(key, subs) {
   return chrome.i18n.getMessage(key, subs) || key;
@@ -101,7 +103,12 @@ async function refreshState() {
     /* 兼容 1.1.0 及之前存在 local 里的设置 */
     data = await chrome.storage.local.get("settings");
   }
-  const local = await chrome.storage.local.get(["tasks", "pausedAll", "wechatLastResult"]);
+  const local = await chrome.storage.local.get([
+    "tasks",
+    "pausedAll",
+    "wechatLastResult",
+    "webhookLastResult"
+  ]);
   tasks = local.tasks || {};
   const stored = data.settings || {};
   /* 与后台共用同一份兼容逻辑（shared/logic.js）：1.7.0 的 webhookEvents 勾选
@@ -109,6 +116,7 @@ async function refreshState() {
   settings = normalizeStoredSettings(stored, DEFAULT_SETTINGS);
   pausedAll = !!local.pausedAll;
   wechatLast = local.wechatLastResult || null;
+  webhookLast = local.webhookLastResult || null;
   await syncAlarms();
 }
 
@@ -392,11 +400,27 @@ async function saveSettings() {
   });
 }
 
-/* 后台对非法 webhook 地址是静默忽略的（normalizeWebhookUrl → "" → 直接 return），
-   不在这里说一声，用户会以为"配好了、在发"。纯本地校验，不发任何网络请求。 */
-function renderWebhookValidity() {
+/* webhook 状态行，三件事按"用户当场能修的优先"排：
+   地址非法 > 还没发过 > 最近一次投递的成败。
+   后台对非法地址是静默忽略的（normalizeWebhookUrl → "" → 直接 return，那属于配置态而不是
+   投递失败，不留痕），所以这一半只能在这儿判；投递结果那一半来自后台写的 webhookLastResult。
+   地址非法时连测试按钮一起藏掉：往坏地址上点"测试"不会有任何结果，那是摆一个假按钮。
+   刻意写成单个自包含函数：弹窗门禁按花括号切源码跑，拆成两个函数就要多注入一个名字 */
+function renderWebhook() {
   const raw = $("webhookUrlInput").value.trim();
-  $("webhookInvalid").hidden = !(raw && !normalizeWebhookUrl(raw));
+  const broken = !!raw && !normalizeWebhookUrl(raw);
+  let st = null;
+  if (raw) {
+    if (broken) st = { text: msg("webhookInvalid"), cls: "error" };
+    else if (!webhookLast) st = { text: msg("webhookStateIdle"), cls: "" };
+    else if (webhookLast.ok) {
+      st = { text: msg("webhookStateOk", [fmtClock(webhookLast.at)]), cls: "ok" };
+    } else st = { text: msg(webhookLast.errorKey || "webhookErrOther"), cls: "error" };
+  }
+  $("webhookRow").hidden = !st;
+  $("webhookTestBtn").hidden = !st || broken;
+  $("webhookState").textContent = st ? st.text : "";
+  $("webhookState").className = "wx-state" + (st && st.cls ? " " + st.cls : "");
 }
 
 /* 微信状态：优先报"配置不全"（用户能立刻修的本地问题），
@@ -452,7 +476,7 @@ async function init() {
   $("keepAwakeCheck").checked = !!settings.keepAwake;
   $("captchaGuardCheck").checked = settings.captchaGuard !== false;
   $("webhookUrlInput").value = settings.webhookUrl || "";
-  renderWebhookValidity();
+  renderWebhook();
   {
     const evs = notifyEventsOf(settings);
     $("webhookEvSession").checked = evs.includes("session-lost");
@@ -513,13 +537,32 @@ async function init() {
   $("keepAwakeCheck").addEventListener("change", saveSettings);
   $("captchaGuardCheck").addEventListener("change", saveSettings);
   $("webhookUrlInput").addEventListener("change", () => {
-    renderWebhookValidity();
+    renderWebhook();
     saveSettings();
   });
   $("webhookEvSession").addEventListener("change", saveSettings);
   $("webhookEvKeyword").addEventListener("change", saveSettings);
   $("webhookEvStopped").addEventListener("change", saveSettings);
   $("webhookEvPaused").addEventListener("change", saveSettings);
+  /* webhook 的"发送测试"：与微信那条对等，配好之后不必等某个事件真发生才知道通不通 */
+  $("webhookTestBtn").addEventListener("click", async () => {
+    const btn = $("webhookTestBtn");
+    btn.disabled = true;
+    btn.textContent = msg("webhookTestSending");
+    try {
+      /* 与微信侧同一个时序理由：点按钮必然先让地址框失焦，弹窗会先发 save-settings，
+         而它在后台自己也要 await 一次 getSettings 才写盘。不串起来的话测试读的是旧地址 */
+      await saveSettings();
+      const res = await send({ type: "webhook-test" });
+      if (res && res.result) {
+        webhookLast = res.result;
+        renderWebhook();
+      }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = msg("webhookTestBtn");
+    }
+  });
 
   /* 微信直连：开关即时保存并刷新状态行；凭据在二级视图里填，change（失焦/回车）才写盘 */
   $("wechatEnabledCheck").addEventListener("change", () => {
@@ -579,6 +622,10 @@ async function init() {
     if (changes.wechatLastResult) {
       wechatLast = changes.wechatLastResult.newValue || null;
       renderWechat();
+    }
+    if (changes.webhookLastResult) {
+      webhookLast = changes.webhookLastResult.newValue || null;
+      renderWebhook();
     }
     if (!changes.tasks && !changes.pausedAll && !changes.settings) return;
     await refreshState();

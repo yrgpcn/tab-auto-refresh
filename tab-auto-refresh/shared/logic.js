@@ -436,6 +436,46 @@ export function normalizeWebhookUrl(u) {
   }
 }
 
+/* webhook 回执分类（纯函数，纪律 1）：输入是已经取到的 HTTP 状态与响应正文，
+   输出 { ok: true } 或 { ok: false, kind, errorKey }。弹窗只把 errorKey 翻成文案，
+   kind 是留在存储里给排障用的粗分类，与微信侧 wechatLastResult 的 kind 同义。
+   errorKey 与 wechatErrorKey 同一路数——给用户的是"该去哪改"，不是一个数字。
+
+   为什么 2xx 还要读正文：Slack 那类接收端对"hook 已删除 / 频道被踢"照样回 200，
+   失败信号只在正文里的 "ok":false。只看 res.ok 会把这类失败记成成功，
+   而"外发失败原来完全无痕"正是这条要修的东西。
+   刻意**不**去认 Slack 的纯文本错误（"no_service" 那一类）：正文来自第三方，
+   判据一开始按字面猜，绿和红就都不再可信——宁可显示成"200 成功"，也不要凭猜把一次
+   正常投递报成失败，那样用户会被训练成不信任这条状态行。
+   非 2xx 一律不看正文，只按状态码归桶。
+   正文截到前 2000 字再判：填错的地址可能指向一个大文件，而正常 webhook 的回执就一行 JSON。
+   代价是标记埋在 2000 字之后时按成功记，这条边界由 logic.test 钉着，别当成"读了全量正文" */
+export const WEBHOOK_STATUS_BUCKETS = [
+  [[401, 403], "auth", "webhookErrAuth"],
+  [[404, 410], "gone", "webhookErrGone"],
+  [[400, 406, 413, 415, 422], "payload", "webhookErrPayload"],
+  [[429], "rate", "webhookErrRate"]
+];
+
+export function webhookResultOf(status, text) {
+  const s = Number(status);
+  if (!Number.isInteger(s) || s <= 0) {
+    return { ok: false, kind: "network", errorKey: "webhookErrNetwork" };
+  }
+  if (s >= 200 && s <= 299) {
+    const body = String(text == null ? "" : text).slice(0, 2000);
+    if (/"ok"\s*:\s*false/.test(body)) {
+      return { ok: false, kind: "rejected", status: s, errorKey: "webhookErrRejected" };
+    }
+    return { ok: true, status: s };
+  }
+  for (const [codes, kind, errorKey] of WEBHOOK_STATUS_BUCKETS) {
+    if (codes.includes(s)) return { ok: false, kind, status: s, errorKey };
+  }
+  if (s >= 500) return { ok: false, kind: "server", status: s, errorKey: "webhookErrServer" };
+  return { ok: false, kind: "status", status: s, errorKey: "webhookErrStatus" };
+}
+
 /* 关键词命中：大小写不敏感的包含判断；空关键词不判定 */
 export function keywordHit(text, keyword) {
   const k = String(keyword == null ? "" : keyword).trim().toLowerCase();

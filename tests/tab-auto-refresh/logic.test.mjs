@@ -21,6 +21,8 @@ import {
   newlyOf,
   presentOf,
   normalizeWebhookUrl,
+  webhookResultOf,
+  WEBHOOK_STATUS_BUCKETS,
   normalizeStoredSettings,
   isErrorStatus,
   decideBackupWrite,
@@ -462,6 +464,89 @@ test("normalizeWebhookUrl accepts only http(s) and trims", () => {
   assert.equal(normalizeWebhookUrl("not a url"), "");
 });
 
+/* ---------- A8：webhook 回执分类 ---------- */
+
+test("webhookResultOf：2xx 就算送到", () => {
+  assert.deepEqual(webhookResultOf(204, ""), { ok: true, status: 204 });
+  assert.deepEqual(webhookResultOf(200, ""), { ok: true, status: 200 });
+  assert.deepEqual(webhookResultOf(200, "ok"), { ok: true, status: 200 });
+  assert.deepEqual(webhookResultOf(200, '{"ok":true}'), { ok: true, status: 200 });
+  /* Telegram / ntfy 各有自己的成功形状，不认它们的正文键，只认 2xx */
+  assert.deepEqual(webhookResultOf(200, '{"result":{"message_id":1}}'), { ok: true, status: 200 });
+});
+
+test("webhookResultOf：2xx 里的 ok=false 翻成被拒", () => {
+  const r = webhookResultOf(200, '{"ok":false,"error":"not_authed","code":50313}');
+  assert.equal(r.ok, false);
+  assert.equal(r.kind, "rejected");
+  assert.equal(r.status, 200);
+  assert.equal(r.errorKey, "webhookErrRejected");
+  /* 冒号两侧的空白、嵌套层里的字段都得认出来 */
+  assert.equal(webhookResultOf(200, '{ "ok" : false }').kind, "rejected");
+  assert.equal(webhookResultOf(200, '{"a":{"ok":false}}').kind, "rejected");
+  /* 反例：正文里出现 ok 这个词但不是否定式，不能误判成被拒 */
+  assert.equal(webhookResultOf(200, '{"message":"all ok, isOkTrue"}').ok, true);
+  assert.equal(webhookResultOf(200, '{"ok":true,"errors":false}').ok, true);
+  assert.equal(webhookResultOf(200, null).ok, true);
+});
+
+test("webhookResultOf：非 2xx 按状态码归桶，一律不看正文", () => {
+  const table = [
+    [401, "auth", "webhookErrAuth"],
+    [403, "auth", "webhookErrAuth"],
+    [404, "gone", "webhookErrGone"],
+    [410, "gone", "webhookErrGone"],
+    [400, "payload", "webhookErrPayload"],
+    [406, "payload", "webhookErrPayload"],
+    [413, "payload", "webhookErrPayload"],
+    [415, "payload", "webhookErrPayload"],
+    [422, "payload", "webhookErrPayload"],
+    [429, "rate", "webhookErrRate"],
+    [500, "server", "webhookErrServer"],
+    [503, "server", "webhookErrServer"],
+    [418, "status", "webhookErrStatus"],
+    [302, "status", "webhookErrStatus"]
+  ];
+  for (const [code, kind, errorKey] of table) {
+    assert.deepEqual(
+      webhookResultOf(code, "ignored body"),
+      { ok: false, kind, status: code, errorKey },
+      `${code} 归错了桶`
+    );
+  }
+  /* 302 是"抓到了登录跳转页并回 200/302"这一类接错地址的现场，
+     fetch 自动跟随后拿到的最终状态照样可能是 200 —— 那属于 V1 的已知盲区，不在这里猜 */
+  /* 表与实现同源核对：上面那张表是手写的（照抄源码就等于什么都不钉），
+     所以这里反向比一次，源码新增一桶而测试没跟着加就红 */
+  for (const [codes, kind] of WEBHOOK_STATUS_BUCKETS) {
+    for (const code of codes) {
+      const row = table.find((r) => r[0] === code);
+      assert.ok(row, `源码把 ${code} 归进 ${kind} 桶，测试表里没有这一行`);
+      assert.equal(row[1], kind, `${code} 在测试表与源码里归的不是同一个桶`);
+    }
+  }
+});
+
+test("webhookResultOf：拿不到状态码就是网络层", () => {
+  for (const bad of [null, undefined, 0, -1, "abc", NaN, 2.5]) {
+    assert.deepEqual(webhookResultOf(bad, ""), {
+      ok: false,
+      kind: "network",
+      errorKey: "webhookErrNetwork"
+    }, `${String(bad)} 没归到 network`);
+  }
+});
+
+test("webhookResultOf：正文只看前 2000 字", () => {
+  /* 截断就在分类器自己身上（postWebhook 交的是整段正文）：填错的地址可能指向一个大文件，
+     而正常 webhook 的回执就一行 JSON。代价是标记埋在窗口之外就认不出来，
+     三条把这条代价的边界钉成显式约定 */
+  const marker = '{"ok":false}';
+  assert.equal(webhookResultOf(200, "x".repeat(1980) + marker).kind, "rejected", "窗口内的标记漏判了");
+  assert.equal(webhookResultOf(200, "x".repeat(1995) + marker).ok, true, "跨越截断点的标记不该被认出来");
+  assert.equal(webhookResultOf(200, "x".repeat(2000) + marker).ok, true, "窗口外的标记不该被认出来");
+});
+
 test("isErrorStatus covers server faults and missing pages only", () => {
   assert.ok(isErrorStatus(500) && isErrorStatus(503) && isErrorStatus(404));
   assert.ok(!isErrorStatus(200) && !isErrorStatus(206) && !isErrorStatus(403));
@@ -786,4 +871,30 @@ test("buildWechatMessage never emits a newline or an over-long field", () => {
    本文件直接 import 真源码，而 harness 的 TAR_BG 只换 background.js，所以对照必须
    把**整仓**复制到仓库外、在副本里改坏 tab-auto-refresh/shared/logic.js，再在副本里跑。
    五处改坏的完整红名单与两条"第一次跑是绿的"的教训记在 cookie-backup.test.mjs 末尾，
-   那里同时跑的是同一份副本，一份证据覆盖两个文件。 */
+   那里同时跑的是同一份副本，一份证据覆盖两个文件。
+
+   ---------- A8 的 webhookResultOf 对照（2026-09-19 实跑，脚本在仓库外 ctl-a8/）----------
+   同一种跑法：整仓复制到仓库外、在副本里改坏 tab-auto-refresh/shared/logic.js，
+   在副本里跑 logic.test.mjs 与 outbound.test.mjs（后者经 background 的相对 import 也吃到那份）。
+   基线（未改坏的副本，四个文件一起跑）122 条全绿。
+     L1 2xx 不读正文（判据换成 if (false)）
+        → 红 3：logic「ok=false 翻成被拒」+「只看前 2000 字」、outbound「接收端回 200 却说没收到」。
+          这一处等于回到 A8 之前的行为，outbound 那条红的就是本次要修的正主
+     L2 判据放宽成 /false/（正文里出现 false 就算被拒）
+        → 只红 logic「ok=false 翻成被拒」一条（它带三条反例）。outbound 全绿——
+          它的正文里只有那一句 false，宽判据与窄判据拿到同一个结果，
+          所以钉"判据过宽"的必须是纯函数那层，不是链路那层
+     L3 429 的 errorKey 写错成 webhookErrStatus
+        → 红 2：logic 归桶表 + outbound 归桶表，两边各查一次同一件事
+     L4 去掉 .slice(0, 2000)
+        → 只红 logic「正文只看前 2000 字」。这条是"把代价写成显式约定"的那类断言：
+          行为更宽松了，但边界挪动没人知道
+     L5 2xx 区间收窄到 200~203（204 掉进兜底桶）
+        → 红 4：logic「2xx 就算送到」+ outbound 三条（成功留痕、覆盖、发送测试）。
+          ntfy 与部分自建接收端回的就是 204，这一处会把正常投递报成失败
+     L6 去掉状态码地板（s <= 0 不再算网络层）
+        → 只红 logic「拿不到状态码就是网络层」：0 从 network 掉进 status 兜底桶
+     L7 源码新增一桶 451 而测试表没跟着加
+        → 只红 logic「非 2xx 按状态码归桶」一条，且红的是末尾那个同源核对。
+          上面那张表是手写的，照抄源码就什么都钉不住，所以反向比一次：
+          新加桶忘了同步测试表，红的就是"忘了"这件事本身 */

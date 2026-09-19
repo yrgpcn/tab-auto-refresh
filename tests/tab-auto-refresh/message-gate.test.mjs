@@ -79,6 +79,7 @@ const POPUP_ONLY = [
   { type: "toggle-pause-all" },
   { type: "save-settings", msg: { settings: { keepAlive: false } } },
   { type: "wechat-test" },
+  { type: "webhook-test" },
   { type: "resume-task", msg: { tabId: 7 }, task: { autoPaused: true } }
 ];
 
@@ -175,6 +176,25 @@ test("页面侧消息类型与 FROM_PAGE_TYPES 齐平：新增一条得同步登
   }
 });
 
+test("分发链里每条弹窗专用分支都登记在 POPUP_ONLY：新增分支漏登记就红", () => {
+  /* 上一条守"页面能发的类型要登记"，这条守另一半：背景里新写一条分支而 POPUP_ONLY 没加，
+     那条分支就不再被"页面来源要拒"覆盖，测试却照样全绿。A8 加 webhook-test 时就是这么露出来的 */
+  const handled = [...BG_SRC.matchAll(/msg\.type === "([a-z-]+)"/g)].map((m) => m[1]);
+  assert.ok(handled.length >= 6, `只从分发链切出 ${handled.length} 个类型，needle 失效了，本条是空跑`);
+  const pageTypes = BG_SRC.slice(
+    BG_SRC.indexOf("const FROM_PAGE_TYPES = new Set("),
+    BG_SRC.indexOf("chrome.runtime.onMessage.addListener")
+  );
+  assert.ok(pageTypes.length > 20, "没切到 FROM_PAGE_TYPES，本条是空跑");
+  for (const t of new Set(handled)) {
+    if (pageTypes.includes(`"${t}"`)) continue;
+    assert.ok(
+      POPUP_ONLY.some((c) => c.type === t),
+      `${t} 是弹窗专用分支却没进 POPUP_ONLY，来源守卫对它没有覆盖用例`
+    );
+  }
+});
+
 test("守卫排在分发链最前面，新增分支自动在守卫之后", () => {
   const guard = BG_SRC.indexOf('if (sender && sender.tab && !FROM_PAGE_TYPES.has(');
   const firstBranch = BG_SRC.indexOf('if (msg.type === "prune-now")');
@@ -208,4 +228,13 @@ test("守卫排在分发链最前面，新增分支自动在守卫之后", () =>
      7 user-activity 改认 msg.tabId → 只红「msg 里带别人 id 也不算」
      8 FROM_PAGE_TYPES 漏登记 user-activity → 红 3 条：「页面两种照常」「user-activity 认 sender」
                            +「齐平」。前两条是功能真的被守卫掐死了（合法通道断），第三条才是本意：
-                           白名单与内容脚本实际发的类型对不上，表现就是这个静默拒 */
+                           白名单与内容脚本实际发的类型对不上，表现就是这个静默拒
+
+   ---------- A8 加的第 9 处（同一天实跑，脚本在仓库外 ctl-a8/）----------
+   跑法换了：A8 的变异要同时落在 background.js 与 tests/ 自己，TAR_BG/TAR_LOGIC 两个入口
+   换不到测试文件本身，所以整仓复制到仓库外、在副本里跑本文件（基线 122 条全绿，四个文件一起）。
+     9 POPUP_ONLY 漏登记 webhook-test → 只红 1 条：「分发链里每条弹窗专用分支都登记在 POPUP_ONLY」。
+        「每条都拒」照旧绿——它遍历的是 POPUP_ONLY 自己，少一条就少查一条，永远不会红。
+        这正是这条新守卫存在的理由：新增一条分发分支而忘了登记，表现是覆盖面静默缩水。
+        说明一下证据的边界：守卫与登记行是同一次改动里写的，没跑过"只写守卫、漏登记"那一版，
+        所以这条的红来自上面的第 9 处变异，不是来自当时的现场 */
