@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-/* 仓库级校验：JSON 可解析、JS 语法通过 node --check、manifest 与语言包键完整 */
+/* 仓库级校验：JSON 可解析、JS 语法通过 node --check、manifest 与语言包键完整、
+   文件与文案键的引用完整性（manifest / HTML / JS 三条通道，加"每条文案都有人引用"的反向判据）。
+   抽取判据的正则住在 scripts/validate-refs.mjs，那边有单测钉着；这里只做遍历与报账。 */
 
 import { spawnSync } from "node:child_process";
 import {
@@ -12,8 +14,15 @@ import {
   statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  htmlI18nKeys,
+  htmlLocalRefs,
+  jsMessageKeys,
+  manifestMsgKeys,
+  stringLiterals,
+} from "./validate-refs.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const problems = [];
@@ -177,6 +186,56 @@ for (const [path, manifest] of jsonFiles) {
       for (const untracked of res.stdout.split(/\r?\n/).filter(Boolean)) {
         problems.push(`${untracked}: 未纳入 git 跟踪，发布包会缺失该文件`);
       }
+    }
+  }
+}
+
+/* 名字层面的引用完整性。上面那一圈问的是"引用到的文件在不在"，这一圈问的是
+   "引用到的文案键在不在"，以及反过来"语言包里的键有没有一处都没提"。
+   三类失败全是静默的：键不存在时 chrome.i18n.getMessage 回空串，界面少一块而 CI 全绿；
+   HTML 的 src/href 写错了浏览器只在控制台报 404，弹窗看着像缺样式。
+   正向与反向是一夹：拼错键名要么"引用了没有的键"红，要么"这个键没人用"红，各堵一半 */
+for (const [path, manifest] of jsonFiles) {
+  if (!path.endsWith(join("manifest.json")) || !manifest) continue;
+  const pluginDir = dirname(path);
+  const localesDir = join(pluginDir, "_locales");
+  if (!manifest.default_locale || !existsSync(localesDir)) continue;
+  const messagesPath = join(localesDir, manifest.default_locale, "messages.json");
+  const messages = jsonFiles.get(messagesPath);
+  if (!messages) continue; /* JSON 错误与缺失已在上面记录 */
+  const known = new Set(Object.keys(messages));
+
+  const msgRefs = manifestMsgKeys(manifest);
+  for (const { path: field, key } of msgRefs) {
+    if (!known.has(key)) problems.push(`${path}: manifest ${field} 引用了语言包里没有的键 ${key}`);
+  }
+
+  const referenced = new Set(msgRefs.map((r) => r.key));
+  walk(pluginDir, (file) => {
+    if (file.startsWith(localesDir)) return;
+    const isHtml = file.endsWith(".html");
+    const isJs = /\.(js|mjs)$/.test(file);
+    if (!isHtml && !isJs) return;
+    const src = readFileSync(file, "utf8");
+    for (const key of stringLiterals(src)) referenced.add(key);
+    if (isHtml) {
+      for (const ref of htmlLocalRefs(src)) {
+        if (!existsSync(resolve(dirname(file), ref))) {
+          problems.push(`${file}: 引用了不存在的文件 ${ref}`);
+        }
+      }
+      for (const key of htmlI18nKeys(src)) {
+        if (!known.has(key)) problems.push(`${file}: data-i18n 引用了语言包里没有的键 ${key}`);
+      }
+    }
+    for (const key of jsMessageKeys(src)) {
+      if (!known.has(key)) problems.push(`${file}: getMessage 引用了语言包里没有的键 ${key}`);
+    }
+  });
+
+  for (const key of Object.keys(messages)) {
+    if (!referenced.has(key)) {
+      problems.push(`${messagesPath}: 键 ${key} 在插件源码里没有一处提到`);
     }
   }
 }

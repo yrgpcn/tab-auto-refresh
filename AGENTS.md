@@ -12,6 +12,13 @@
 - `.github/workflows/ci.yml`：push 与 PR 时用 Node 24 跑仓库校验与单元测试
 - `.github/workflows/release.yml`：tag 驱动发布，先跑校验与单测，再比对 tag 版本与 manifest 版本，任一失败即不发布
 - `scripts/validate.mjs` 仓库级校验（JSON、manifest、语言包、JS 语法、引用完整性、插件目录无未跟踪文件）；`scripts/screenshot-popup.mjs` 渲染弹窗截图，需要 playwright
+- 上面那条"引用完整性"的判据全在 `scripts/validate-refs.mjs`（五个纯提取器：`manifestMsgKeys` 深走整份
+  manifest 收 `__MSG_key__`、`htmlLocalRefs` 收本地 `src`/`href`、`htmlI18nKeys` 收 `data-i18n*` 三条通道、
+  `jsMessageKeys` 只收 `getMessage` 的第一个实参、`stringLiterals` 收单双引号字面量给反向判据用），
+  `validate.mjs` 只剩遍历与报账。纪律 1 在工具上同样成立的理由是"正则要有单测"：执行器没有 fixture
+  也没有 DOM，能判的那一半必须能单独 import。门禁 `tests/tab-auto-refresh/validate-refs.test.mjs`
+  （12 条，含四条通道各自的数量下限——下限只挡"对着空集合绿过去"），末尾记着 14 处对照的落点，
+  以及一处真实假报警的成因（三元条件里的 `"captcha"` 是拿去比值的、不是键，故 `jsMessageKeys` 先切分支）
 - `tests/` 单元测试放在仓库根，避免被打进插件 zip
 - `docs/` README 用的截图
 - `_code-review/` 是本地审核归档（多轮报告与回归脚本），被 `.gitignore` 忽略，不入库、不进 Release、新 clone 里不存在。所以本文件里引用 `_code-review/...` 的路径只在本地有效
@@ -22,7 +29,10 @@
 - Manifest V3 + 原生 JS，无构建步骤、无 npm 依赖
 - 许可证红线：本仓库是 MIT。tab-reloader 与 staying_alive 没有许可证（默认保留所有权利），Keep-Alive-Pro 是 GPL-3.0。对这些只能取思路、不得粘贴代码字面，注释里至多写"思路与 X 一致"。只有 MIT 项目（如 auto-refresh-extension）的片段可以借鉴，且要保留来源 URL 与版权声明
 - 提交信息用英文 Conventional Commits（feat / fix / docs / refactor / chore）
-- UI 默认中文，同时维护 `_locales/zh_CN` 与 `_locales/en`，两边键必须齐平
+- UI 默认中文，同时维护 `_locales/zh_CN` 与 `_locales/en`，两边键必须齐平。**新增一条文案必须同时在源码里
+  提到它**：`validate.mjs` 除"两份键齐平"外还跑正向（四处 `__MSG_`、`data-i18n*`、`getMessage` 字面量都得上
+  语言包）与反向（语言包里每条键都要在插件源码某处以字符串出现过）两头，只加文案没接线就 exit 1。
+  反向判据认不出注释——键名带引号写在注释里也算"提到"，这是刻意选的宽松面（宁可漏报也不去写一套认不出注释的切分）
 - 版本号在 `tab-auto-refresh/manifest.json` 维护
 - 发布：改 manifest 版本号并更新 CHANGELOG → 提交到 `main` → 打 tag `tab-auto-refresh/vX.Y.Z`（前缀勿改）→ 推 `main` 与 tag，Actions 自动打包、建 Release 并清理旧 Release 与 tag
 
@@ -173,7 +183,7 @@
 
 ## 验证清单
 
-1. `node scripts/validate.mjs`。它会遍历整个仓库根做 JS 语法检查，所以 `_code-review/` 里的脚本语法错也会让它 exit=1
+1. `node scripts/validate.mjs`。它会遍历整个仓库根做 JS 语法检查，所以 `_code-review/` 里的脚本语法错也会让它 exit=1；同一条理由适用于变异对照——**整仓副本必须放在仓库之外**，放在仓库里会被这次遍历当成待检文件（它还会报未跟踪文件）。
 2. `node --test "tests/**/*.test.mjs"`（引号必需）
 3. 改了对应功能后跑 `_code-review/` 里的回归脚本，清单与用法见 `_code-review/README.md`。这些脚本不在 CI 里跑，要手动跑；判退出码时别接管道（`| tail` 会把退出码换成 tail 的），需要看尾部输出就用 `${PIPESTATUS[0]}` 或先重定向到文件
 4. UI 改动后可用 `scripts/screenshot-popup.mjs` 重新生成 `docs/tab-auto-refresh/popup.png`，它的 `viewport.width` 必须与 `popup.css` 的 `body width` 一致，否则截图被裁
