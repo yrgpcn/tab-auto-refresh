@@ -12,7 +12,10 @@
      env.focusWindow(1 | null);                // 有焦点 / 浏览器退到后台（窗口还在）
      env.closeAllWindows();                    // 一个窗口都没有，这时 getLastFocused 才 reject
      env.setCookies([...]);                    // 放 cookie 数据，备份采集与还原用
-     env.reply({ status: 503 });               // 改 fetch 应答（数组=逐次给，Error=reject）
+     env.reply({ status: 503 });               // 改 fetch 应答（数组=逐次给，Error=reject，promise=挂住）
+     env.pendingFetch()[0].abort();            // 打断挂住的那笔外发，等价于后台那 15 秒超时到点
+     await settles(inflight)                   // 打断之后必须带上限地等落定，见文件末尾那条注释
+     env.calls.keepAwake                       // chrome.power 调用序列：["request","system"] / ["release"]
    env.chrome 可以被测试直接改（例如把 storage.sync.get 换成可控放行的挂起读）。
    桩件的 storage.set 不做 onChanged 回流：真实 Chrome 是异步回流的，
    "写完立刻读"和"外部改动回流后再读"两条路要各自单独测，不能互相顶包。
@@ -57,7 +60,11 @@ export function makeEnv() {
     cookieGet: [],
     cookieSet: [],
     /* 每条外发请求都记下来：请求形状（Range 的写法、credentials、redirect）本身就是门禁对象 */
-    fetch: []
+    fetch: [],
+    /* 防休眠锁的调用序列：request 与 release 都记，形状与 alarmsCleared 同形。
+       "一个 SW 生命周期最多 request 一次""释放那一头无条件"这两条判据只能靠序列断言，
+       数总量数不出来（E3 之前这里是两个空函数，applyKeepAwake 整段零覆盖） */
+    keepAwake: []
   };
   const listeners = {
     changed: [],
@@ -95,30 +102,76 @@ export function makeEnv() {
   /* fetch 桩件。真实 MV3 service worker 里 fetch 一定在，而桩件里没有——于是静默心跳、
      postWebhook、postWechat 三条外发链路一进 fetch 就 ReferenceError，被各自外层的 try
      吞掉，主体分支从来没被执行过，用例照样全绿（A6 第 9 条）。
-     建模的三条规矩，每条都决定某段代码是"看着对"还是"真对"：
+     建模的规矩，每条都决定某段代码是"看着对"还是"真对"：
        - ok 由 status 推出来，绝不恒真：心跳侧的错误页暂停、掉线信号、静默自愈全看状态码
        - url 是**跟随重定向之后**的最终地址（looksLikeLoginPage 判的就是它），
          用例用 { url: "..." } 表达"心跳被踢到登录页"
        - 网络失败与超时是 reject：把 Error 当作应答值即可
-     应答可以是数组：按调用次序逐条给，用完之后重复最后一条（416 重试、令牌重取都靠它）。
-     已知缺口：init.signal 只记录不兑现，所以"15 秒到点 abort"这条没有建模，
-     要测超时得连桩件一起改 */
+       - 应答可以是数组：按调用次序逐条给，用完之后重复最后一条（416 重试、令牌重取都靠它）
+       - 应答可以是**一个由用例握着的 promise**（E3 补的）：await 它，这段挂起就是
+         "外发还没回来时后台在做什么"的现场本身。A15 结案时是靠每条用例自己覆写
+         globalThis.fetch 绕过去的，那是一次性的局部绕法，现在收回桩件
+       - init.signal 要真兑现：后台三处外发各自上着 15 秒 AbortController，桩件不认 signal
+         就等于"到点也不会 abort"，超时那一支仍然测不出。未决的请求列在 env.pendingFetch()，
+         句柄上的 abort() 手动打断，形状与真实被 abort 的 fetch 一样（reject AbortError），
+         用例因此不必真等 15 秒 */
   let responder = null;
-  const fetchStub = async (resource, init) => {
-    const url = typeof resource === "string" ? resource : String((resource && resource.url) || "");
-    calls.fetch.push({ url, init: init || {} });
-    let spec = typeof responder === "function" ? responder(url, init || {}, calls.fetch.length - 1) : responder;
-    if (Array.isArray(spec)) spec = spec[Math.min(calls.fetch.length - 1, spec.length - 1)];
-    if (spec instanceof Error) throw spec;
-    spec = spec || {};
-    const status = spec.status === undefined ? 200 : spec.status;
+  const pendingFetches = [];
+  const abortError = () =>
+    Object.assign(new Error("The operation was aborted."), { name: "AbortError" });
+  const toResponse = (spec, url) => {
+    const s = spec || {};
+    const status = s.status === undefined ? 200 : s.status;
     return {
       ok: status >= 200 && status <= 299,
       status,
-      url: spec.url === undefined ? url : spec.url,
-      json: async () => clone(spec.json === undefined ? {} : spec.json),
-      text: async () => (typeof spec.text === "string" ? spec.text : "")
+      url: s.url === undefined ? url : s.url,
+      json: async () => clone(s.json === undefined ? {} : s.json),
+      text: async () => (typeof s.text === "string" ? s.text : "")
     };
+  };
+  const fetchStub = async (resource, init) => {
+    const url = typeof resource === "string" ? resource : String((resource && resource.url) || "");
+    const entry = { url, init: init || {} };
+    calls.fetch.push(entry);
+    const signal = entry.init.signal;
+    /* 出发之前信号就已经取消：真实 fetch 一个字节都不发出去，直接 reject */
+    if (signal && signal.aborted) throw abortError();
+    let spec = typeof responder === "function"
+      ? responder(url, entry.init, calls.fetch.length - 1)
+      : responder;
+    if (Array.isArray(spec)) spec = spec[Math.min(calls.fetch.length - 1, spec.length - 1)];
+    let answered = false;
+    let kick;
+    const gate = new Promise((_, reject) => {
+      kick = reject;
+    });
+    const abort = () => {
+      /* 只在还没应答时才打断：应答之后再 reject 这个 gate 就是无人接手的 rejection */
+      if (!answered) {
+        answered = true;
+        kick(abortError());
+      }
+    };
+    const handle = { url, abort };
+    pendingFetches.push(handle);
+    if (signal && signal.addEventListener) signal.addEventListener("abort", abort, { once: true });
+    let value;
+    try {
+      value = await Promise.race([
+        Promise.resolve(spec).then((v) => {
+          answered = true;
+          return v;
+        }),
+        gate
+      ]);
+    } finally {
+      const i = pendingFetches.indexOf(handle);
+      if (i >= 0) pendingFetches.splice(i, 1);
+      if (signal && signal.removeEventListener) signal.removeEventListener("abort", abort);
+    }
+    if (value instanceof Error) throw value;
+    return toResponse(value, url);
   };
 
   const area = (name) => ({
@@ -151,7 +204,6 @@ export function makeEnv() {
     }
   });
 
-  const noop = async () => {};
   /* 真实 Chrome 的每个事件对象都有 removeListener，桩件也要有：只给 addListener 的话，
      后台里任何"临时挂监听、完事摘掉"的写法（等待窗口就是这样）会在测试里抛
      not a function，而且是定时器回调里抛，表现为整条用例莫名失败 */
@@ -344,7 +396,15 @@ export function makeEnv() {
         return {};
       }
     },
-    power: { requestKeepAwake: noop, releaseKeepAwake: noop },
+    power: {
+      /* 真实 API 是同步的（可选回调），这里也同步返回 undefined，只多记一笔序列 */
+      requestKeepAwake: (type) => {
+        calls.keepAwake.push(["request", type]);
+      },
+      releaseKeepAwake: () => {
+        calls.keepAwake.push(["release"]);
+      }
+    },
     i18n: {
       getMessage: (key, subs) => (subs ? key + ":" + [].concat(subs).join(",") : key),
       getUILanguage: () => "zh-CN"
@@ -404,9 +464,15 @@ export function makeEnv() {
     /* 交给 bootBackground 装到 globalThis 上（后台是裸调 fetch 的） */
     fetch: fetchStub,
     /* 改 fetch 的应答：{status,url,json} 一个对象、一组按次序的对象（最后一条重复用）、
-       一个 Error（reject），或 (url, init, 第几笔) => 上述任意一种 */
+       一个 Error（reject）、一个**由用例握着的 promise**（挂住不回，直到用例自己放开或
+       从 env.pendingFetch() 打断），或 (url, init, 第几笔) => 上述任意一种 */
     reply(spec) {
       responder = spec;
+    },
+    /* 此刻还挂在外发上的请求（按发起次序，句柄只有 url 与 abort）。abort() 打断它
+       ——等价于后台那 15 秒 AbortController 到点。挂住的那一路不解除就会拖着事件循环 */
+    pendingFetch() {
+      return pendingFetches.slice();
     },
     get fetchCalls() {
       return calls.fetch;
@@ -478,3 +544,11 @@ export async function bootBackground(env) {
   env.markBoot();
   await import(BG + "?seq=" + ++importSeq);
 }
+
+/* E3：凡是"把一笔请求挂住、再叫停、然后等链路落定"的用例都要经过这里。
+   上限是必需的：后台三个出口各带一笔 15 秒 AbortController 计时器，桩件句柄的 abort()
+   不生效时计时器照样会在 15 秒后把请求推落定——用例于是"等得到结果"，只是每次慢 15 秒，
+   红不出来（实跑对照 H5 就是这个形状：红 0 条、心跳 15.7 秒 / 外发 30.3 秒）。
+   拒绝也算落定：这几条链路的外层 catch 会把失败吞成静默，判的是"有没有结束" */
+export const settles = (p, ms = 500) =>
+  Promise.race([p.then(() => true, () => true), new Promise((r) => setTimeout(() => r(false), ms))]);

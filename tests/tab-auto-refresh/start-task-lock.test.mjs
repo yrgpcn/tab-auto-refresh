@@ -6,9 +6,10 @@
    而**其它标签页的起停全排在同一把锁后面**。MV3 的 SW 若在等待中被回收，
    留下的就是 AGENTS.md 里那句"任务在、永不刷新"的僵尸。
 
-   为什么之前测不出来：桩件的 fetch 从不当场返回（见 BACKLOG E3，它没有 Promise 形态的应答），
-   所以"锁压在网络上面"这件事在门禁里结构上看不见。这里刻意在 boot 之后把 globalThis.fetch
-   换成永不 resolve 的桩——那是真实站点挂起时的形状，也是这条 bug 唯一能被跑出来的形状。
+   为什么之前测不出来：桩件的 fetch 从不当场返回，也不认 promise 型应答（见 BACKLOG E3），
+   所以"锁压在网络上面"这件事在门禁里结构上看不见。A15 结案时是靠每条用例在 boot 之后
+   自己覆写 globalThis.fetch 绕过去的——那是局部的、一次性的绕法，E3 已经把"挂住"收进桩件
+   （应答给一个用例握着的 promise），本文件现在用的就是那条一等形状。
    顺带一提：把 await notifyOut 改成裸甩不是修法，那笔外发丢的正是"会话掉线"这条通知。 */
 
 import assert from "node:assert/strict";
@@ -27,7 +28,7 @@ const PREV_LOSING = {
   cookies: [{ name: "sid", value: "v", domain: "shop.example.co.nz", path: "/", httpOnly: true }]
 };
 
-async function boot({ fetchHangs = false, cookies = [], backups = { [BACKUP_KEY]: PREV_LOSING } } = {}) {
+async function boot({ hangs = false, cookies = [], backups = { [BACKUP_KEY]: PREV_LOSING } } = {}) {
   const env = makeEnv();
   env.store.sync.settings = {
     cookieBackup: true,
@@ -42,20 +43,22 @@ async function boot({ fetchHangs = false, cookies = [], backups = { [BACKUP_KEY]
   env.putTab(9, "https://other.test/board");
   env.setCookies(cookies);
   await bootBackground(env);
-  env.hung = 0;
-  /* 覆盖必须在 bootBackground 之后：装桩件时它会把 globalThis.fetch 换成自己的那一个。
-     永不 resolve = 站点挂起；真实超时是 15 秒，测试里不打算等那么久 */
-  if (fetchHangs) {
-    globalThis.fetch = () => {
-      env.hung += 1;
-      return new Promise(() => {});
-    };
-  }
+  /* 挂起 = 应答给一个永不放开的 promise（桩件会 await 它，见 BACKLOG E3）。
+     真实那一头是 15 秒之后 abort，测试里不打算等那么久，所以也不放开它，
+     改用例自己收尾：hangUp() 把它打断，免得 15 秒计时器把整个文件拖住 */
+  if (hangs) env.reply(new Promise(() => {}));
   return env;
 }
 
+/* 收尾用：把还挂在外发上的请求一律打断。必须放在断言之后 */
+const hangUp = (env) => env.pendingFetch().forEach((h) => h.abort());
+
 const alarmsOf = (env) => env.calls.alarmsCreated.map(([name]) => name);
 const notifIds = (env) => env.calls.notifCreated.map(([id]) => id);
+/* 那笔外发是否**已经发出且仍未回来**：calls.fetch 只说明发过，
+   pendingFetch 才说明锁正压着它——A15 的现场要的是后者 */
+const hungCount = (env) => env.calls.fetch.length;
+const hungNow = (env) => env.pendingFetch().length;
 
 /* 等某个条件成立（后台那一串 await 全是已 resolve 的桩，几十毫秒内必然走到该走的地方）。
    等不到就返回 false：调用方拿它当"这条用例是不是空跑"的哨兵，而不是让测试默默超时 */
@@ -69,11 +72,12 @@ async function until(fn, ms = 1000) {
 }
 
 test("外发把网络挂住时，另一个标签页的「开始」照旧完成（A15）", async () => {
-  const env = await boot({ fetchHangs: true });
+  const env = await boot({ hangs: true });
   const first = env.send({ type: "start", tabId: 7, seconds: 300 });
-  first.catch(() => {}); /* 那笔永不 resolve 的外发：它挂住是现场本身，不是本用例的失败 */
-  /* 空跑哨兵：这一拍必须真的走到那笔外发。没走到就等于锁是空的，下面的断言全在为假原因通过 */
-  assert.ok(await until(() => env.hung > 0), "start 没有发出任何外发请求，本用例是空跑");
+  first.catch(() => {}); /* 那笔永不放开的外发：它挂住是现场本身，不是本用例的失败 */
+  /* 空跑哨兵：这一拍必须真的走到那笔外发、而且正挂在那里。没走到就等于锁是空的，
+     下面的断言全在为假原因通过 */
+  assert.ok(await until(() => hungNow(env) > 0), "start 没有把外发挂起来，本用例是空跑");
 
   const second = await Promise.race([
     env.send({ type: "start", tabId: 9, seconds: 300 }).then(() => "done"),
@@ -82,13 +86,14 @@ test("外发把网络挂住时，另一个标签页的「开始」照旧完成�
 
   assert.equal(second, "done", "另一家站点的「开始」排在同一把任务锁后面：锁被网络压住了");
   assert.ok(alarmsOf(env).includes("refresh-9"), "第二个任务没挂上刷新闹钟");
+  hangUp(env);
 });
 
 test("任务落盘之后紧接着就有两条闹钟，中间不夹任何可失败的等待（A15）", async () => {
-  const env = await boot({ fetchHangs: true });
+  const env = await boot({ hangs: true });
   const first = env.send({ type: "start", tabId: 7, seconds: 300 });
   first.catch(() => {});
-  assert.ok(await until(() => env.hung > 0), "没走到外发，本用例是空跑");
+  assert.ok(await until(() => hungNow(env) > 0), "没走到外发，本用例是空跑");
 
   const tasks = env.store.local.tasks || {};
   assert.ok(tasks[7], "任务没落盘");
@@ -97,13 +102,14 @@ test("任务落盘之后紧接着就有两条闹钟，中间不夹任何可失�
     [],
     "任务已经在清单里、两条闹钟却还没建：SW 这时被回收就留下永不刷新的僵尸任务"
   );
+  hangUp(env);
 });
 
 test("备份那一拍没有因为挪出锁而丢掉：坏样本不覆盖、通知照发", async () => {
   const env = await boot({ cookies: [] }); /* fetch 用桩件默认：当场 resolve */
   await env.send({ type: "start", tabId: 7, seconds: 300 });
-  assert.equal(env.hung, 0);
-  assert.equal(env.calls.fetch.length, 1, "start 之后没有发出那一笔 webhook");
+  assert.equal(hungNow(env), 0);
+  assert.equal(hungCount(env), 1, "start 之后没有发出那一笔 webhook");
   const entry = env.store.local[BACKUP_KEY];
   assert.ok(entry.sessionLostAt, "确认掉线却没冻结备份：下一次好样本会被坏样本覆盖");
   assert.deepEqual(entry.cookies.map((c) => c.name), ["sid"], "坏样本覆盖了最后一次有效备份");
@@ -113,20 +119,19 @@ test("备份那一拍没有因为挪出锁而丢掉：坏样本不覆盖、通�
 test("建任务失败时不备份、不外发", async () => {
   /* 新形状是"锁的结果 await 完再备份"。若有人把它改成锁外无条件执行（或 try/finally 收尾），
      拿不到标签页的那次点击就会对着一个不存在的任务采一遍 cookie、还可能发外发 */
-  const env = await boot({ fetchHangs: true });
+  const env = await boot({ hangs: true });
   env.dropTab(7);
   const res = await env.send({ type: "start", tabId: 7, seconds: 300 });
   assert.equal(res.ok, false, "拿不到标签页却报成功");
   assert.match(String(res.error), /errTabGone/, "抛的不是「标签页不可用」那条：弹窗里显示的是莫名的一句");
   await new Promise((r) => setTimeout(r, 30));
-  assert.equal(env.hung, 0, "任务没建成本来该直接报错，却还去发了一笔外发");
+  assert.equal(hungCount(env), 0, "任务没建成本来该直接报错，却还去发了一笔外发");
   assert.deepEqual(alarmsOf(env), [], "抛错路径上闹钟建出来了");
 });
 
-/* 红→绿对照（2026-09-19 实跑，副本 D:\Github\_tar_ctl_a15 里 tests/ 与 tab-auto-refresh/ 同级；
-   一轮只改坏一处，跑全套。有两条用例会让那笔外发永不返回，后台为它上的 15 秒 AbortController
-   计时器会把事件循环拖到最后，所以本文件整体约 15 秒，不是卡住）：
-     pristine → 333 全绿
+/* 红→绿对照（首轮 2026-09-19 实跑，副本 D:\Github\_tar_ctl_a15 里 tests/ 与 tab-auto-refresh/ 同级；
+   一轮只改坏一处，跑全套）：
+     pristine → 333 全绿（那是当时的全套规模；E3 之后全套 405 条，仍然全绿）
      N1 A15 原样退回（备份挪回锁内、且排在 arm 之前）
         → 红 2：「外发把网络挂住时…」+「任务落盘之后紧接着就有两条闹钟…」。
           前者是锁被网络压住，后者是 arm 排在等待之后——A15 的两半各红一处
@@ -140,6 +145,23 @@ test("建任务失败时不备份、不外发", async () => {
           既有的「右键开始 1 分钟」（ensureHeartbeat 读不到任务，把 hb- 清掉了）
      N5 先挂表再验现场（拿不到标签页也照样建闹钟）→ 红 1：只红在「建任务失败时不备份、不外发」
      R1 对照：删掉 stopTask 里的 stopKeepAlive(tabId)
-        → 全套 333 条**一条都不红**。这不是本文件的失败，是另一处覆盖缺口：
-          "停任务要让页面内的保活脚本自停"至今没有门禁，已记进 `BACKLOG.md` A20。
-          留在这里而不是抹掉，是因为它同时说明本文件四条用例没有被"任何改动都红"的噪声牵着走 */
+        → 全套**一条都不红**（当时 333 条）。这不是本文件的失败，是另一处覆盖缺口：
+          "停任务要让页面内的保活脚本自停"至今没有门禁，已记进 `BACKLOG.md` A20（后来由 A20 补上）。
+          留在这里而不是抹掉，是因为它同时说明本文件四条用例没有被"任何改动都红"的噪声牵着走
+
+   ---------- E3（挂起收进桩件）对本文件的影响，同一天实跑，脚本 D:/Github/_tar_ctl_e3/run.mjs ----------
+   那笔永不返回的外发原本是每条用例自己 `globalThis.fetch = () => new Promise(() => {})`
+   覆写出来的——桩件因此看不见它：不进 calls.fetch、拿不到 init.signal、也没法问"还挂着吗"。
+   现在挂起是桩件的一种应答形状（env.reply(new Promise(() => {}))），于是本文件的现场变清楚了：
+   哨兵从"我自己的计数器"换成 hungNow(env) = env.pendingFetch().length，
+   即"发出去了且**还压着**"；"发过几笔"另有 hungCount(env) = calls.fetch.length。
+   两者分开是有意的：A15 的病因是锁压在网络等待上，只有 pendingFetch 能表示"正压着"，
+   而 calls.fetch 只说明"发过"。
+     H3 桩件不 await promise 型应答 → 红 2：正是那两条挂起用例，且红在哨兵那句上
+        （"start 没有把外发挂起来，本用例是空跑"）。桩件退回不 await 就等于 A15 的现场
+        不可表示，用例不会"退回旧的绿"，而是当场报空跑——这是期望的形状
+     H5 桩件句柄的 abort() 变空函数 → 本文件只多花时长、不红：这里的 hangUp() 是收尾
+        （免得那两笔 15 秒计时器把文件拖住），不是任何一条断言的依据。写清楚免得下一个人
+        把它当成缺门禁
+   时长：改之前本文件约 15 秒（两条用例各被 15 秒计时器拖住），现在约 1.6 秒。
+   那 15 秒不是卡住，但也不该留着——桩件能叫停之后就没有理由再等它。 */

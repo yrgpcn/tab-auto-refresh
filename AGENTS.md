@@ -36,6 +36,8 @@
 
 - 三条外发链路（webhook、微信、静默心跳）的用例必须经桩件 `env.reply(spec)` 给出真应答：共享桩件在 `bootBackground` 里同时装 `globalThis.chrome` 与 `globalThis.fetch`，只设 `env.reply` 而拿不到 `fetch` 等于请求根本没发出去
 - 凡是只断言"没发、没写、没通知"的用例，永远不可能证明那条链路被执行过——新写用例要先有一条"链路确实跑到了"的正向断言，再叠加"这条路径不该跑"的负向断言。红→绿对照的做法记在每个测试文件末尾
+- 桩件里的空函数不记调用，等于那段代码零覆盖而全套照样全绿（E3 实测两处：`chrome.power` 两个空函数让 `applyKeepAwake` 一次也没跑过；`fetch` 不 `await` promise 型应答、不认 `init.signal`，让三条外发链路各自那笔 15 秒超时从未被走过）。所以**给一个新接口先问它记不记**：power 记在 `env.calls.keepAwake`，外发记在 `env.calls.fetch`，未决的那笔列在 `env.pendingFetch()`，句柄 `.abort()` 等价于计时器到点
+- "把请求挂住、再叫停、然后等链路落定"的用例，等待必须走桩件导出的 `settles(p)`（带上限，默认 500 毫秒），不许写裸的 `await inflight`。理由：后台那三笔 15 秒计时器接在 `init.signal` 上，桩件的句柄坏掉时计时器照样会在 15 秒后把请求推落定——用例"等得到结果"，只是每次慢 15 秒，**红不出来**（H5 第一轮实跑就是红 0、时长从 0.7 秒变 30.3 秒）。坏掉的一面门如果表现为慢而不表现为红，就得让用例自己带上限
 - 断言本地化过的显示（时刻、日期、数字）时不许写字面量期望值：本机与 CI 的 locale 与时区不同，`"09:07"` 与 `"09:07 AM"` 只能在其中一边成立。钉形状（数字分组的个数与位数）、按本地分量构造喂进去的时刻。A19 那批用例照这个形状写，理由写在用例里
 - 挑对照（改坏哪一处）要挑**净结果变了**的那一种。互补的两行代码上有一类改法会被下一行原样抵消——A20 里"heartbeat 为 false 时顺手 `stopActivityWatch()`"实跑零红，因为紧接着一行 `if (cfg.activityWatch) startActivityWatch()` 又把监听器起回来了，行为与原文完全一致；换成删掉 `else stopActivityWatch()` 才红。零红先分清是门禁缺口还是等价变异，把判读写进文件末尾，别急着记成缺口
 
@@ -67,7 +69,7 @@
 - 后台对 `tasks` 的读改写必须走 `withTaskLock` 串行队列。锁的**作用域**与串行同样要紧：锁内只碰存储与内存快照，绝不排队等网络——`withTaskLock` 是全站共享的一把锁，压在锁上等外发时别的标签页连「开始/停止」都要排队。`startTask` 的首次 `backupCookies` 因此排在整条锁内流程之后（它会一路 `await` 到 `notifyOut` 的两笔 fetch，15 秒超时、微信还要先取令牌），但**仍然 `await`**，不改成裸甩。门禁 `tests/tab-auto-refresh/start-task-lock.test.mjs`
 - 快捷键 `toggle-refresh`（Alt+Shift+R）复用 `settings.lastIntervalSec`，没有记录时回退 5 分钟；右键菜单 contexts 是 `["tab", "page"]`
 - 手动开始任务（弹窗、右键、快捷键）会解除 `pausedAll`；暂停期间 alarm 跳过触发，恢复后按原周期继续
-- 角标四态在 `updateBadge` 一处切换：掉线 `!` 红 > 自动暂停 `⚠` 橙 > 暂停 `‖` 灰 > 数量 蓝 > 空。所有任务增删路径都要经过它，`chrome.power` 锁的收敛也挂在那里
+- 角标四态在 `updateBadge` 一处切换：掉线 `!` 红 > 自动暂停 `⚠` 橙 > 暂停 `‖` 灰 > 数量 蓝 > 空。所有任务增删路径都要经过它，`chrome.power` 锁的收敛也挂在那里（`void applyKeepAwake()`），另一条入口是 `reconcileKeepAlive` 末尾那一笔，管开关真变化的时候。`applyKeepAwake` 三条判据不许凭读代码相信：申请 `system` 不申请 `display`、持锁标记走会话态所以一个生命周期最多申请一次、**释放那一头无条件**（锁跨 SW 回收存活而标记只在本会话，靠标记决定释不释放就会漏掉回收后这一次）。门禁 `tests/tab-auto-refresh/keep-awake.test.mjs`，桩件按序列记 `env.calls.keepAwake`
 - 单独关掉一张被监控的页会按任务里记录的网址**在后台重开一张**并把任务搬到新 id（先 `setTasks` 落盘、再挂新 alarm、最后清旧 id 的两条 alarm）；`removeInfo.isWindowClosing` 为真时整个不动，交给启动恢复。`!task.url` 也不动，免得给旧格式任务开出幽灵页。门禁由 `tests/tab-auto-refresh/tab-removed.test.mjs` 钉住
 - `tabs.onUpdated` 先用内存里的任务 tabId 快照过滤，非监控标签页不读存储；快照在 `setTasks` 时更新，冷启动首次事件回读存储
 - `task.url` 的语义定死一次：**用户指定的监控对象**，不是"这一页此刻的地址"。`refreshTaskUrl` 因此只跟随**同站且不是登录页**的新地址，判据是纯函数 `shouldAdoptTaskUrl`（在 `logic.js`，纪律 1 的兑现处），门禁在 `tests/tab-auto-refresh/task-url.test.mjs`。让登录页参与改写会自指（A14）：站点一跳 `/login`，监控对象就成了登录页，而行为通道那句"监控对象本身就是登录页时此信号不适用"从此恒成立 → `sus` 被清零 → 2 次确认窗口再也走不到 `lost`，掉线检测自己把自己 disarm；同时关键词在登录页正文里找、心跳对着 `/login` 发、用户重新登录也不会自动回到原页面。跨站漂移同样不覆盖，好让自动重开回到用户填的那一家

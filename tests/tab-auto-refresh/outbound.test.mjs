@@ -10,12 +10,17 @@
 
    2026-09-19 起这个文件还管第二件事（A4）：外发载荷里不得出现 query。做法是把本文件
    通用的任务网址换成带一次性令牌的 RAW，于是每条断言外发形状的用例顺带都在检查剪没剪，
-   末尾那一节再把四个事件逐个跑一遍。为什么钉在出口而不是逐处改调用点：见 notifyOut 的注释。 */
+   末尾那一节再把四个事件逐个跑一遍。为什么钉在出口而不是逐处改调用点：见 notifyOut 的注释。
+
+   同一天 E3 补上第三件事：这两个出口"发出去但永远不回来"的那一支。桩件此前不能表示挂起
+   （不 await promise 型应答、也不认 init.signal），于是两条链路各自那笔 15 秒超时
+   在门禁里不可达；现在 env.reply(new Promise(() => {})) 挂住、env.pendingFetch()[0].abort()
+   叫停、settles() 带上限地等落定。 */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { makeEnv, bootBackground } from "../helpers/background-harness.mjs";
+import { makeEnv, bootBackground, settles } from "../helpers/background-harness.mjs";
 import { SESSION_LOST_CONFIRM_SAMPLES } from "../../tab-auto-refresh/shared/logic.js";
 
 const PAGE = "https://a.test/board";
@@ -57,6 +62,15 @@ const stoppedByAlarm = async (env) => {
 };
 const testWx = (env) => env.send({ type: "wechat-test" });
 const tokenUrl = (u) => u.includes("/cgi-bin/stable_token");
+/* 等条件成立；等不到就返回 false，由调用方当"本用例是不是空跑"的哨兵用 */
+async function until(fn, ms = 1000) {
+  const t0 = Date.now();
+  while (!fn()) {
+    if (Date.now() - t0 > ms) return false;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  return true;
+}
 
 /* ---------- webhook ---------- */
 
@@ -197,6 +211,27 @@ test("网络被拒：记 network 且状态码为 null，不假报成接口返回
   assert.equal(last(env).kind, "network");
   assert.equal(last(env).status, null, "把没发生的请求写成有状态码，用户会去查那个不存在的码");
   assert.equal(last(env).errorKey, "webhookErrNetwork");
+});
+
+test("接收端收了请求不回应：15 秒到点 abort 之后照样留痕，链路不悬死", async () => {
+  /* E3 之前这一类只能读代码相信：桩件既不 await promise 型应答、也不兑现 init.signal，
+     所以"配了地址又勾了这个事件"那条 assert.ok(init.signal) 钉住的只是控制器的存在。
+     计时器到点不生效的话，notifyOut 的 await 永不回来——停任务那一整条链路悬在半路，
+     而门禁全绿。挂住之后从桩件句柄打断，等价于 15 秒到点 */
+  const env = await whEnv();
+  env.reply(new Promise(() => {}));
+  const inflight = env.fire.alarm("refresh-7");
+  assert.ok(await until(() => env.pendingFetch().length === 1), "没走到那笔外发，本用例是空跑");
+  assert.equal(last(env), undefined, "请求还挂着就写了留痕：那一行会跟着抖动");
+  env.pendingFetch()[0].abort();
+  assert.ok(
+    await settles(inflight),
+    "叫停句柄没有让停任务那一拍落定：桩件这半边的 abort 通道断了，真实那一头由后台自己那 15 秒计时器兜住"
+  );
+  assert.equal(last(env).kind, "network", "超时与断网在留痕上不该分家：都是根本没拿到应答");
+  assert.equal(last(env).ok, false);
+  assert.equal(last(env).status, null);
+  assert.equal(last(env).event, "task-stopped");
 });
 
 test("没配地址、事件没勾上：这两种「本该不发」一笔都不留痕", async () => {
@@ -345,6 +380,25 @@ test("网络被拒留 network 痕迹，不假报成接口返回", async () => {
   assert.equal(r.result.code, null);
 });
 
+test("取令牌那一笔挂住：到点 abort 之后按 network 留痕，弹窗那一行有得显示", async () => {
+  /* 微信侧的超时是 wxFetch 自己上的控制器（WX_FETCH_TIMEOUT_MS），与 webhook 那头各自一处。
+     挂住的是令牌请求：它一旦悬死，后面的模板消息发送永远不会发生，
+     用户点了「发送测试」看到的是按钮转圈转到天荒地老 */
+  const env = await boot({ settings: Object.assign({}, WX) });
+  env.reply((url) => (tokenUrl(url) ? new Promise(() => {}) : { json: { errcode: 0 } }));
+  const inflight = env.send({ type: "wechat-test" });
+  assert.ok(await until(() => env.pendingFetch().length === 1), "没把令牌请求挂住，本用例是空跑");
+  env.pendingFetch()[0].abort();
+  assert.ok(await settles(inflight), "叫停句柄没有让「发送测试」落定：按钮会一直转圈");
+  const r = await inflight;
+  assert.equal(r.ok, true, "处理器该回话（弹窗要收起转圈的按钮）");
+  assert.equal(r.result.ok, false);
+  assert.equal(r.result.kind, "network");
+  assert.equal(r.result.code, null);
+  assert.equal(env.store.local.wechatLastResult.kind, "network", "留痕没写：状态行停在上一轮");
+  assert.equal(env.calls.fetch.length, 1, "令牌都没拿到还去发模板消息");
+});
+
 test("微信总开关只管真实事件，「发送测试」不受它约束", async () => {
   const env = await boot({ settings: Object.assign({}, WX, { wechatEnabled: false }) });
   await stoppedByAlarm(env);
@@ -465,8 +519,15 @@ for (const [event, spec] of Object.entries(TRIGGERS)) {
   });
 }
 
-/* 红→绿对照（2026-09-19 实跑：整份插件目录复制到仓库外，每处只改坏 postWebhook / postWechat /
-   getWechatToken 函数体内的一处——needle 在区段内断言正好命中一次——TAR_BG 指过去跑本文件）：
+/* 红→绿对照（首轮 2026-09-19 实跑：整份插件目录复制到仓库外，每处只改坏 postWebhook /
+   postWechat / getWechatToken 函数体内的一处——needle 在区段内断言正好命中一次——
+   TAR_BG 指过去跑本文件。当时本文件 11 条，E3 之后 27 条）：
+   规模变了，逐条重跑的成本不低，所以本轮只把**唯一有风险的那一处**（11，它改的是 catch
+   里 network/api 的归桶，而 E3 新增的两条超时用例正好也断言 kind:"network"）在 27 条之下
+   重跑了一次：由 红 1 变 红 2，已按实际写下。其余 12 处逐条比对过新用例的断言面——
+   两条新用例只断言 kind / status:null / event / code / 留痕键，不碰载荷字段、方法、
+   网址剪枝、令牌缓存与四道前置闸，所以那 12 处的"只红在某一条"不成立的风险极低。
+   这是比对、不是实跑：下一次整批重跑时以实跑数为准。
      1) webhook 的 `if (!events.includes(event)) return;` 改成 `if (false) return;`
         → 红 1：只红在"事件没勾上就一笔不发"
      2) 删掉载荷里 content / text / body 三行别名赋值
@@ -488,17 +549,25 @@ for (const [event, spec] of Object.entries(TRIGGERS)) {
     10) `errorKey: wechatErrorKey(code)` 换成写死的 "wechatErrOther"
         → 红 1：只红在"非令牌错误码不重试"
     11) catch 里 `kind: code === null ? "network" : "api"` 换成恒 "api"
-        → 红 1：只红在"网络被拒留 network 痕迹"
+        → 红 2（27 条时代重跑；11 条时代记的是红 1）：既有"网络被拒留 network 痕迹"，
+          加 E3 新增的"取令牌那一笔挂住"——那条也断言 kind，所以多红一处是预期的，
+          不是既有覆盖被削弱
     12) `if (tokenFresh(...)) return ...token` 改成永不命中缓存
         → 红 1：只红在"令牌还新鲜就不重取"
     13) 删掉 `await chrome.storage.session.set({ [WX_TOKEN_KEY]: cache })`
         → 红 2："发送测试"（断言缓存里落的是 T1）与"命中 40001"（断言重试之后缓存已是 T2）。
            请求形状两处都还是对的，红的全是"缓存没被写"这一条
-   桩件侧的反向事实：把 background-harness.mjs 的 `globalThis.fetch = env.fetch` 摘掉，
-   本文件红 7/11，绿的四条恰好全是"断言一笔都不发"的否定式用例（事件没勾上、地址非法、
-   凭据没填全、事件清单共用）。fetch 根本不存在时它们照样绿——单看这四条，
-   它们证明不了任何一条链路跑过。但这四条本身是被钉住的：改坏对应的四道闸（1/3/6/7）
-   各红一条，红的是"闸没了就多发出一笔"，而不是"这条用例压根没跑"。
+   桩件侧的反向事实（H0：把 background-harness.mjs 的 `globalThis.fetch = env.fetch` 摘掉再跑。
+   2026-09-19 在本文件长到 27 条之后重跑，此前那句"红 7/11"是 11 条时代的数，作废）：
+   本文件红 21/27。绿的 6 条里有五条确实是"断言一笔都不发"的否定式用例（事件没勾上、地址非法、
+   没配地址与事件没勾不留痕、凭据没填全、事件清单共用）——fetch 根本不存在时它们照样绿，
+   单看这五条，它们证明不了任何一条链路跑过。但这五条本身是被钉住的：改坏对应的闸
+   （1/3/6/7 那几处）各红一条，红的是"闸没了就多发出一笔"，而不是"这条用例压根没跑"。
+   **第六条绿得是假的，单独记一笔**："网络被拒：记 network 且状态码为 null"。fetch 不存在时
+   那一句 ReferenceError 恰好也被 postWebhook 的 catch 归成 kind:"network"，于是它断言的形状全对、
+   链路却一步没跑。它测的就是 catch 那一支的归类，写法上无可补救，但别把它当成"外发确实发出去了"
+   的见证——见证由那 21 条里的正向用例提供。这是"只断言失败形状的用例证明不了链路被执行"的
+   一个具体样本，与 AGENTS.md 测试纪律那条同一个道理。
 
    ---------- A4（载荷剪枝）的对照，同一天实跑，脚本 ctl-a4.mjs ----------
    前 13 处改的是 postWebhook / postWechat / getWechatToken 的函数体；下面这些改的是
@@ -535,4 +604,23 @@ for (const [event, spec] of Object.entries(TRIGGERS)) {
         含"两个出口各写各的痕迹"。而「发送测试」不红——后台写与回读用的是同一个错键，
         自洽；只有跨到弹窗那一侧的读者才发现。所以键名必须由存盘侧与读取侧各钉一次
      B6 2xx 不读正文、交空串给分类器 → 只红 1：接收端回 200 却说没收到。
-        与逻辑层的 L1 红在同一条语义上，但一个坏在分类器、一个坏在执行器，两道各钉一头 */
+        与逻辑层的 L1 红在同一条语义上，但一个坏在分类器、一个坏在执行器，两道各钉一头
+
+   ---------- E3（桩件能表示"挂住"与"到点"）的对照，同一天实跑，脚本 D:/Github/_tar_ctl_e3/run.mjs ----------
+   两条新用例钉的是三个外发出口共有的最后一支：fetch 发出去了但永远不回来。
+   此前桩件既不 await promise 型应答也不认 init.signal，这一支在测试里不可表示——
+   于是"配了地址又勾了这个事件"那条里的 `assert.ok(init.signal, ...)` 只钉住了控制器的存在。
+   三面门各由一处变体点名（改的是副本里的 background-harness.mjs）：
+     H3 桩件不 await promise 型应答 → 红 2：两条新用例都红在自己的空跑哨兵上
+        （"没走到那笔外发，本用例是空跑" / "没把令牌请求挂住，本用例是空跑"）。
+        promise 被当成空应答，当场就 200 落定，pendingFetch 永远是空的——
+        红在"挂起这件事不可表示"这一句上，而不是红在最后的判据上，正是想要的形状
+     H4 桩件不监听 init.signal      → 红 0：**本文件没有用例走 signal 那扇门**，
+        两条都走 env.pendingFetch() 的句柄。这不是覆盖缺口，是分工：signal 那一半由
+        heartbeat.test.mjs 的"超时是从 init.signal 兑现的"钉住（那边同一处变体红 1）。
+        两处出口各有一笔自己的 15 秒计时器（postWebhook / wxFetch），但"计时器真的接在
+        signal 上"这件事只需要证明一次——桩件的监听代码是同一份。
+        记下这条零红是因为它容易被误读成"这个变体没生效"：它在心跳那边确实生效了
+     H5 桩件句柄的 abort() 变空函数 → 红 2：两条新用例全红（改法前是红 0，
+        只把文件时长从 0.7 秒拖到 30.3 秒——见 heartbeat.test.mjs 末尾同一处的说明）。
+        现在的等待走桩件导出的 settles()，上限 500 毫秒 */
