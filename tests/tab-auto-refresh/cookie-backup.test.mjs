@@ -1,4 +1,4 @@
-/* cookie 备份与恢复的执行器门禁（BACKLOG A6 第 8 条的欠账，随 A2 一起交）。
+/* cookie 备份与恢复的执行器门禁（2026-09-19 审计 A6 第 8 条的欠账，随 A2 一起交）。
    为什么之前测不出来：桩件的 cookies.getAll 恒返回 []，于是采集（backupCookies 的域链
    与冻结）、还原（restoreCookies 的 hostOnly 三分支）、200 条封顶全都在空数据上跑——
    纯函数层（capCookies / applyBackupAction / nextBackupState）由 logic.test.mjs 钉着，

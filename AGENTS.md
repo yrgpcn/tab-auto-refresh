@@ -139,6 +139,7 @@
 - `[hidden]` 会被作者样式里的 `display` 压过（`.row` 是 `display:flex`），已全局声明 `[hidden] { display: none !important }`
 - 弹窗每秒重新拉 alarm 列表再重绘倒计时，因为 alarm 周期触发不会触发 `storage.onChanged`
 - 保存设置时要合并既有 `settings`，否则只改复选框会丢掉 `lastIntervalSec`
+- 当前标签页已有任务时，`init` 要把该任务的 `keywords`（走 `getTaskKeywords`，旧单串也认）、`onHit === "continue"`、实际间隔回填进输入控件（`populateTaskFields`）。不回填的后果是数据丢失而不是显示缺失：用户只能停掉再重开，而重开读的是空框，原来的关键词监控静默消失。回填只在 init 做一次、排在 `initPresetSelect()` 之后（要盖掉它按 `lastIntervalSec` 的预填），**不得挂到 `storage.onChanged` 的重绘回流上**——回流反复发生，挂上去会抹掉用户正在输入的字；没有任务时早退，一个字都不动。判据与顺序由 `tests/tab-auto-refresh/popup-repopulate.test.mjs` 钉住（切源码跑，popup 没有 DOM 库可测）
 - i18n 通过 `data-i18n` / `data-i18n-placeholder` / `data-i18n-title` 注入，`title` 这条通道专门用来把开关的长解释挪出可见版面
 
 ### 跨 SW 实例的运行时状态

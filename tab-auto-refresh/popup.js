@@ -313,6 +313,31 @@ function initPresetSelect() {
   }
 }
 
+/* 当前标签页已有任务时，把任务级字段回填进输入控件。
+   不回填的后果不是"少显示一行"，而是数据丢失：想改关键词只能停掉再重开，
+   而重开那次读的是空框，原来那条监控就此静默消失。
+   只在 init 里做一次——currentTab 是 init 里 query 出来的，弹窗活着期间不会变，
+   而 storage.onChanged 会反复回流，挂在回流链上等于随时抹掉用户正在输入的字。
+   间隔的两个入口（预设下拉 / 秒数框）已由 bindIntervalInputs 做成互斥，
+   这里按同一套约定写：命中预设就选它并清空框，否则下拉走"自定义"、框里放实际值 */
+function populateTaskFields() {
+  const task = currentTab && tasks[currentTab.id];
+  if (!task) return;
+  $("keywordInput").value = getTaskKeywords(task).join(",");
+  $("keepWatchingCheck").checked = task.onHit === "continue";
+  const sel = $("presetSelect");
+  const box = $("customInput");
+  const sec = clampInterval(task.intervalSec).seconds;
+  const preset = PRESETS.find((p) => p.seconds === sec);
+  if (preset) {
+    sel.value = String(preset.seconds);
+    box.value = "";
+  } else {
+    sel.value = "";
+    box.value = String(sec);
+  }
+}
+
 function bindIntervalInputs() {
   const sel = $("presetSelect");
   const box = $("customInput");
@@ -415,6 +440,9 @@ async function init() {
   await refreshState();
   initPresetSelect();
   bindIntervalInputs();
+  /* 排在这里而不是 initPresetSelect 前面：它按 settings.lastIntervalSec 预填，
+     当前标签页真正在跑的间隔要盖掉那个"最近一次手动值" */
+  populateTaskFields();
   $("bypassCheck").checked = settings.bypassCache !== false;
   $("skipDiscardedCheck").checked = !!settings.skipDiscarded;
   $("cookieBackupCheck").checked = !!settings.cookieBackup;

@@ -44,6 +44,18 @@
     越界与否恰恰体现在查询面上，只记写入结果等于放过了它。纯函数层 4 条 + 执行器层 13 条新用例，
     五处红→绿对照实跑过（含两处第一次跑是绿的、补断言之后才红），完整红名单记在
     `tests/tab-auto-refresh/cookie-backup.test.mjs` 末尾
+- 弹窗会按当前标签页的任务回填关键词、"命中后继续盯守"与实际间隔（`BACKLOG.md` A5）。
+  形状不是"少显示一行"而是数据丢失入口：想改关键词只能停掉再重开，而重开那次读的是空输入框，
+  原来那条监控就此静默消失——任务列表里的关键词 chip 照常显示（它读的是 `tasks`），所以看起来一切正常
+  - 间隔回填排在 `initPresetSelect()` 之后：那一步按 `settings.lastIntervalSec`（"最近一次手动值"）预填，
+    当前标签页真正在跑的间隔必须盖掉它，否则显示的是别的页面上一次用的数
+  - 也刻意**不**挂到 `storage.onChanged` 的重绘回流上：弹窗活着期间 `currentTab` 是 init 里 query 出来、不再变化，
+    而回流会反复发生，挂上去等于随时抹掉用户正在输入的字。早退条件（没有任务就一个字都不动）因此是契约的一部分
+  - popup 此前没有任何门禁覆盖（DOM + `chrome.*` 的混合体，仓库不引第三方 DOM 库），所以这个修复原本只能真机验。
+    补了一份按花括号配对切出 `populateTaskFields` 真实源码、把 `$` / `tasks` / `currentTab` 当形参注入执行的用例
+    （`tests/tab-auto-refresh/popup-repopulate.test.mjs`，10 条），形状与 `keyword-inpage.test.mjs` 一致；
+    其中"函数真的被 init 调用，且排在 `initPresetSelect()` 之后"那条守的是死入口与顺序。七处红→绿对照实跑过。
+    真机仍要验一次：控件确实被填上、以及"先停后起"不丢关键词，这两点切片用例给不了（`BACKLOG.md` V1 (d)）
 
 ### Changed
 - 共享测试桩件 `tests/helpers/background-harness.mjs` 按真实 Chrome 语义补齐十一处，为的是让"看着绿、实际空跑"
