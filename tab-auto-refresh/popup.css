@@ -152,6 +152,9 @@ button { cursor: pointer; border: none; border-radius: 8px; font-size: 13px; fon
 .task-title:hover { color: #1d4ed8; }
 .task-sub { color: #6b7280; font-size: 11px; margin-top: 2px; }
 .task-sub .next { color: #059669; }
+/* 上一拍到点被跳过的解释：用警示色，倒计时的绿说的是"下一拍"，这句说的是"上一拍没刷"。
+   这里只给颜色，不写 display——隐藏靠全局 [hidden] 规则，作者样式带 display 会压过它 */
+.task-sub .skip { color: #b45309; }
 .invalid { color: #b91c1c; }
 .task-actions { display: flex; gap: 6px; flex: none; }
 .mini {

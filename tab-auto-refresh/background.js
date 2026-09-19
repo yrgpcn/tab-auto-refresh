@@ -1,6 +1,6 @@
 /* 标签页定时刷新 · Manifest V3 后台 service worker（ES module） */
 
-import { PREFIX, PRESETS, DEFAULT_SETTINGS, HB_PREFIX } from "./shared/config.js";
+import { PREFIX, PRESETS, DEFAULT_SETTINGS, HB_PREFIX, SKIP_RT_PREFIX } from "./shared/config.js";
 import {
   RESTRICTED_URL,
   ACTIVITY_SKIP_MS,
@@ -28,6 +28,8 @@ import {
   parseKeywords,
   pickKnownSettings,
   planBackupConvergence,
+  planBackupFetch,
+  planBackupIndex,
   planPrune,
   looksLikeLoginPage,
   sameHost,
@@ -45,6 +47,9 @@ import {
 
 /* cookie 备份按主机分键存储，避免多站点并发备份时互相覆盖 */
 const COOKIE_BACKUP_PREFIX = "cookieBackup:";
+/* 上述各键的主机名清单（A12）：清理与恢复按它定向读，不再 get(null) 全量扫。
+   只存键名、不存内容，所以它本身就很小；代价是多一处"写备份要顺带登记"的账 */
+const BACKUP_INDEX_KEY = "cookieBackupHosts";
 /* 备份保留策略：超过最大条数按时间淘汰；任务全部停完后过期即清 */
 const COOKIE_BACKUP_MAX_KEYS = 20;
 const COOKIE_BACKUP_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -313,12 +318,15 @@ function stopTask(tabId) {
        不清 keyword-hit 与 task-stopped：前者往往是 stopTask 的起因（命中即停是默认行为），
        在这里清等于把用户刚收到的那条通知立刻撤回；后者正是这次停止本身的通知 */
     clearNotice(NOTIF_ID.taskPaused(tabId));
-    /* 运行时状态一并清（会话态）：真假人活动时间戳与错误/验证墙连击都归属该标签页 */
+    /* 运行时状态一并清（会话态）：真假人活动时间戳、错误/验证墙连击与"上次跳过的理由"
+       都归属该标签页。第三条其实不清也不会显示（弹窗只按在场任务读这一族键），
+       但它一个标签页一行地在会话态里攒着，停任务时顺手一起删 */
     await rt(() =>
       chrome.storage.session.remove([
         rtTab(RT_ACTIVITY, tabId),
         rtTab(RT_ERROR, tabId),
         rtTab(RT_CAPTCHA, tabId),
+        rtTab(RT_SKIP, tabId),
       ])
     );
     delete tasks[tabId];
@@ -391,6 +399,55 @@ async function pruneStaleProbes(roots) {
   }
 }
 
+/* 备份存档连同索引一起读出来。原先三处各自 get(null) 全量扫（本函数两处、启动收敛一处），
+   最坏一次要反序列化 20 站 × 200 条明文只为拿键名；现在只有"索引还没建立"那一次才全量读，
+   读完顺手把索引补上。索引与存档对不上账时以存档实况为准修正索引 */
+async function listBackupEntries() {
+  const stored = await chrome.storage.local.get(BACKUP_INDEX_KEY);
+  const indexed = stored[BACKUP_INDEX_KEY];
+  const plan = planBackupFetch(indexed);
+  const keys = plan.hosts ? plan.hosts.map((h) => COOKIE_BACKUP_PREFIX + h) : null;
+  const raw = await chrome.storage.local.get(plan.fullScan ? null : keys);
+  const entries = [];
+  for (const [key, entry] of Object.entries(raw || {})) {
+    if (!key.startsWith(COOKIE_BACKUP_PREFIX)) continue;
+    entries.push({ key, host: key.slice(COOKIE_BACKUP_PREFIX.length), entry });
+  }
+  const hosts = await syncBackupIndex({ indexed, presentHosts: entries.map((e) => e.host) });
+  return { entries, hosts, fullScan: plan.fullScan };
+}
+
+/* 写回索引（没有变化就不落盘） */
+async function syncBackupIndex({ indexed, presentHosts }) {
+  const { hosts, changed } = planBackupIndex({ indexed, presentHosts });
+  if (changed) await chrome.storage.local.set({ [BACKUP_INDEX_KEY]: hosts });
+  return hosts;
+}
+
+/* 新写成的备份要登记进索引，否则下一次定向读根本不会去读它。
+   两种情况不写：索引还没建立（这里只登记自己这一家，会把老版本留下的别家明文存档变成
+   定向读永远看不见的孤儿，交给 listBackupEntries 那次全量扫去建完整索引）；
+   已经在索引里（每次页面加载都会走到这儿，别白落一笔盘）。
+   两个标签页并发登记时后写的会盖掉前一个，漏掉的那家在最坏情况下也只是一次页面加载后
+   被这里重新补上——它不会导致存档被删，删东西的判据看的从来不是"索引里没有" */
+async function ensureBackupIndex(host) {
+  const data = await chrome.storage.local.get(BACKUP_INDEX_KEY);
+  const indexed = data[BACKUP_INDEX_KEY];
+  if (!Array.isArray(indexed) || indexed.includes(host)) return;
+  await chrome.storage.local.set({ [BACKUP_INDEX_KEY]: indexed.concat([host]) });
+}
+
+/* 存档被删掉时把索引里那几条一并摘掉 */
+async function dropBackupIndexHosts(keys) {
+  if (!keys.length) return;
+  const data = await chrome.storage.local.get(BACKUP_INDEX_KEY);
+  const indexed = data[BACKUP_INDEX_KEY];
+  if (!Array.isArray(indexed)) return;
+  const drop = new Set(keys.map((k) => k.slice(COOKIE_BACKUP_PREFIX.length)));
+  const hosts = indexed.filter((h) => !drop.has(h));
+  if (hosts.length !== indexed.length) await chrome.storage.local.set({ [BACKUP_INDEX_KEY]: hosts });
+}
+
 /* 备份清理三条件：站点不再被任何任务使用、超过 30 天 TTL、超过 20 站上限（按时间留新）。
    备份功能关闭时不留死数据，直接清空全部备份 */
 async function pruneCookieBackups(remainingTasks) {
@@ -401,26 +458,27 @@ async function pruneCookieBackups(remainingTasks) {
   }
   await pruneStaleProbes(roots);
   if (!(await getSettings()).cookieBackup) {
-    const all = await chrome.storage.local.get(null);
-    const keys = Object.keys(all).filter((k) => k.startsWith(COOKIE_BACKUP_PREFIX));
-    if (keys.length > 0) await chrome.storage.local.remove(keys);
+    const { entries, hosts } = await listBackupEntries();
+    if (entries.length > 0) await chrome.storage.local.remove(entries.map((e) => e.key));
+    if (hosts.length > 0) await chrome.storage.local.set({ [BACKUP_INDEX_KEY]: [] });
     return;
   }
-  /* storage.get 不支持通配符，必须全量读取再按前缀过滤 */
-  const all = await chrome.storage.local.get(null);
+  const { entries } = await listBackupEntries();
   const now = Date.now();
   const fresh = [];
   const stale = [];
-  for (const [key, value] of Object.entries(all)) {
-    if (!key.startsWith(COOKIE_BACKUP_PREFIX)) continue;
-    const root = siteRoot(key.slice(COOKIE_BACKUP_PREFIX.length));
+  for (const { key, host, entry: value } of entries) {
+    const root = siteRoot(host);
     const ts = value && typeof value.timestamp === "number" ? value.timestamp : 0;
     if (!root || !roots.has(root) || now - ts > COOKIE_BACKUP_TTL_MS) stale.push(key);
     else fresh.push({ key, ts });
   }
   fresh.sort((a, b) => b.ts - a.ts);
   for (const e of fresh.slice(COOKIE_BACKUP_MAX_KEYS)) stale.push(e.key);
-  if (stale.length > 0) await chrome.storage.local.remove(stale);
+  if (stale.length > 0) {
+    await chrome.storage.local.remove(stale);
+    await dropBackupIndexHosts(stale);
+  }
 }
 
 /* 后台保活：默认开启的合成活动注入，对抗按用户交互计时的服务器端会话过期。
@@ -447,6 +505,9 @@ const RT_ACTIVITY = "rt:activity";
 const RT_ERROR = "rt:error";
 const RT_CAPTCHA = "rt:captcha";
 const RT_AWAKE = "rt:awake";
+/* 上一拍到点被跳过的 {reason, at}（A12）。放会话态而不是 local：它每拍都在重写，
+   而 local 是每个刷新周期都要动的键区；它的寿命也不超过这次浏览器会话 */
+const RT_SKIP = SKIP_RT_PREFIX;
 const rtTab = (base, tabId) => base + ":" + tabId;
 
 /* 读写走独立串行队列：与 tasks 的 withTaskLock 无关（在锁内再入队会死锁），
@@ -469,6 +530,10 @@ async function rtGet(key) {
 
 async function rtSet(key, value) {
   await rt(() => chrome.storage.session.set({ [key]: value }));
+}
+
+async function rtRemove(key) {
+  await rt(() => chrome.storage.session.remove(key));
 }
 
 /* 连击计数 +1 并返回新值（读改写整体入队） */
@@ -1112,7 +1177,11 @@ async function backupCookies(tabId) {
     const prevEntry = (await chrome.storage.local.get(key))[key];
     /* 决策与写盘映射是同一个纯函数：write=null 表示冻结且处于通知节流期，什么都不写 */
     const act = applyBackupAction(prevEntry, capped, now);
-    if (act.write) await chrome.storage.local.set({ [key]: act.write });
+    if (act.write) {
+      await chrome.storage.local.set({ [key]: act.write });
+      /* 只在真的写成了存档时登记：冻结中的疑似采样连键都不该出现，何况索引 */
+      await ensureBackupIndex(host);
+    }
     /* 必须 await：notifySessionLost 里含 webhook 与微信的 fetch，裸甩会在 SW 回收时
        被截断，丢的正是"会话掉线"这条。行为通道里同一调用点本来就是 await */
     if (act.notify) await notifySessionLost(host);
@@ -1391,7 +1460,16 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     await stopTaskWithNotice(tabId, verdict.reason);
     return;
   }
+  if (verdict.action === ALARM_ACT.SKIP) {
+    /* 到点了却没刷新，用户在弹窗里只看得到倒计时一遍遍归零——四种跳过理由原先一律不留痕，
+       "任务没在刷"只能靠猜（A12）。把最近一次的理由与时刻留在会话态，任务行才有地方说一句
+       "上次跳过：你在看这页"，A1 那个误判正是藏在这个看不见里 */
+    await rtSet(rtTab(RT_SKIP, tabId), { reason: verdict.reason, at: Date.now() });
+    return;
+  }
   if (verdict.action !== ALARM_ACT.RELOAD) return;
+  /* 真的刷了这一拍，上一条解释就作废：留着它，弹窗会一直挂着一句过期的理由 */
+  await rtRemove(rtTab(RT_SKIP, tabId));
   try {
     await reloadTab(tabId);
   } catch (e) {
@@ -1514,16 +1592,12 @@ async function prune(adoptLegacyUrls = false) {
   }
   const restoredRoots = new Set();
   if (settings.cookieBackup) {
-    const all = await chrome.storage.local.get(null);
-    const backups = [];
-    for (const key of Object.keys(all)) {
-      if (key.startsWith(COOKIE_BACKUP_PREFIX)) {
-        backups.push({ key, host: key.slice(COOKIE_BACKUP_PREFIX.length), entry: all[key] });
-      }
-    }
+    const { entries: backups } = await listBackupEntries();
     /* 先收敛历史越界备份，再恢复。反过来不行：restoreCookies 按每条自己的 domain 写回浏览器，
        先恢复等于已经替别家站点复活了一遍登录态，之后删存档也收不回来 */
     const conv = planBackupConvergence(backups);
+    /* 删掉的条目不单独去摘索引：同一次启动末尾的 pruneCookieBackups 会按存档实况再对一次账，
+       索引跟着校正。这一处单独写一遍在红→绿对照里没有任何可观测差异，故不留 */
     if (conv.remove.length) await chrome.storage.local.remove(conv.remove);
     if (conv.rewrite.length) {
       await chrome.storage.local.set(

@@ -121,6 +121,20 @@
 
   "pausedErrorChip": { "message": " · 页面持续报错，已自动暂停" },
   "pausedCaptchaChip": { "message": " · 遇到人机验证，已自动暂停" },
+
+  "skipChip": {
+    "message": " · 上次跳过：$REASON$",
+    "placeholders": { "reason": { "content": "$1" } }
+  },
+  "skipChipTitle": {
+    "message": "上一次到点被跳过：$REASON$ · $TIME$",
+    "placeholders": { "reason": { "content": "$1" }, "time": { "content": "$2" } }
+  },
+  "skipReasonPausedAll": { "message": "全部暂停" },
+  "skipReasonAutoPaused": { "message": "自动暂停" },
+  "skipReasonUserActive": { "message": "你在操作" },
+  "skipReasonDiscarded": { "message": "休眠中" },
+  "skipReasonUnknown": { "message": "另有原因" },
   "actionResume": { "message": "恢复" },
   "notifTaskPausedError": { "message": "监控页面持续返回错误（5xx/404），任务已自动暂停；页面恢复后会自动继续" },
   "notifTaskPausedCaptcha": { "message": "监控页面出现人机验证墙，任务已自动暂停；请在页面中通过验证后点恢复" },

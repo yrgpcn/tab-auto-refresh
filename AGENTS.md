@@ -47,8 +47,8 @@
 
 ### 存储
 
-- `chrome.storage.local`：`tasks`（tabId → `{intervalSec, createdAt, url, keywords?, onHit?, notifiedKeys?, autoPaused?}`，旧数据的单串 `keyword` 由 `getTaskKeywords` 兼容读取，后台与弹窗共用这一个入口）、`pausedAll`、`sessionProbe`（根域 → `{sus, lost, lastNotifiedAt}`）、`cookieBackup:<host>`、`cookieBackupWarnedOnce`、`wechatLastResult`、`webhookLastResult`（两个出口各一份最近一次投递结果，只存本机、不走 sync）
-- `chrome.storage.session`：跨 SW 回收要活下来的运行时计数与标记，即 `rt:error:<tabId>` / `rt:captcha:<tabId>` / `rt:activity:<tabId>` / `rt:awake` / `wechatToken`。判断标准是要活过 SW 回收放这里，要活过浏览器重启才放 local
+- `chrome.storage.local`：`tasks`（tabId → `{intervalSec, createdAt, url, keywords?, onHit?, notifiedKeys?, autoPaused?}`，旧数据的单串 `keyword` 由 `getTaskKeywords` 兼容读取，后台与弹窗共用这一个入口）、`pausedAll`、`sessionProbe`（根域 → `{sus, lost, lastNotifiedAt}`）、`cookieBackup:<host>`、`cookieBackupHosts`（备份键名索引，见"cookie 备份与登录保持"）、`cookieBackupWarnedOnce`、`wechatLastResult`、`webhookLastResult`（两个出口各一份最近一次投递结果，只存本机、不走 sync）
+- `chrome.storage.session`：跨 SW 回收要活下来的运行时计数与标记，即 `rt:error:<tabId>` / `rt:captcha:<tabId>` / `rt:activity:<tabId>` / `rt:skip:<tabId>` / `rt:awake` / `wechatToken`。判断标准是要活过 SW 回收放这里，要活过浏览器重启才放 local
 - `chrome.storage.sync`：`settings`。默认值集中在 `shared/config.js` 的 `DEFAULT_SETTINGS`，弹窗与后台共用；sync 为空时会从 local 迁移旧设置
 - 后台的 `getSettings()` 带内存快照（`settingsCache` / `settingsLoading` / `settingsEpoch`）：一次任务页加载周期里它被调 5~7 次，原先每次都发两笔存储读。**新增的 `settings` 写入一律走 `patchSettings(partial)`，别自己 `get`/`set`**：它在 `withSettingsLock` 里读盘、合并、整份写回，读写两头各 `invalidateSettings()` 一次（读前不失效会拿过期快照当基座，把用户这次没碰的开关按旧值写回去；写后不失效则 `onChanged` 回流前的一切读取仍是写前的值）。`partial` 给函数时按当前设置决定增量、返回 `null` 即不写，"没变就不写"的判断因此与写盘同处一把锁。唯一例外是 `loadSettings` 的 local→sync 迁移（整份写入、只发生一次、且在 `getSettings` 调用栈内，走 `patchSettings` 等于自锁）。两把锁的方向是契约：`startTask` 在 `withTaskLock` 内 `await` 设置写盘（单向等待），设置锁内绝不排 `withTaskLock`，否则互相等死。失效点、串行、锁方向均由 `tests/tab-auto-refresh/settings-cache.test.mjs` 钉住，文件末尾记着红→绿对照与两处第一次不合格的对照
 - 当前默认开：`bypassCache`、`keepAlive`、`httpHeartbeat`、`skipOnActivity`、`captchaGuard`；默认关：`skipDiscarded`、`cookieBackup`、`keepAwake`、`wechatEnabled`；`webhookUrl` 默认空即关闭
@@ -59,6 +59,7 @@
 - alarm 命名：刷新 `refresh-<tabId>`，静默心跳 `hb-<tabId>`；前缀与预设定义在 `shared/config.js`
 - 刷新用"一次性 when + period 兜底"双保险，每次触发后重新 arm，间隔 ±15% 抖动。30 秒档只正向抖，否则一半样本会被 30 秒地板抬回原值
 - `onAlarm` 到点之后的处置全在 `shared/logic.js` 的 `decideAlarmAction`（纯函数，返回 `{action, reason}`），后台只负责把事实取齐再执行 `ALARM_ACT` 四选一。次序是语义的一部分，三条不能调换，注释写在纯函数侧：全局暂停早于标签页存在性（暂停期随手关页不该收到停止通知）、存在性早于 `autoPaused`（否则自动暂停的任务关页后无人清理）。`ACTIVITY_SKIP_MS`（60 秒）随之住在 `logic.js`
+- `SKIP` 那一拍要把 `{reason, at}` 写进会话态 `rt:skip:<tabId>`（刷新成功后清掉、停任务时随其它 `rt:` 键一起清），否则弹窗只能显示"倒计时归零了却没刷"，说不出是被谁挡下的。理由到短标签的映射表 `ALARM_SKIP_REASONS` 住在 `logic.js`，**新增一种 SKIP 理由必须同时进表**：漏了不会崩，只会退回"另有原因"这种没人会怀疑的显示，所以 `tests/tab-auto-refresh/skip-trace.test.mjs` 是真跑 `decideAlarmAction` 收集四种理由来比对，不是手抄清单
 - `skipOnActivity` 有两条判据，是 or：内容脚本上报的活动时间戳（会话态 `rt:activity:<tabId>`），以及 `isTabOnScreen`——该页是所在窗口的活动页且那个窗口是焦点窗口。后者不依赖注入，注入失败的页面不至于在用户眼皮底下反复重载。焦点窗口 id 跟 `windows.onFocusChanged` 记，**三态不能压成两态**：`undefined`（本 SW 实例还没收到过焦点事件）才允许补查一次 `getLastFocused()`，`null`（最后一个事件是 `WINDOW_ID_NONE`）是"已知浏览器不在前台"、必须直接放行去刷，因为真实 Chrome 在焦点去了别的应用之后**仍然返回最后聚焦的那个窗口**，把两态合并会让用户走开期间的每一次触发都判成"人正看着这页"，从此永不刷新。认不出来一律 `false`（宁可多刷一次，绝不能变成永不刷新），且只在 `skipOnActivity` 开着时才去查（关着就别为每次触发多问两回）。门禁由 `tests/tab-auto-refresh/alarm-gate.test.mjs` 钉住
 - 心跳每 4 分钟一次，建 alarm 时带随机初始相位；`chrome.idle` 回到 active 时，过期的刷新 alarm 重走完整周期，过期的心跳 alarm 打散 0~60 秒重建
 - 后台对 `tasks` 的读改写必须走 `withTaskLock` 串行队列
@@ -88,7 +89,9 @@
 - 条目带 `schemaVersion: 2` 与每条 cookie 的 `hostOnly`。还原时 `hostOnly === true` 省略 `domain`（否则 `__Host-` 票据写不进去，或作用域被扩大），`=== false` 传 `domain`，字段缺失的 v1 旧备份统一传 `domain`
 - 单站点封顶 200 条，超限时先按"像登录票据的程度"排序再截（httpOnly > 会话票 > `__Host-`/`__Secure-` > `path=/` > 域更短）。正常规模不排序，避免无谓的顺序变化
 - 启动恢复按注册域匹配，覆盖 SSO 登录所在的兄弟子域；恢复成功的根域记在 `restoredRoots`，据此决定认领的标签页要不要补刷新
-- 淘汰三条件：站点不再被任何任务使用、超过 30 天、超过 20 站上限（按时间留新）。停止任务与启动恢复时统一执行。`chrome.storage.local.get` 不支持通配符，清理要 `get(null)` 后按前缀过滤
+- 淘汰三条件：站点不再被任何任务使用、超过 30 天、超过 20 站上限（按时间留新）。停止任务与启动恢复时统一执行
+- 存档按**键名索引**读：`cookieBackupHosts` 是 `cookieBackup:<host>` 的主机名清单，写成一笔存档时登记（`ensureBackupIndex`），清理与恢复按它定向读，不再 `get(null)` 把几 MB 明文票据反序列化进 SW 只为拿键名。次序决策照纪律 1 抽成 `logic.js` 的两个纯函数：`planBackupFetch`（读之前怎么问存储）与 `planBackupIndex`（读之后与存档实况对账：索引里的幽灵条目摘掉、没登记的补上，没有变化就不落盘）
+- **索引是读优化，不是删除依据**。"该删哪几条"永远看存档实况，不看"索引里有没有"——把方向反了就是丢登录态。索引尚未建立（老版本升上来、或一家都没备份过）时退回**一次**全量读并顺手补建；`ensureBackupIndex` 在这之前只登记不建表，否则别家遗留明文会变成定向读再也看不见的孤儿。并发登记漏掉一家最迟下一次页面加载补回，不会删任何东西。迁移与方向的门禁在 `cookie-backup.test.mjs`（含 `watchLocalGet`：桩件的 `set` 是合并写，"少读一次盘"只能记读法来断言），文件末尾是实跑红名单
 
 ### 会话保活与掉线检测
 
@@ -149,7 +152,8 @@
 - `body` 用 `flex` 加 `max-height: 600px` 兜底，唯一的弹性块是任务列表，列表封顶 108px，第 3 行露头当"下面还有"的提示
 - 微信配置走二级视图整页切换（`body.wx-mode`），四行输入框直接铺在主视图里必然顶破上限
 - `[hidden]` 会被作者样式里的 `display` 压过（`.row` 是 `display:flex`），已全局声明 `[hidden] { display: none !important }`
-- 弹窗每秒重新拉 alarm 列表再重绘倒计时，因为 alarm 周期触发不会触发 `storage.onChanged`
+- 弹窗每秒重新拉 alarm 列表再重绘倒计时，因为 alarm 周期触发不会触发 `storage.onChanged`；同一个循环里读一次跳过痕迹（`syncSkipTraces`，只点名读在场任务的 `rt:skip:<tabId>`）
+- 任务行末的 `.skip` 是"上一次到点为什么没刷"。它由 `renderCountdowns` 每秒重绘，`span` 在 `buildTaskItem` 里就挂好、平时 `hidden`。**正文只放短理由，时间戳进 `title`**：400px 宽的行内多一段时分秒会把 `task-sub` 挤到换行，行高一换整页就破 600px。显示还要过 `skipEntry` 的压制：全局暂停与 `task.autoPaused` 两种情形不显示（这两件事行内本来就有角标和状态文字，再缀一句是重复），所以"采集四条、显示两条"是刻意的，别按显示的口径去改采集
 - 保存设置时要合并既有 `settings`，否则只改复选框会丢掉 `lastIntervalSec`
 - 走 `settings` 的文本框一律绑两条：`input`（去抖 500ms 写盘，同时重算状态行）与 `change`（回车、失焦即时写）。新增这样的框必须同时进 `popup.js` 的 `TEXT_SETTING_INPUT_IDS`，只写进 `saveSettings` 就等于让它退回"只有失焦才保存"——那条反-drift 守卫会红。为什么不逐字符立即写：一笔 `sync.set` 会回流成 `storage.onChanged`，弹窗每敲一个字就重读一遍存储、整体重绘一次，后台那份 settings 快照也跟着每次失效。弹窗一失去焦点就整体销毁，`change` 常常根本不触发，所以 `visibilitychange → hidden` 与 `pagehide` 各补一次 `flushPendingSave()`（没有待写就一笔都不写）；那是补救不是保证，文档正在销毁，真机检查记在 `BACKLOG.md` V1 (e)。两个「发送测试」都必须先 `await saveNow()` 再 `send`，且都要 `try/finally` 复位按钮。以上由 `tests/tab-auto-refresh/popup-save-timing.test.mjs` 钉住：四个写盘时机的函数接假时钟真跑，其余按源码形状
 - 当前标签页已有任务时，`init` 要把该任务的 `keywords`（走 `getTaskKeywords`，旧单串也认）、`onHit === "continue"`、实际间隔回填进输入控件（`populateTaskFields`）。不回填的后果是数据丢失而不是显示缺失：用户只能停掉再重开，而重开读的是空框，原来的关键词监控静默消失。回填只在 init 做一次、排在 `initPresetSelect()` 之后（要盖掉它按 `lastIntervalSec` 的预填），**不得挂到 `storage.onChanged` 的重绘回流上**——回流反复发生，挂上去会抹掉用户正在输入的字；没有任务时早退，一个字都不动。判据与顺序由 `tests/tab-auto-refresh/popup-repopulate.test.mjs` 钉住（切源码跑，popup 没有 DOM 库可测）

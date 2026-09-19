@@ -305,6 +305,45 @@ export function planBackupConvergence(backups) {
   return { remove, rewrite, clean };
 }
 
+/* 备份索引（A12 第 2 条）：cookieBackup:<host> 的键名清单，键名 BACKUP_INDEX_KEY 在 background.js。
+   存档封顶 20 站 × 200 条，最坏一次 get(null) 要把几 MB 明文反序列化进 SW，只为拿键名做前缀过滤。
+   写备份时登记主机名，清理与恢复就只按索引那几条读。两个纯函数把这件事的次序钉住： */
+
+/* 读之前怎么问存储。索引不是数组 = 从没写过（老版本升上来、或用户一家都没备份过），
+   这时只能退回一次全量读。方向要认准：把"缺失"当"空数组"，紧接着 planBackupIndex 就会
+   把老用户的全部存档都判成索引之外的东西，下游按索引清理时是丢登录态，不是慢一点 */
+export function planBackupFetch(indexed) {
+  if (!Array.isArray(indexed)) return { fullScan: true, hosts: null };
+  return { fullScan: false, hosts: dedupeStrings(indexed) };
+}
+
+/* 读之后与存档实况对账。索引里躺着但没读回来的（存档被别的途径删了、或键写坏）摘掉，
+   读回来但索引没有的补上（全量扫那一次、以及并发登记漏掉的那家）。
+   changed 给执行器决定要不要写回：没有变化就别在每次启动多落一笔盘 */
+export function planBackupIndex({ indexed, presentHosts } = {}) {
+  const have = Array.isArray(indexed) ? dedupeStrings(indexed) : [];
+  const present = dedupeStrings(presentHosts || []);
+  const inPresent = new Set(present);
+  const inHave = new Set(have);
+  const hosts = have.filter((h) => inPresent.has(h)).concat(present.filter((h) => !inHave.has(h)));
+  const same =
+    Array.isArray(indexed) &&
+    indexed.length === hosts.length &&
+    hosts.every((h, i) => h === indexed[i]);
+  return { hosts, changed: !same };
+}
+
+function dedupeStrings(list) {
+  const out = [];
+  const seen = new Set();
+  for (const h of list) {
+    if (typeof h !== "string" || !h || seen.has(h)) continue;
+    seen.add(h);
+    out.push(h);
+  }
+  return out;
+}
+
 /* 错误页判定：服务器故障或页面失踪，心跳连续命中则自动暂停任务 */
 export function isErrorStatus(status) {
   return status >= 500 || status === 404;
@@ -751,6 +790,20 @@ export function decideAlarmAction({
   if (skipDiscarded && tab.discarded) return { action: ALARM_ACT.SKIP, reason: "discarded" };
   return { action: ALARM_ACT.RELOAD, reason: "" };
 }
+
+/* SKIP 的四种理由 → 弹窗任务行那句解释的 i18n 键（A12）。
+   住在 decideAlarmAction 旁边是刻意的：理由在这里产生，也只在这里产生，两张表隔得远
+   就会各改各的，而表现是"那一行永远不出现"或者干脆显示裸键名。
+   并集由 tests/tab-auto-refresh/skip-trace.test.mjs 钉住——它遍历真实判定的输出收集理由，
+   不是抄一份清单来比。ALARM_SKIP_UNKNOWN_KEY 是兜底：新加理由忘了登记时弹窗要给一句话，
+   不能给 "skipReasonFoo" */
+export const ALARM_SKIP_REASONS = {
+  "paused-all": "skipReasonPausedAll",
+  "auto-paused": "skipReasonAutoPaused",
+  "user-active": "skipReasonUserActive",
+  discarded: "skipReasonDiscarded"
+};
+export const ALARM_SKIP_UNKNOWN_KEY = "skipReasonUnknown";
 
 /* 凭据完整性：四样缺一不可。返回缺失项（键名），让弹窗能点名而不是笼统报错 */
 export function wechatConfigState(settings) {

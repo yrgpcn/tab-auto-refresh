@@ -1,5 +1,7 @@
-import { PREFIX, PRESETS, DEFAULT_SETTINGS } from "./shared/config.js";
+import { PREFIX, PRESETS, DEFAULT_SETTINGS, SKIP_RT_PREFIX } from "./shared/config.js";
 import {
+  ALARM_SKIP_REASONS,
+  ALARM_SKIP_UNKNOWN_KEY,
   DEFAULT_INTERVAL_SEC,
   RESTRICTED_URL,
   clampInterval,
@@ -42,8 +44,12 @@ let msgTimer = null;
 let renderSeq = 0;
 /* 最近一次微信推送结果（后台写 storage.local），用于"静默失败也要看得见" */
 let wechatLast = null;
-/* 同一个理由的第二份：webhook 原先连状态码都不看，投递失败在这台机器上不留任何痕迹 */
+/* 同一个理由的第三份：webhook 原先连状态码都不看，投递失败在这台机器上不留任何痕迹 */
 let webhookLast = null;
+/* tabId（字符串）→ {reason, at}：上一拍到点被跳过的理由，后台 onAlarm 写进会话态。
+   没有痕迹就一句都不显示，所以"正常刷新"与"从没到过点"这两种情况长得一样，
+   那是刻意的：只有真跳过才需要解释 */
+let skipMap = {};
 
 function msg(key, subs) {
   return chrome.i18n.getMessage(key, subs) || key;
@@ -105,6 +111,53 @@ async function syncAlarms() {
       alarmsMap[a.name.slice(PREFIX.length)] = a;
     }
   }
+  await syncSkipTraces();
+}
+
+/* 跳过痕迹只按在场任务读，所以后台漏清一个键也不会显示出来。跟着 alarm 列表每秒重拉：
+   alarm 周期触发不触发 storage.onChanged（上面那段同步 alarm 的注释是同一条理由），
+   只在打开时读一遍的话，弹窗开着的时候这一行永远停在打开那一刻 */
+async function syncSkipTraces() {
+  const ids = Object.keys(tasks);
+  skipMap = {};
+  if (!ids.length) return;
+  const data = await chrome.storage.session.get(ids.map((id) => SKIP_RT_PREFIX + ":" + id));
+  for (const id of ids) {
+    const e = data[SKIP_RT_PREFIX + ":" + id];
+    /* 形状不认就当没有：会话态里可能是上一版留下的别的形状，读侧宁可少一行解释 */
+    if (e && typeof e.at === "number" && typeof e.reason === "string") skipMap[id] = e;
+  }
+}
+
+/* 任务行那句解释。理由表住在 shared/logic.js（与 decideAlarmAction 挨着），
+   认不出的理由走兜底键——给用户看 "skipReasonFoo" 等于把内部枚举名当文案 */
+function skipChipText(tabId) {
+  const e = skipEntry(tabId);
+  if (!e) return "";
+  return msg("skipChip", [skipChipReason(e.reason)]);
+}
+
+/* 时刻只放在悬停提示里：可见版面已经有一条倒计时和两枚 chip，400px 宽放不下第三个字段 */
+function skipChipTitle(tabId) {
+  const e = skipEntry(tabId);
+  if (!e) return "";
+  return msg("skipChipTitle", [skipChipReason(e.reason), fmtClock(e.at)]);
+}
+
+/* 痕迹在，但这两种情况下同一行已经自己说清楚了，重复一遍反而像显示坏了：全局暂停时
+   倒计时那个位置就写着"已暂停"，自动暂停时有红字 chip 加橙色角标。
+   只查模块级状态，因为 renderCountdowns 每秒跑一次、手上没有标签页对象。
+   文字与悬停提示都走这里，两者不可能一个显一个不显 */
+function skipEntry(tabId) {
+  const e = skipMap[tabId];
+  if (!e || pausedAll) return null;
+  const task = tasks[tabId];
+  if (task && task.autoPaused) return null;
+  return e;
+}
+
+function skipChipReason(reason) {
+  return msg(ALARM_SKIP_REASONS[reason] || ALARM_SKIP_UNKNOWN_KEY);
 }
 
 async function refreshState() {
@@ -215,6 +268,12 @@ function buildTaskItem(tabId, task, tab) {
     );
     sub.appendChild(ap);
   }
+  /* 上一拍到点被跳过的解释（A12）。节点常驻、文字与显隐按秒填，所以后台新写一条
+     不必重开弹窗就能看见；空字符串的 inline 节点照样留出前后分隔，故一并管 hidden */
+  const skip = document.createElement("span");
+  skip.className = "skip";
+  skip.dataset.tab = String(tabId);
+  sub.appendChild(skip);
   const kws = getTaskKeywords(task);
   if (kws.length) {
     const kw = document.createElement("span");
@@ -292,6 +351,14 @@ function renderCountdowns() {
     if (alarm && alarm.scheduledTime) {
       node.textContent = msg("nextIn", [formatCountdown(alarm.scheduledTime - Date.now())]);
     }
+  }
+  /* 跳过解释跟着倒计时一起重算：后台新写一条痕迹不该要用户重开弹窗才看得见。
+     chip 节点常驻，所以空文字时必须连 hidden 一起管，否则留一个空 span 白占宽度 */
+  for (const node of document.querySelectorAll(".skip[data-tab]")) {
+    const text = skipChipText(node.dataset.tab);
+    node.textContent = text;
+    node.hidden = !text;
+    node.title = skipChipTitle(node.dataset.tab);
   }
 }
 

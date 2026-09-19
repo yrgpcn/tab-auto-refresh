@@ -36,6 +36,8 @@ import {
   sessionLostDetected,
   siteRoot,
   planBackupConvergence,
+  planBackupFetch,
+  planBackupIndex,
   withinRoot,
   tabShowsUrl,
   urlKey,
@@ -244,6 +246,65 @@ test("planBackupConvergence drops only what sits outside the registrable root", 
   assert.equal(rw.entry.timestamp, 111);
   assert.equal(rw.entry.schemaVersion, 2);
   assert.equal(plan.clean, 2);
+});
+
+/* ---------- 备份索引（A12 第 2 条）---------- */
+
+test("planBackupFetch: 索引没写过就必须退回全量读，缺索引不等于没备份", () => {
+  for (const bad of [undefined, null, {}, "shop.example.com", 0]) {
+    const p = planBackupFetch(bad);
+    assert.equal(p.fullScan, true, `索引是 ${JSON.stringify(bad)} 时定向读会漏掉老用户的全部存档`);
+    assert.equal(p.hosts, null);
+  }
+  const p = planBackupFetch(["shop.example.com"]);
+  assert.equal(p.fullScan, false);
+  assert.deepEqual(p.hosts, ["shop.example.com"]);
+  /* 空数组与缺失是两回事：真的没有备份时不必再扫一遍盘 */
+  assert.deepEqual(planBackupFetch([]), { fullScan: false, hosts: [] });
+});
+
+test("planBackupFetch 把索引里的重复项与脏元素剔掉", () => {
+  const p = planBackupFetch(["a.test", "a.test", "", null, 7, "b.test", "a.test"]);
+  assert.equal(p.fullScan, false);
+  assert.deepEqual(p.hosts, ["a.test", "b.test"]);
+});
+
+test("planBackupIndex: 索引与存档实况对账，多余摘掉、新出的补上", () => {
+  /* 存档被别的途径删了（手动清存储、写坏的键）：索引里那一条要跟着走 */
+  assert.deepEqual(
+    planBackupIndex({ indexed: ["a.test", "gone.test"], presentHosts: ["a.test"] }),
+    { hosts: ["a.test"], changed: true }
+  );
+  /* 全量扫那一次：索引还没有，读回来的每一家都是索引的内容 */
+  assert.deepEqual(
+    planBackupIndex({ indexed: undefined, presentHosts: ["a.test", "b.test"] }),
+    { hosts: ["a.test", "b.test"], changed: true }
+  );
+  /* 并发登记漏掉的一家：定向读读不到它（它不在读清单里），所以这条只在
+     "全量扫"或"下一次写备份"时才补得上——补上的顺序放在末尾，不动已有条目 */
+  assert.deepEqual(
+    planBackupIndex({ indexed: ["a.test"], presentHosts: ["a.test", "b.test"] }),
+    { hosts: ["a.test", "b.test"], changed: true }
+  );
+});
+
+test("planBackupIndex 只在真的要改时才让执行器落盘", () => {
+  /* 顺序以索引为准，读回来的顺序不参与：get(null) 的键序本来就不保证，
+     跟着它走会让每次启动都白写一笔索引，还会让"索引被改动"这件事看不出来 */
+  assert.equal(planBackupIndex({ indexed: ["a.test", "b.test"], presentHosts: ["b.test", "a.test"] }).changed, false);
+  assert.deepEqual(planBackupIndex({ indexed: ["a.test", "b.test"], presentHosts: ["b.test", "a.test"] }).hosts, ["a.test", "b.test"]);
+  assert.equal(planBackupIndex({ indexed: ["a.test", "b.test"], presentHosts: ["a.test", "b.test"] }).changed, false);
+  assert.equal(planBackupIndex({ indexed: [], presentHosts: [] }).changed, false, "每次启动都白写一笔空索引");
+  /* 重复与脏元素：对账后成了干净清单，就得写回，否则下一次还要再对一遍 */
+  assert.equal(planBackupIndex({ indexed: ["a.test", "a.test", 7], presentHosts: ["a.test"] }).changed, true);
+});
+
+test("planBackupIndex 不许把「索引里没有」当成删除依据", () => {
+  /* 这条钉的是方向：对账只修剪索引行，输出永远是"索引 ∩ 存档 + 读回来的新面"。
+     它不产出任何"该删的存档"，所以调用方拿到的 hosts 不能被反过来理解成
+     "清单之外的存档都可清"——那正是老用户升级后丢登录态的形状 */
+  const r = planBackupIndex({ indexed: ["a.test"], presentHosts: ["a.test", "b.test"] });
+  assert.ok(r.hosts.includes("b.test"), "读回来的存档被对账挤掉了，等于宣布它不存在");
 });
 
 test("urlKey keeps origin+pathname and drops query and hash", () => {

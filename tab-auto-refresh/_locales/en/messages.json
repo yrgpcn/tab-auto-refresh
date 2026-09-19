@@ -122,6 +122,20 @@
 
   "pausedErrorChip": { "message": " - page keeps erroring, auto-paused" },
   "pausedCaptchaChip": { "message": " - hit a bot check, auto-paused" },
+
+  "skipChip": {
+    "message": " - skipped: $REASON$",
+    "placeholders": { "reason": { "content": "$1" } }
+  },
+  "skipChipTitle": {
+    "message": "Last tick skipped: $REASON$ at $TIME$",
+    "placeholders": { "reason": { "content": "$1" }, "time": { "content": "$2" } }
+  },
+  "skipReasonPausedAll": { "message": "all paused" },
+  "skipReasonAutoPaused": { "message": "auto-paused" },
+  "skipReasonUserActive": { "message": "you were active" },
+  "skipReasonDiscarded": { "message": "tab sleeping" },
+  "skipReasonUnknown": { "message": "other reason" },
   "actionResume": { "message": "Resume" },
   "notifTaskPausedError": { "message": "The monitored page keeps returning errors (5xx/404); the task is auto-paused and will resume once the page recovers" },
   "notifTaskPausedCaptcha": { "message": "The monitored page hit a bot verification wall; the task is auto-paused - pass the check and press Resume" },

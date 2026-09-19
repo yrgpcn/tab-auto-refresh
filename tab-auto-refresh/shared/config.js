@@ -5,6 +5,10 @@ import { DEFAULT_INTERVAL_SEC, NOTIFY_EVENTS } from "./logic.js";
 export const PREFIX = "refresh-";
 /* 静默 HTTP 心跳的 alarm 前缀 */
 export const HB_PREFIX = "hb-";
+/* 会话态里"上一拍到点被跳过"的键前缀（A12）：后台写、弹窗读，两头拼的是同一个键。
+   住在这里而不是 background.js 的 RT_* 那一段，是因为写歪一处的表现只有一句话——
+   "那条解释永远不出现"，而它没有任何本地症状可查 */
+export const SKIP_RT_PREFIX = "rt:skip";
 
 /* 偏好设置默认值：cookie 备份涉及敏感数据，默认关闭，由用户在弹窗显式开启；
    后台保活是纯本地行为、只在已开启任务的标签页生效，默认开启 */
