@@ -787,7 +787,7 @@ export const ALARM_SKIP_REASONS = {
 };
 export const ALARM_SKIP_UNKNOWN_KEY = "skipReasonUnknown";
 
-/* 角标那五态集中在这里判（纯函数，纪律 1）。输入全是执行器已经取好的事实，
+/* 角标那五态集中在这里判（纯函数，纪律 1）。输入全是上面 `aggregateBadgeFacts` 现推出来的事实，
    不做任何浏览器调用。五支的先后次序**不在这里逐条重抄**（那份清单住在 `AGENTS.md` 的
    "角标五态"那一行，由 tests/tab-auto-refresh/badge-state.test.mjs 与真实分支现推的顺序比对），
    这里只记两条不能换位的理由：
@@ -808,6 +808,29 @@ export const BADGE_COLORS = {
   COUNT: "#2563eb"
 };
 export const BADGE_TEXTS = { LOST: "!", AUTO_PAUSED: "⚠", PAUSED: "‖" };
+
+/* decideBadge 那四件事实由这一段从 tasks 与 sessionProbe 现推（纯函数，纪律 1 的又一处兑现：
+   归约本身是判断，不许住在执行器里）。两条不能凭读代码相信的判据：
+   - **每一条任务都要看**：一件事实是"有没有任何一张任务掉线/自动暂停"，看到第一个就停下
+     （break、find、或者干脆只取第一个元素）在只有一张任务的现场一模一样，多开一张就把
+     第二张的故障藏住了，而角标是用户唯一的可见信号
+   - **探针的键是注册域**，与写侧 `reportSessionSignal(root, …)` 递进去的那个 root 同一个算法
+     （`siteRoot(hostOf(url))`）。取整串主机名或整个网址都不报错，只是永远查不到那条探针
+
+   `sus` 还没确认掉线的条目不算掉线，那是行为通道与状态通道共用的 2 次确认窗口。
+   取不到可信注册域的任务（`siteRoot` 回 null）不参与掉线判定，但仍然是一张任务。 */
+export function aggregateBadgeFacts({ tasks, probes, pausedAll } = {}) {
+  const list = Object.values(tasks || {});
+  const map = probes || {};
+  let probeLost = false;
+  let autoPaused = false;
+  for (const t of list) {
+    if (t.autoPaused) autoPaused = true;
+    const root = siteRoot(hostOf(t.url));
+    if (root && map[root] && map[root].lost) probeLost = true;
+  }
+  return { probeLost, autoPaused, pausedAll: !!pausedAll, count: list.length };
+}
 
 export function decideBadge({ probeLost = false, autoPaused = false, pausedAll = false, count = 0 } = {}) {
   if (probeLost) return { color: BADGE_COLORS.LOST, text: BADGE_TEXTS.LOST };

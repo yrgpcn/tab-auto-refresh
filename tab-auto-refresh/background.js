@@ -5,6 +5,7 @@ import {
   RESTRICTED_URL,
   ACTIVITY_SKIP_MS,
   ALARM_ACT,
+  aggregateBadgeFacts,
   aggregateFrameHits,
   applyBackupAction,
   buildTokenRequest,
@@ -1235,7 +1236,8 @@ async function restoreCookies(host) {
 }
 
 /* 角标集中在这里刷新。哪一态赢、给什么颜色与文字全在 shared/logic.js 的 decideBadge，
-   这一段只把四件事实取齐（有掉线探针 / 有自动暂停的任务 / 是否全局暂停 / 任务数）再写盘 */
+   四件事实怎么从任务与探针里推出来也全在那一侧的 aggregateBadgeFacts；
+   这一段只读盘、把返回值递过去、再写盘 */
 async function updateBadge() {
   void applyKeepAwake(); /* 任务增删/暂停的所有路径都经过这里 */
   try {
@@ -1244,22 +1246,12 @@ async function updateBadge() {
       isPausedAll(),
       chrome.storage.local.get(PROBE_KEY),
     ]);
-    const n = Object.keys(tasks).length;
-    const probes = probeData[PROBE_KEY] || {};
-    let anyLost = false;
-    for (const t of Object.values(tasks)) {
-      const root = siteRoot(hostOf(t.url));
-      if (root && probes[root] && probes[root].lost) { anyLost = true; break; }
-    }
-    let anyAutoPaused = false;
-    for (const t of Object.values(tasks)) {
-      if (t.autoPaused) { anyAutoPaused = true; break; }
-    }
+    const facts = aggregateBadgeFacts({ tasks, probes: probeData[PROBE_KEY] || {}, pausedAll: paused });
     const { color, text } = decideBadge({
-      probeLost: anyLost,
-      autoPaused: anyAutoPaused,
-      pausedAll: paused,
-      count: n,
+      probeLost: facts.probeLost,
+      autoPaused: facts.autoPaused,
+      pausedAll: facts.pausedAll,
+      count: facts.count,
     });
     await chrome.action.setBadgeBackgroundColor({ color });
     await chrome.action.setBadgeText({ text });
