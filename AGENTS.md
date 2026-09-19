@@ -108,7 +108,7 @@
 ### 关键词监控
 
 - 任务字段 `keywords[]`，每条 ≤100 字、上限 10 个；旧 `keyword` 单串由 `getTaskKeywords` 兼容
-- 检测链全在后台，不碰保活注入通道：每次页面加载完成起一条链，立即查一次，未命中再于 3 秒、10 秒重采样。新链起链即作废旧链，避免并发链重复通知或竞态停任务
+- 检测链全在后台，不碰保活注入通道：每次页面加载完成起一条链，立即查一次，未命中再于 3 秒、10 秒重采样。新链起链即作废旧链，避免并发链重复通知或竞态停任务。**`stopTask` 也要作废该页那条链**（`detectChains.delete`）：链的 `task` 是在 `executeInAllFrames` 之前读好的，摘不掉 Map 里的 token 时，注入回来那道判据就认"我还是当前那条"，于是用户点了停止还弹命中；continue 模式更实在的一点是它回读 `tasks[tabId]` 写 `notifiedKeys`，同一张标签页上以新关键词重开之后，盖上去的是上一轮的在场集。造这种现场只有一个办法：把首拍那次带 `args` 的注入挂住再停任务（三次采样是 3s/10s 真 `setTimeout`，用例等不到第二拍），并且必须先有一条"挂住但没停任务 → 放开就发命中"的正向见证，否则负向用例靠"链压根没跑到"就能绿。门禁 `tests/tab-auto-refresh/detect-chain.test.mjs`
 - 匹配在页面里做：`executeScript({func: matchInPage, args: [keywords]})` 只回传命中的关键词，正文不跨上下文序列化，因此没有早先"截 300KB、之后的内容永远检不到"的盲区。`matchInPage` 必须自包含（executeScript 是 `toString()` 注入的，引用模块作用域会在页面里变 undefined 并被 catch 吞掉），所以判定逻辑与 `logic.js` 的 `presentOf` 是两份实现，由 `tests/tab-auto-refresh/keyword-inpage.test.mjs` 切真实源码执行、逐条比对钉住。取文本一律 `innerText`，换 `textContent` 会把 `<script>` 源码和 `display:none` 的隐藏文字算进正文
 - 两条检测链（关键词与验证墙）的注入统一走 `executeInAllFrames`：先 `allFrames: true`，被拒再退回 `frameIds: [0]`。`allFrames` 的失败方式是**整次调用 reject**，一个够不着的沙箱框架就能带走整页结果，所以必须有这个回退——加多框架不许把原来单框架能成的场景换成新的失败。关键词结果由 `aggregateFrameHits` 合并（取到几个算几个，一个都没取到才回 `null` 让链提前结束）；子框架有跨源标题与文字，顶层读法 `results[0]` 会漏。**保活心跳脚本仍只注顶层**，这是刻意的：同一份模拟活动注进每个子框架会向对方服务器放大请求量，子框架的 `document.hidden` 语义也不同。门禁在 `tests/tab-auto-refresh/frame-scan.test.mjs`
 - 命中后按 `onHit` 决定停任务（默认）还是继续盯守，继续时把在场集回写 `notifiedKeys`，关键词消失后再出现会重新通知。原先"正文与上次相同就提前结束"的早停已删（回传的不再是要比较的正文）
