@@ -52,11 +52,11 @@ A 系列第一批十二条至此清账；当天在其后又跑了两轮审计，
 
 | 编号 | 优先级 | 一句话 | 状态 |
 | --- | --- | --- | --- |
-| A15 | P2 | `startTask` 在任务锁里等外发，任务已落盘却没有 alarm | 待做 |
 | A16 | P2 | 弹窗一打开就把会话恢复还没到位的任务静默停掉 | 待做 |
 | A17 | P3 | 连击计数跨任务生命周期存活（重开标签页、重新开始任务、关再开验证墙开关） | 待做 |
 | A18 | P2 | 弹窗的 settings 回流只重绘任务区，控件与二级视图停在打开那一刻，下一次保存整份写回会撤回对面设备的改动 | 待做 |
 | A19 | P3 | `renderWechat` 与 `fmtClock` 在全套门禁里一次也没被执行过（改坏零红） | 待做 |
+| A20 | P3 | 停任务时那句 `keepalive-off` 零门禁：整行删掉全套一条都不红 | 待做 |
 | V1 | — | 2.1.0 真机手工验证（含下面几条只能真机验的检查） | 待做 |
 | E2 | — | `_code-review/` 门禁是否迁入入库路径（A10 已照此把 `verify-wechat-template-doc` 换成入库的 `wechat-copy.test.mjs`，剩下的按这个形状挑） | 待定 |
 | E3 | — | 桩件缺 `chrome.power` 与 Promise 型 `fetch` 两块记录面，两类 bug 结构上测不出来 | 待做 |
@@ -89,23 +89,17 @@ A14 同日结案，走的是"登录页不参与改写"那一支：`task.url` 的
 这条有专门用例盯着。残余边界如实记下——用户从此不再登录，任务就一直监控着那张登录页，
 行为通道对它照旧豁免（那是"用户故意监控登录页"该有的语义，不为它加特例）。
 
+A15 同日结案：`startTask` 的首次备份从任务锁里挪出来、排到整条锁内流程之后，`armRefresh` 与
+`ensureHeartbeat` 提到紧跟 `setTasks` 的位置——中间不再夹任何可失败的等待。**仍然 await 那笔外发**，
+没有改成裸甩（裸甩丢的正是"会话掉线"这条通知，这一点由 N3 那处对照钉着）。
+新增 `tests/tab-auto-refresh/start-task-lock.test.mjs` 4 条，靠的是在 boot 之后把 `globalThis.fetch`
+换成永不 resolve 的桩——E3 说的"桩件没有 Promise 形态的应答"这条限制，在单条用例里绕过去了，
+桩件本身还没改。对照 6 处：A15 原样退回红 2、备份挪到锁之前无条件执行红 3、改成裸甩红 1、
+心跳排到写盘之前红 2（连带既有的「右键开始 1 分钟」）、先挂表再验现场红 1。
+另有一处**零红**顺手量出来并记成新账：删掉 `stopTask` 里的 `stopKeepAlive(tabId)` 全套 333 条一条都不红，
+也就是 A20。它不是 A15 的改坏目标，但同一把尺子量到的缺口没有装看不见的道理。
+
 ## P2
-
-### A15 `startTask` 在任务锁里等外发；这段时间任务已落盘却没有 alarm
-
-- 位置：`startTask` → `withTaskLock` → `setTasks` → `backupCookies` → `notifySessionLost` →
-  `notifyOut`/`postWebhook`/`postWechat`，之后才是 `armRefresh` / `ensureHeartbeat`
-- 症状：开了"cookie 备份 + webhook（或微信）"、且这一拍恰好确认掉线的用户点「开始」之后：`tasks` 里已经有
-  这条任务，`refresh-<id>` 与 `hb-<id>` 一条都没建，弹窗按钮卡在"开始"上，**其它标签页的起停全排在同一把锁后面**。
-  外发是 fetch，15 秒超时，微信还要多取一次令牌，最坏几十秒。MV3 的 SW 若在等待中被回收，就留下
-  `AGENTS.md` 里那句"任务在、永不刷新"的僵尸
-- 实测：把 `globalThis.fetch` 换成永不 resolve 的桩（必须在 `bootBackground` 之后覆盖，桩件安装时会替换它）→
-  `start(7)` 与另一家站点的 `start(9)` 同时 PENDING，`calls.alarmsCreated` 为空，而 `tasks` 已是 `["7"]`
-- 为什么测不出来：桩件的 `fetch` 从不返回 Promise（见 E3），`outbound.test.mjs` 判的是请求形状与留痕，
-  不看"锁是不是压在网络上面"
-- 改法方向：把外发挪出任务锁（`setTasks` 之后与 alarm 一起收尾，或在锁外 `await` 一条独立事件队列）；
-  `armRefresh` / `ensureHeartbeat` 排在任何可失败的等待之前——这与 `prune` 里"先写盘再挂心跳"是同一条纪律的另一半。
-  **别顺手把 `await notifyOut` 改成裸甩**，那正是它当初被 await 的理由（SW 回收会截断）
 
 ### A16 弹窗一打开就把"会话恢复还没到位"的任务静默停掉
 
@@ -185,6 +179,22 @@ A14 同日结案，走的是"登录页不参与改写"那一支：`task.url` 的
   `getTaskKeywords` 丢掉旧单串 `keyword` 的兼容读 → 红 2 条（有门禁）；`looksLikeLoginPage` 恒返回 false →
   红 4 条，其中一条是 `outbound.test.mjs` 的"两个出口一共只发出 0 笔，下面的断言会空跑"
 
+### A20 「停任务要让页面内的保活脚本自停」这一步零门禁
+
+- 位置：`stopTask` → `stopKeepAlive(tabId)`（向标签页发 `keepalive-off`，让已注入的
+  `content/keepalive.js` 自停）
+- 症状：任务停了，页面还在替用户"假装活动"——每隔 45~75 秒向 `document` 派发一次 `mousemove` / `keydown`。
+  站点看到的是真人在线，会话一直续着，而扩展侧已经认为这条通道归自己管了。停任务与"这个页面不再被监控"
+  在页面上留不下任何区别
+- 实测（2026-09-19，A15 那轮对照里的一次改坏）：把 `stopTask` 里的 `stopKeepAlive(tabId);` 整行删掉，
+  跑全套 **333 条，一条都不红**。桩件早就在记 `calls.messagesSent`，只是没有任何一条用例去断言它
+- 为什么测不出来：没有任何一条用例断言 `calls.messagesSent`（桩件本来就记着这一列），
+  注入方向与自停方向只测了注入那一头。`AGENTS.md` 里"停止任务发 `keepalive-off` 让页面内脚本自停"
+  是写在注入点那一条的后半段，从来没有对应的用例
+- 改法方向：跑真实 `background.js` 的那批里补一条"停任务必须发出 `keepalive-off`"，形状照
+  `popup-repopulate.test.mjs` 那条"渲染空跑守卫"——先证明见证对象被调用过，再断言它的载荷。
+  注入侧（`startTask` 即时一次、`onUpdated` 每次加载完成补一次）顺带也各缺一条
+
 ## 工程账（E）
 
 ### E3 桩件缺两块记录面，有几类 bug 结构上测不出来
@@ -193,8 +203,10 @@ A14 同日结案，走的是"登录页不参与改写"那一支：`task.url` 的
   "持锁标记靠 `rt:awake` 兜底、一个 SW 生命周期最多 request 一次"写不出用例（`AGENTS.md` 说 power 锁的收敛
   挂在 `updateBadge`，这条链目前只能靠读代码相信）。补齐形状与 `calls.alarmsCleared` 同形：记
   `requestKeepAwake` / `releaseKeepAwake` 的调用序列
-- `fetch` 桩不 await Promise 型应答，所以"外发挂住时后台正在做什么"（A15）在现有桩件下永远测不出来。
-  `env.onFetch` 要允许返回一个由测试握着的 promise（配合"永不 resolve"与"到点 resolve"两种现场）
+- `fetch` 桩不 await Promise 型应答，所以"外发挂住时后台正在做什么"在**桩件本身**仍然测不出来。A15 结案时
+  是靠每条用例在 `bootBackground` 之后自己覆写 `globalThis.fetch` 绕过去的（见 `start-task-lock.test.mjs`），
+  那是局部的、一次性的绕法。`env.onFetch` 要允许返回一个由测试握着的 promise（配合"永不 resolve"与
+  "到点 resolve"两种现场），届时那处覆写应当回收进桩件
 - 两条都是先补面、再谈各自那条链的判据；补面时要连带记一句"哪几条门禁因此从空跑变成真跑"
 
 ## 只能真机验（V1）

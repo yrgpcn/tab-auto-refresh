@@ -216,8 +216,8 @@ function patchSettings(partial) {
    心跳被重定向到登录页或返回 401/403，都计为疑似，连续
    SESSION_LOST_CONFIRM_SAMPLES 次确认，一次正常信号即恢复，与状态通道各自独立计数。
    确认后角标变红、发通知（按 6 小时节流），并让 backupCookies 拒绝写入坏备份。
-   本函数不经 withTaskLock：它会被已在锁内的 backupCookies 调用，而锁不可重入。
-   探针写入碰撞的后果只是计数偏差 1，可以接受 */
+   本函数不经 withTaskLock：它的三个调用点（任务页加载、心跳）都在锁外，而探针写的是
+   `sessionProbe` 不是 `tasks`。探针写入碰撞的后果只是计数偏差 1，可以接受 */
 async function reportSessionSignal(root, host, suspect) {
   try {
     if (!root) return;
@@ -266,9 +266,9 @@ async function isProbeLost(url) {
 }
 
 /* 为某个标签页开启定时刷新，返回实际生效的间隔秒数；开始新任务即解除全局暂停 */
-function startTask(tabId, seconds, keyword, keepWatching) {
+async function startTask(tabId, seconds, keyword, keepWatching) {
   const { seconds: safe } = clampInterval(seconds);
-  return withTaskLock(async () => {
+  const done = await withTaskLock(async () => {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     /* 拿不到标签页或网址时不建任务，否则站点锁定与自动重开都无从依据 */
     if (!tab || !tab.url) {
@@ -287,22 +287,31 @@ function startTask(tabId, seconds, keyword, keepWatching) {
       if (keepWatching) tasks[tabId].onHit = "continue";
     }
     await setTasks(tasks);
+    /* 写盘之后紧接着挂两条定时器，中间不许插任何可失败的等待（A15）。
+       反过来排会把"任务已落盘、alarm 一条没有"的窗口撑到几十秒：SW 正在等网络时被回收，
+       就没有人来补挂，任务从此只躺在清单里永不刷新。ensureHeartbeat 排在 setTasks 之后
+       是同一条纪律的另一半——它按落盘后的键读任务，早于写盘会读到"这个 id 没任务"而把心跳清掉 */
+    await armRefresh(tabId, safe);
+    await ensureHeartbeat(tabId);
     /* 重新开始就是新的一轮：这个标签页上旧的命中/停止/暂停通知都已经不成立，
        留着等于让用户对着上个周期的结论做判断。
        不清 session-lost：那是站点级状态，与本标签页重不重启无关 */
     clearNotice(NOTIF_ID.keywordHit(tabId));
     clearNotice(NOTIF_ID.taskStopped(tabId));
     clearNotice(NOTIF_ID.taskPaused(tabId));
-    /* 开启任务时立即备份一次，避免首次刷新前关闭浏览器导致无备份可恢复 */
-    await backupCookies(tabId);
-    await armRefresh(tabId, safe);
     await syncKeepAliveConfig(tabId);
-    await ensureHeartbeat(tabId);
     await chrome.storage.local.set({ pausedAll: false });
     await updateBadge();
     await rememberLastInterval(safe);
     return { safe };
   });
+  /* 开启任务时立即备份一次，避免首次刷新前关闭浏览器导致无备份可恢复。
+     这一拍排在锁外（A15）：backupCookies 一旦走到掉线确认，就会一路 await 到
+     notifyOut 的两笔 fetch（15 秒超时，微信还要先取一次令牌），而任务锁是全站共享的——
+     压在锁上等网络时，别的标签页连"开始/停止"都要排在它后面几十秒。
+     仍然 await 而不裸甩：那笔外发丢的正是"会话掉线"这条通知 */
+  await backupCookies(tabId);
+  return done;
 }
 
 function stopTask(tabId) {
