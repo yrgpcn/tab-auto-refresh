@@ -5,13 +5,15 @@
    现在 SKIP 把 {reason, at} 写会话态 rt:skip:<tabId>，RELOAD 把它清掉，弹窗按在场任务
    每秒读一回、在任务行里补一句解释。
 
-   门禁分四层，各管一段这段链条上真实会断的地方：
+   门禁分五层，各管一段这段链条上真实会断的地方：
    1. 纯函数侧：跑 decideAlarmAction 收集所有 SKIP 理由，与弹窗的理由表求并集相等，
       每个键在两份语言包里都要有内容。清单是跑出来的，不是抄来的
    2. 执行器侧：写的是哪个键、形状对不对、连续两拍只留最近一次、真刷新时要清掉、停任务清掉
    3. 弹窗侧：读键的表达式与后台写键的表达式必须算出同一个键（跨文件耦合，只有两边各钉一次
       才不会一边改完另一边静默失效），坏形状要当没有，理由认不出要走兜底键
    4. 版面侧：chip 节点建了、每秒填了、空文字时 hidden 跟上了，行内字数没破 400px 预算
+   5. 时刻本身：3、4 两层注进去的都是假时钟，真实 fmtClock 的补零与"只取时分"由这一层跑
+      （A19：名字里带 fmtClock 的用例一次也没调用过真身）
 
    红→绿对照实跑见文件末尾。 */
 
@@ -240,6 +242,8 @@ const POPUP_FNS = [
 
 /* i18n 用回显假件（与共享桩件同一条理由）：不翻译文案，只证明"键与代入顺序走对了" */
 const msgEcho = (key, subs) => (subs && subs.length ? `${key}:${subs.join(",")}` : key);
+/* 假时钟：这几条要的是"时刻有没有传到 title"这个字面可比性。真身由第 5 层单独跑，
+   别以为用例名字里带着 fmtClock 就等于测过它（A19 记的就是这个误会） */
 const clock = (ms) => `T${ms}`;
 
 function makePopup({ tasks = {}, session = {}, pausedAll = false } = {}) {
@@ -411,6 +415,54 @@ test(".skip 只上色不声明 display，全局 [hidden] 规则还在", () => {
   assert.match(CSS_SRC, /\[hidden\] \{ display: none !important; \}/);
 });
 
+/* ---------- 5. 时刻本身：真身 fmtClock ---------- */
+
+/* 上面两层里 fmtClock 一直是那个 `(ms) => "T" + ms`，测的是"时刻传到 title 这一路断没断"。
+   真身是 toLocaleTimeString 的包装，它的补零与"只到分钟"此前一次也没被执行过（A19）。
+   断言里不许出现 "09:07" 这样的字面量：本机是 zh-CN + Asia/Hong_Kong，CI 是 en-US + UTC，
+   "09:07" 与 "09:07 AM" 都得算对。所以钉的是数字分组的形状——正好两组、每组两位。
+   掉一位（补零退化）、多出第三组（把秒带进来）、少一组（把分钟丢掉）都会红。
+   喂的时刻用本地分量构造，不写 UTC 毫秒：这样换时区也仍是"本机的 9 点 07 分" */
+const FMT_CLOCK_SRC = slice("fmtClock");
+const runClock = (ms) => new Function(`${FMT_CLOCK_SRC}\nreturn fmtClock;`)()(ms);
+const digitGroups = (s) => s.match(/\d+/g) || [];
+
+test("空跑守卫：fmtClock 切到的确实是那个包装函数，三处调用都还在", () => {
+  assert.match(FMT_CLOCK_SRC, /^function fmtClock\(ms\) \{/);
+  assert.ok(FMT_CLOCK_SRC.length > 60 && FMT_CLOCK_SRC.length < 400,
+    `切出来 ${FMT_CLOCK_SRC.length} 字节，不像一个 toLocaleTimeString 的包装`);
+  /* 一次数进 title、两次数进状态行。删掉任何一处，上面那些用例都不会红——它们各测各的，
+     只有这条计数看得到"这一路的时刻没了" */
+  assert.equal([...POPUP_SRC.matchAll(/fmtClock\(/g)].length, 4,
+    "fmtClock 是一个定义加三处调用，数目变了要回来看这一层");
+});
+
+test("小时与分钟各占两位：9 点 07 分不退化成 9:7", () => {
+  /* 两位都取个位起的输入：2-digit 换成 numeric 时只有这种时刻会露出来 */
+  const s = runClock(new Date(2026, 0, 5, 9, 7, 0).getTime());
+  assert.deepEqual(digitGroups(s), ["09", "07"], `实得 ${JSON.stringify(s)}`);
+});
+
+test("只到分钟：同一分钟的两端得到同一个串", () => {
+  const a = runClock(new Date(2026, 0, 5, 9, 7, 0).getTime());
+  const b = runClock(new Date(2026, 0, 5, 9, 7, 59).getTime());
+  assert.equal(a, b, "秒进了显示，状态行与悬停提示每秒都在换字");
+});
+
+test("分钟没被丢掉：相邻两分钟必须不同", () => {
+  const a = runClock(new Date(2026, 0, 5, 9, 7, 30).getTime());
+  const b = runClock(new Date(2026, 0, 5, 9, 8, 30).getTime());
+  assert.notEqual(a, b, "只显示到小时，一小时内两次投递长得一模一样");
+});
+
+test("坏时刻不许抛：留痕缺 at 时这是 init 同步链上的一手", () => {
+  /* 真身拿 undefined / NaN 只会得到本地化的"无效时间"字样，走不到 catch 里那个 ""；
+     这里钉的是不许抛，不是钉返回值——返回什么由本地决定 */
+  for (const bad of [undefined, null, NaN, {}]) {
+    assert.equal(typeof runClock(bad), "string", `喂 ${String(bad)} 抛了`);
+  }
+});
+
 /* 红→绿对照：2026-09-19 本机实跑。做法是把整份仓库复制到仓库外（D:\Github\_tar_ctl_a12），
    在副本上改源码、跑本文件，一次一条变异，记下的都是实际看到的红名单而不是预测。
    22 条：前 19 条按预期变红，后 3 条反向对照必须保持全绿。
@@ -455,3 +507,27 @@ test(".skip 只上色不声明 display，全局 [hidden] 规则还在", () => {
    b) 第 10 条第一次跑是绿的。原因不在判据太松，而在用例的输入：我给的三条坏记录
       全都缺 at，缺 reason 那半边判据从来没有单独生效过。补一条 { at: 5 } 之后才红。
       "覆盖每一项判据"要按判据配输入，不是按分支数个数 */
+
+/* 第 5 层（fmtClock 真身）的对照：同一天实跑，脚本与变体文件在仓库外 D:\Github\_tar_ctl_a19。
+   跑法与上面这批不同——本轮变异全在 popup.js 的源码文本里，不必整仓复制，
+   把改坏的 popup.js 写成变体文件、TAR_POPUP_SRC 指过去即可。每个用例对
+   skip-trace 与 popup-settings-sync 两个文件**分开各跑一遍**，混在一次 --test 里就看不出
+   红在哪一层。基线（未改动的 popup.js 指过去）25/25 + 18/18 全绿。
+
+     F1  2-digit 换成 numeric        → 红 1 条：小时与分钟各占两位
+     F2  分钟整个丢掉                → 红 2 条：各占两位、分钟没被丢掉
+     F3  把秒也带进显示              → 红 2 条：各占两位、只到分钟
+     F4  正文改成立刻 return ""（A19 那条零红探针）→ 红 2 条：各占两位、分钟没被丢掉
+     F5  删掉 skip chip 那一处调用   → 红 2 条：空跑守卫的调用计数、"认不出的理由走兜底键"
+         （后者红是因为它比的是整串 title：时刻退化成裸毫秒数照样露出来，
+           这一层要的真不是"函数被调用过"，而是"三个调用点还在原位"）
+     F6  整段函数体换掉：去掉 try/catch 且把 hour 写成非法值
+                                    → 红 4 条：本层全部四条，其中"坏时刻不许抛"只有这一处才红。
+                                       它不是装饰：光把选项写坏而留着 catch，catch 兜住回 ""，
+                                       那条照样绿——所以它的牙只在"没了 catch"时露出来
+     RF1 （反向）选项键序换一下、拆成两条语句，行为不变 → 25 条全绿
+
+   F1~F4 与 F6 同一轮里，popup-settings-sync 的"真时钟接在真渲染链上"各红 1 次；F5 在它那侧 0 红，
+   这是对的：F5 只动了 skip chip 的调用，两行状态那两处仍然在。
+   另一处判读前提：A19 原账记的是"改坏 fmtClock 全套 324/364 条零红"，本轮 F4 在两个文件里
+   各红 2 条与 1 条，缺口确实被堵上了。 */

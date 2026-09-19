@@ -36,6 +36,7 @@
 
 - 三条外发链路（webhook、微信、静默心跳）的用例必须经桩件 `env.reply(spec)` 给出真应答：共享桩件在 `bootBackground` 里同时装 `globalThis.chrome` 与 `globalThis.fetch`，只设 `env.reply` 而拿不到 `fetch` 等于请求根本没发出去
 - 凡是只断言"没发、没写、没通知"的用例，永远不可能证明那条链路被执行过——新写用例要先有一条"链路确实跑到了"的正向断言，再叠加"这条路径不该跑"的负向断言。红→绿对照的做法记在每个测试文件末尾
+- 断言本地化过的显示（时刻、日期、数字）时不许写字面量期望值：本机与 CI 的 locale 与时区不同，`"09:07"` 与 `"09:07 AM"` 只能在其中一边成立。钉形状（数字分组的个数与位数）、按本地分量构造喂进去的时刻。A19 那批用例照这个形状写，理由写在用例里
 
 ## 插件要点
 
@@ -160,7 +161,7 @@
 - 走 `settings` 的文本框一律绑两条：`input`（去抖 500ms 写盘，同时重算状态行）与 `change`（回车、失焦即时写）。新增这样的框必须同时进 `popup.js` 的 `TEXT_SETTING_INPUT_IDS`，只写进 `saveSettings` 就等于让它退回"只有失焦才保存"——那条反-drift 守卫会红。为什么不逐字符立即写：一笔 `sync.set` 会回流成 `storage.onChanged`，弹窗每敲一个字就重读一遍存储、整体重绘一次，后台那份 settings 快照也跟着每次失效。弹窗一失去焦点就整体销毁，`change` 常常根本不触发，所以 `visibilitychange → hidden` 与 `pagehide` 各补一次 `flushPendingSave()`（没有待写就一笔都不写）；那是补救不是保证，文档正在销毁，真机检查记在 `BACKLOG.md` V1 (e)。两个「发送测试」都必须先 `await saveNow()` 再 `send`，且都要 `try/finally` 复位按钮。以上由 `tests/tab-auto-refresh/popup-save-timing.test.mjs` 钉住：四个写盘时机的函数接假时钟真跑，其余按源码形状
 - 当前标签页已有任务时，`init` 要把该任务的 `keywords`（走 `getTaskKeywords`，旧单串也认）、`onHit === "continue"`、实际间隔回填进输入控件（`populateTaskFields`）。不回填的后果是数据丢失而不是显示缺失：用户只能停掉再重开，而重开读的是空框，原来的关键词监控静默消失。回填只在 init 做一次、排在 `initPresetSelect()` 之后（要盖掉它按 `lastIntervalSec` 的预填），**不得挂到 `storage.onChanged` 的重绘回流上**——回流反复发生，挂上去会抹掉用户正在输入的字；没有任务时早退，一个字都不动。判据与顺序由 `tests/tab-auto-refresh/popup-repopulate.test.mjs` 钉住（切源码跑，popup 没有 DOM 库可测）
 - 设置区那 15 个控件只有一个填充函数 `populateSettingsFields()`，`init` 与 `storage.onChanged` 的 `changes.settings` 分支各调一次（回流那一次**必须排在 `refreshState()` 后面**，读的是刚归一化过的 `settings`；直接吃 `changes.newValue` 会绕过默认值合并与 `webhookEvents` 迁移）。不这么做的后果不是显示滞后而是撤销别人的改动：`saveSettings` 整份覆盖，弹窗开着多久，另一台设备的改动就被按打开那一刻的 DOM 翻回去多久（A18）。两个文本框判据缺一不可：五个走 settings 的文本框在**获得焦点**或**有去抖写盘挂在路上**时整组跳过（不逐框——凭据四项填三段留一段会拼出两边都不认识的组合，且马上被那笔待写的盘提交），复选框没有输入中间态所以照常同步；`saveSettings` 仍发整份快照（要改成只发差异键得连 `patchSettings` 的锁方向一起重新论证），所以这次修的是撤销窗口的长度，不是竞态本身。**新增设置项必须同时进 `saveSettings` 与这个函数**，那条"清单同源"守卫会红。远程关掉微信时退出 `body.wx-mode`，反向刻意不做。门禁 `tests/tab-auto-refresh/popup-settings-sync.test.mjs`（同步函数、`wechatStatus`、两个渲染、监听器整条链全切真实源码跑）
-- 两条状态行（`#wechatRow` / `#webhookRow`）都是"配了才出现"：整页贴着 600px 上限，平时不占高度，所以新增行一律走 `hidden` 而不是 CSS 折叠。状态文字统一挂 `.wx-state`（nowrap + ellipsis，文案必须短），颜色只有 `.wx-state.ok` / `.wx-state.error` 两种。`renderWebhook()` 刻意写成单个自包含函数（含地址非法那一半判断），因为门禁是按花括号配对切它的真实源码执行的，拆成两个函数就要多注入一个名字；它的用例同样记在 `popup-repopulate.test.mjs`，其中"假 DOM 的初值要带上一轮残留"是硬要求——初值全给空串时"清空"与"什么都不做"拿到同一个值，对照跑出来是绿的（该文件末尾处 10、处 11 两条教训）
+- 两条状态行（`#wechatRow` / `#webhookRow`）都是"配了才出现"：整页贴着 600px 上限，平时不占高度，所以新增行一律走 `hidden` 而不是 CSS 折叠。状态文字统一挂 `.wx-state`（nowrap + ellipsis，文案必须短），颜色只有 `.wx-state.ok` / `.wx-state.error` 两种。`renderWebhook()` 刻意写成单个自包含函数（含地址非法那一半判断），因为门禁是按花括号配对切它的真实源码执行的，拆成两个函数就要多注入一个名字；它的用例同样记在 `popup-repopulate.test.mjs`，其中"假 DOM 的初值要带上一轮残留"是硬要求——初值全给空串时"清空"与"什么都不做"拿到同一个值，对照跑出来是绿的（该文件末尾处 10、处 11 两条教训）。两行末尾的时刻统一由 `fmtClock` 格式化（与跳过痕迹的 `title` 共用同一个），它是 `toLocaleTimeString` 的包装，**用例不许把 `"09:07"` 写成期望值**：本机 zh-CN 得到 `09:07`、CI en-US 得到 `09:07 AM`，钉的是数字分组的形状（正好两组、每组两位），时刻按本地分量构造所以换时区也不必改用例（A19 补的账，跑真身在 `skip-trace.test.mjs` 第 5 层与 `popup-settings-sync.test.mjs` 各一次）
 - i18n 通过 `data-i18n` / `data-i18n-placeholder` / `data-i18n-title` 注入，`title` 这条通道专门用来把开关的长解释挪出可见版面
 
 ### 跨 SW 实例的运行时状态

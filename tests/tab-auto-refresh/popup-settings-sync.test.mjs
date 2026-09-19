@@ -16,7 +16,12 @@
    popup.js 整体跑不了（DOM + chrome.* 的混合体，仓库没有 DOM 库），沿用
    popup-repopulate / popup-save-timing 的做法：按花括号切真实源码、依赖当形参注入、真跑。
    renderWebhook / renderWechat 也切真实源码进来，所以"两行状态跟着重算"是跑出来的，
-   不是数调用点数目出来的。红→绿对照实跑见文件末尾。 */
+   不是数调用点数目出来的。红→绿对照实跑见文件末尾。
+
+   2026-09-19 同日并进来两批 A19 的账，因为这套机器正好缺它们：
+   ① wechatStatus 的第三条判据"凭据不全 → 点名缺哪几项"从没被执行过（四项一直是假 DOM
+      里那句"正在打的字"）；② 这里注入的时钟一直是假的，真身 fmtClock 换成空串也不会红。
+   两批用例都靠同一个 runSync，没有新桩件。 */
 
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -93,6 +98,11 @@ const LISTENER_SRC = sliceBlock(
 const msgStub = (key, subs) => key + (subs && subs.length ? ":" + subs.join("|") : "");
 const clockStub = (ms) => "⏱" + ms;
 
+/* A19 的后半：真身 fmtClock。上面那些用例比的是字面量，注假时钟才比得动；
+   这里额外跑一遍"真时钟接到真渲染链上"，否则 fmtClock 换成一串空格也没有人会红 */
+const FMT_CLOCK_SRC = sliceFunction(POPUP_SRC, "fmtClock");
+const realClock = (ms) => new Function(`${FMT_CLOCK_SRC}\nreturn fmtClock;`)()(ms);
+
 /* 初值刻意全部取"与默认相反"的那一侧：全给空/false，"远程把值清空时要抹掉残留"
    这一半就永远测不到（popup-repopulate 处 10 的教训） */
 function makeDom() {
@@ -112,8 +122,9 @@ const checkedOf = (dom) =>
   Object.fromEntries(CHECK_IDS.map((id) => [id, dom[id].checked]));
 const valueOf = (dom) => Object.fromEntries(TEXT_IDS.map((id) => [id, dom[id].value]));
 
-/* 真跑一次同步：settings / saveTimer / 焦点 / 两份推送留痕全部按例喂 */
-function runSync({ settings, saveTimer = null, focus = null, mode = false, wh = null, wx = null, texts = {} }) {
+/* 真跑一次同步：settings / saveTimer / 焦点 / 两份推送留痕全部按例喂。
+   clock 默认是假时钟（断言要比字面量），只有"真时钟接真渲染链"那一条换成真身 */
+function runSync({ settings, saveTimer = null, focus = null, mode = false, wh = null, wx = null, texts = {}, clock = clockStub }) {
   const dom = makeDom();
   for (const [id, v] of Object.entries(texts)) dom[id].value = v;
   const classes = new Set(mode ? ["wx-mode"] : []);
@@ -138,7 +149,7 @@ function runSync({ settings, saveTimer = null, focus = null, mode = false, wh = 
      return populateSettingsFields;`
   )(
     (id) => dom[id], settings, saveTimer, document, TEXT_IDS,
-    notifyEventsOf, msgStub, clockStub, normalizeWebhookUrl, wechatConfigState,
+    notifyEventsOf, msgStub, clock, normalizeWebhookUrl, wechatConfigState,
     WECHAT_FIELD_LABEL_KEYS, wh, wx
   );
   api();
@@ -167,6 +178,7 @@ test("空跑守卫：同步函数、判据与渲染、监听器各切到一段�
   assert.match(SYNC_SRC, /^function populateSettingsFields\(\)/);
   assert.ok(SYNC_SRC.length > 700, "同步函数切得太短，等于什么都没测");
   assert.ok(RENDER_WH_SRC.length > 200 && RENDER_WX_SRC.length > 150 && WECHAT_STATUS_SRC.length > 200);
+  assert.match(FMT_CLOCK_SRC, /^function fmtClock\(ms\) \{/, "真时钟切错了，那几条时刻断言是假的");
   assert.ok(LISTENER_SRC.length > 300, "监听器切得太短，回流那条链没进视野");
   assert.match(LISTENER_SRC, /changes\.settings/);
   assert.ok(CHECK_IDS.length >= 13, `从 saveSettings 只认出 ${CHECK_IDS.length} 个复选框，正则失效了`);
@@ -296,6 +308,81 @@ test("两行状态跟着新值重算：跑的是真实 renderWebhook / renderWec
   assert.equal(cleared.dom.wechatViewState.hidden, true);
 });
 
+/* ---------- A19：微信状态第三条判据"凭据不全 → 点名缺哪几项" ---------- */
+
+/* 上一条用例过的两条判据里，凭据四项一直是 "正在打的字"（永远齐全），留痕也永远带着，
+   所以 wechatStatus 的缺失分支一次也没执行过。先钉"配齐时不报缺失"这条正向，
+   再叠加缺失那几条——只断言"报了什么"而不先证明"什么时候不该报"，判据退化成恒报缺失也不会红 */
+test("凭据四项齐全时报的是投递结果，不是缺失：缺失分支的正向半边", () => {
+  const ready = runSync({ settings: ALL });
+  assert.equal(ready.dom.wechatState.textContent, "wechatStateIdle", "四项都填着却报缺失");
+  assert.doesNotMatch(ready.dom.wechatState.className, /error/);
+  const ok = runSync({ settings: ALL, wx: { ok: true, status: 200, at: 123 } });
+  assert.equal(ok.dom.wechatState.textContent, "wechatStateOk:⏱123");
+});
+
+/* 期望串按"真实 label 表 + 真实分隔符键"拼，不抄字面量：label 表是从 popup.js 解析进来的，
+   少一项或换错键都会让下面这几条对不上 */
+const missingOf = (...keys) =>
+  "wechatMissing:" + keys.map((k) => WECHAT_FIELD_LABEL_KEYS[k]).join(msgStub("listSeparator"));
+
+test("凭据不全时点名叫哪几项没填：逐项、含只有空格的，不是一句笼统的未配置", () => {
+  /* 缺口从 settings 喂进来：回填先跑、渲染后跑，所以这条走的是"远程那份配置本身就缺一项"
+     这一路真链；本机正在输入的缺口是下一条 */
+  const one = runSync({ settings: { ...ALL, wechatOpenId: "" } });
+  assert.equal(one.dom.wechatState.textContent, missingOf("openId"),
+    "只缺一项时没点名，用户不知道该回去填哪个框");
+  assert.equal(one.dom.wechatViewState.textContent, missingOf("openId"),
+    "配置视图里那行详情与主视图概览不是同一段文字");
+  assert.match(one.dom.wechatState.className, /\berror\b/);
+  assert.equal(one.dom.wechatRow.hidden, false, "报缺失的同时把整行藏起来");
+
+  /* 多项按 wechatConfigState 里的字段顺序连（appId → secret → openId → templateId），
+     不是按 DOM 顺序、更不是字母序 */
+  const two = runSync({
+    settings: { ...ALL, wechatAppId: "", wechatTemplateId: "" }
+  });
+  assert.equal(two.dom.wechatState.textContent, missingOf("appId", "templateId"),
+    "缺两项时只报了第一项，或顺序变了");
+
+  /* 只有空格等于没填：后台拿它去换令牌会带一个空 secret，判据必须与空串同侧 */
+  const blank = runSync({ settings: { ...ALL, wechatAppSecret: "   " } });
+  assert.equal(blank.dom.wechatState.textContent, missingOf("secret"), "空格当成填过了");
+});
+
+test("缺失判据读的是本机框里的字：远程那份齐凭据不该把本机的缺口盖掉", () => {
+  /* 正在输入时整组文本框跳过同步（约束①），所以此刻报的必须是本机这一半的缺口；
+     换成读 settings 的实现会从这一格红——它正是"跳过同步"与"状态行"两条链的接缝 */
+  const { dom } = runSync({
+    settings: ALL,
+    focus: "wechatTplInput",
+    texts: { wechatTplInput: "" }
+  });
+  assert.equal(dom.wechatTplInput.value, "", "被远程值盖掉了");
+  assert.equal(dom.wechatState.textContent, missingOf("templateId"),
+    "状态行跟的是远程那份齐凭据，本机这个空框没人提示");
+});
+
+test("真时钟接在真渲染链上：两行状态的时刻由 fmtClock 跑出来", () => {
+  /* 其余用例一律注入假时钟，因为断言要比字面量；于是真身换成 "" 或换成不补零，
+     整套门禁照样全绿（A19 实测：改坏 fmtClock 零红）。这一条把真身注进同一个 runSync，
+     走完整的"回填 → 渲染"链。期望值不写字面量：本机 zh-CN、CI en-US，
+     钉的是数字分组——两组、各两位，与 skip-trace 第 5 层同一套理由 */
+  const at = new Date(2026, 0, 5, 9, 7, 42).getTime();
+  const { dom } = runSync({
+    settings: ALL,
+    wh: { ok: true, status: 200, at },
+    wx: { ok: true, status: 200, at },
+    clock: realClock
+  });
+  assert.ok(dom.webhookState.textContent.startsWith("webhookStateOk:"));
+  assert.ok(dom.wechatState.textContent.startsWith("wechatStateOk:"));
+  assert.deepEqual(dom.webhookState.textContent.match(/\d+/g), ["09", "07"],
+    "webhook 状态行的时刻不是两位时 + 两位分");
+  assert.deepEqual(dom.wechatViewState.textContent.match(/\d+/g), ["09", "07"],
+    "微信配置视图那行的时刻跟概览不是同一个");
+});
+
 test("正在输入时状态行仍按本地框里的字算：跳过文本框不能把两行留在远程值上", () => {
   /* 跳过之后如果渲染读的是刚铺上的远程地址，红字与"最近一次投递"就跟框里显示的字对不上。
      两个方向各钉一半：本地半个坏地址、远程那个是好的；反过来也一样 */
@@ -404,4 +491,24 @@ test("同步函数不写存储：只铺控件，落盘仍由 change / 去抖那�
       判据退化就看不出来
    2) 重定向入口本身跑过一遍：整套 364 条在 TAR_POPUP_SRC 指向一份未改动的 popup.js 副本时
       全绿，说明门禁读的是那份文件而不是仓库里那一份
+
+   ---------- A19 那两批用例的对照（同日、同法、同脚本 D:\Github\_tar_ctl_a19） ----------
+   变异仍然只落在 popup.js 的源码文本里。每个用例对 skip-trace 与本文件**分开各跑一遍**，
+   才谈得上归因。基线 18/18 全绿（本轮加的 4 条都在里面），**没有零红项**：
+
+   W1  缺失分支整块删掉（恒走 idle / 最近一次结果）→ 红 2 条：点名叫哪几项、读本机框里的字
+   W2  缺多项只报第一项                          → 红 1 条：点名叫哪几项（那一条里的第二轮）
+   W3  报缺失但不点名（丢掉代入）                 → 红 2 条：同 W1
+   W4  缺失判据改读 settings 而不是 DOM           → 红 1 条：读本机框里的字
+   W5  判据反过来（配齐报缺失、缺了报结果）        → 红 5 条：正向半边、点名叫哪几项、读本机框里的字、
+       两行状态、真时钟链。正向那条（"配齐时不报缺失"）只有这一处才红——
+       它给 W1 那三条配的不是反向输入，而是"什么时候不该报"
+   RW1 （反向）返回对象里两个键换序，行为不变      → 18/18 全绿
+
+   另两处判读前提：
+   1) "真时钟接在真渲染链上"是 fmtClock 那一侧的红→绿对照带进来的（F1~F4、F6 各让它红一次），
+      详见 skip-trace.test.mjs 末尾第 5 层那一段
+   2) 只有空格算没填那一格的判据本身（trim）住在 shared/logic.js 的 wechatConfigState，
+      由 logic.test.mjs 的 "wechatConfigState names every missing credential" 钉着；
+      本文件这一条钉的是它接到弹窗显示链上之后仍报得出缺失，两头各管一段
 ------------------------------------------------------------------ */
