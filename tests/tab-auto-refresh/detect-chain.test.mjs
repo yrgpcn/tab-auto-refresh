@@ -33,11 +33,21 @@ async function bootDetect({ tasks, settings, session } = {}) {
 const flush = () => new Promise((r) => setTimeout(r, 50));
 
 /* 按调用形状分派注入结果：
-   带 args = 关键词匹配（matchInPage），带 func 且无 args = 验证墙探测，
-   带 files = 保活脚本注入（结果没人读，交给桩件默认值） */
+   带 args = 关键词匹配（matchInPage），带 func 且无 args = 验证墙探测（captchaProbe），
+   带 files = 保活脚本注入（结果没人读，交给桩件默认值）。
+   验证墙那一支给的是顶层框架的事实对象（A3 起页内不再下判断，判定在 decideWallFromFrames），
+   用例侧仍然只用 wall: true/false 表达"这是一面墙 / 这不是" */
+const wallFact = (on) => ({
+  top: true,
+  title: on ? "Just a moment..." : "正常页面标题",
+  url: PAGE,
+  w: 1280,
+  h: 900,
+  assets: []
+});
 const inject = ({ hits, wall } = {}) => (opts) => {
   if (opts.args) return [{ result: hits }];
-  if (opts.func) return [{ result: !!wall }];
+  if (opts.func) return [{ result: wallFact(!!wall) }];
   return undefined;
 };
 
@@ -145,8 +155,9 @@ test("关掉验证墙守卫时根本不注入探测脚本", async () => {
 });
 
 /* 红→绿对照（做法见 alarm-gate.test.mjs 末尾）：2026-09-19 本机实跑，副本改源码、
-   TAR_BG 指过去跑本文件，每次都只红在下面这几条：
-     1) startDetectChain 里把 `present = results && results[0] && results[0].result`
+   TAR_BG 指过去跑本文件，每次都只红在下面这几条。
+   同一天 A3 之后又按当前源码重跑了一遍（第 1 条的 needle 那时已被 A3 换掉），红名单没变：
+     1) startDetectChain 里把 `present = aggregateFrameHits(results).present`
         换成写死的 []（等于桩件当年的默认返回值）
         → 红 2 条："关键词命中：发命中通知并把任务停掉"与"命中后继续盯守"，其余 6 绿
      2) `s >= CAPTCHA_CONFIRM_SAMPLES` 改成 `s >= 1`
@@ -154,6 +165,10 @@ test("关掉验证墙守卫时根本不注入探测脚本", async () => {
      3) `if (cur.autoPaused && … === "captcha") await resumeTaskAuto(tabId)` 删掉
         → 红 1 条："墙消失后自动解除暂停"，其余 7 绿
    另外单跑了一次"桩件默认值改了会怎样"：把 executeScript 缺省返回从 [{result:false}]
-   换成 [{result:["已售罄"]}]，全仓 7 个文件 128 条一条都不红。这是好消息不是坏消息——
+   换成 [{result:["已售罄"]}]（A3 之后那一跑，全仓 239 条），一条都不红。这是好消息不是坏消息——
    说明凡是要读注入结果的用例都自己 env.onScript 设了口径，没有一个靠那个缺省值撑着。
-   （改完已原样写回，比对过文件字节相同。） */
+   （两处改的都是仓库外的副本：源码目录整份复制出去改，比对过仓库文件字节相同。）
+
+   A3 顺带改了本文件的桩件形状：验证墙那条注入从回布尔改成回事实对象（判定搬到
+   decideWallFromFrames），所以 inject 里给的是 wallFact()。用例侧的 wall: true/false
+   语义没变，变的只是造出来的载荷长什么样。 */

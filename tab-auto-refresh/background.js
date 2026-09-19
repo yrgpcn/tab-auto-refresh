@@ -5,12 +5,14 @@ import {
   RESTRICTED_URL,
   ACTIVITY_SKIP_MS,
   ALARM_ACT,
+  aggregateFrameHits,
   applyBackupAction,
   buildTokenRequest,
   buildWechatMessage,
   capCookies,
   clampInterval,
   decideAlarmAction,
+  decideWallFromFrames,
   domainChain,
   hostOf,
   isErrorStatus,
@@ -661,6 +663,18 @@ async function reloadTab(tabId) {
 const detectChains = new Map();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/* 多框架注入的检测脚本。allFrames 的失败方式是**整次调用 reject**：一个够不着的子框架
+   （沙箱框架、view-source）就能把整页的检测结果一起带走，所以拒了之后退回顶层再试一次
+   （frameIds:[0] 就是顶层框架）。加多框架只该增加覆盖面，不该因为某个子框架进不去
+   反而丢掉原来单框架能成的场景。两次都失败才抛给调用方 */
+async function executeInAllFrames(base) {
+  try {
+    return await chrome.scripting.executeScript(Object.assign({}, base, { allFrames: true }));
+  } catch (e) {
+    return await chrome.scripting.executeScript(Object.assign({}, base, { frameIds: [0] }));
+  }
+}
+
 /* 页内关键词匹配，经 executeScript 注入到被监控页里跑，只把命中的关键词回传后台。
    改这里之前先记住两条约束，破坏任何一条都是静默失效：
 
@@ -706,12 +720,13 @@ async function startDetectChain(tabId) {
     }
     let present;
     try {
-      const results = await chrome.scripting.executeScript({
+      const results = await executeInAllFrames({
         target: { tabId },
         func: matchInPage,
         args: [keywords],
       });
-      present = results && results[0] && results[0].result;
+      /* 各框架的命中集合并、按首次出现顺序去重；一个框架都没取到才回 null */
+      present = aggregateFrameHits(results).present;
     } catch (e) {
       present = undefined;
     }
@@ -1626,6 +1641,35 @@ chrome.storage.onChanged.addListener((changes, area) => {
   reconcileKeepAlive();
 });
 
+/* 页内验证墙探测（executeScript 按 toString 注入，函数必须自包含，约束同 matchInPage）。
+   与关键词那条的分工不一样：这里只回**原始事实**，两条正则一个都不下页面，
+   判定全在 logic.js 的 decideWallFromFrames 里做——页内没有判断，就没有"两份实现分叉"，
+   整条决策链也就直接被单测断言到了（纪律 1）。具名是为了让门禁能按花括号配对
+   从源码里切出这个函数体并真的执行它，不手抄复刻。
+
+   判据面刻意只有标题、自身网址与挑战域名的 iframe/script 资产，不扫正文：正文里出现
+   "验证码""access denied"这类日常词（登录框提示、帮助文案、页脚）会把正常页误判成墙，
+   而误暂停后刷新循环停下、页面不再加载、本探测也不再运行，任务就一直卡在暂停态。
+   标题是墙页最稳定的特征。401/403 的登录墙语义另走掉线通道，这里不重复判定 */
+function captchaProbe() {
+  const assets = [];
+  for (const el of document.querySelectorAll("iframe, frame, script[src]")) {
+    /* 封顶加逐条截断：一次 allFrames 注入会让每个框架都回一份，整页上百条脚本时
+       不能把跨上下文载荷撑到那个量级。挑战域名总在网址最前部，截不断 */
+    if (assets.length >= 50) break;
+    assets.push(String(el.getAttribute("src") || "").slice(0, 300));
+  }
+  return {
+    /* 跨源框架里 window.top 只能做同一性比较，访问它的属性会抛，比较本身不抛 */
+    top: window.top === window.self,
+    title: String(document.title || "").slice(0, 300),
+    url: String(location.href || "").slice(0, 300),
+    w: window.innerWidth,
+    h: window.innerHeight,
+    assets
+  };
+}
+
 /* 错误页与验证墙都让任务级自动暂停。独立于掉线状态机：不进 sessionProbe，
    不污染备份冻结语义。心跳侧 5xx/404 连续 PAUSE_CONFIRM_SAMPLES 次、
    页面侧验证墙特征连续 CAPTCHA_CONFIRM_SAMPLES 次才暂停。
@@ -1639,26 +1683,10 @@ async function probeCaptcha(tabId) {
     if (!(await getSettings()).captchaGuard) return; /* 关闭时不注入、不判定 */
     const task = (await getTasks())[tabId];
     if (!task) return;
-    const results = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: () => {
-        /* 只认"整页就是验证墙"的信号：文档标题，以及挑战域名的 iframe/script。
-           刻意不扫正文：正文里出现"验证码""access denied"这类日常词（登录框提示、
-           帮助文案、页脚）会把正常页误判成墙，而误暂停后刷新循环停下、页面不再加载、
-           本探测也不再运行，任务就一直卡在暂停态。标题是墙页最稳定的特征。
-           401/403 的登录墙语义另走掉线通道，这里不重复判定 */
-        const s = (document.title || "").slice(0, 300).toLowerCase();
-        let hit = /(captcha|verify you are human|human verification|just a moment|attention required|pardon our interruption|安全验证|人机验证|验证码)/.test(s);
-        if (!hit) {
-          for (const el of document.querySelectorAll("iframe, frame, script[src]")) {
-            const u = el.getAttribute("src") || "";
-            if (/challenges\.cloudflare\.com|recaptcha|hcaptcha/i.test(u)) { hit = true; break; }
-          }
-        }
-        return hit;
-      },
-    });
-    const wall = !!(results && results[0] && results[0].result === true);
+    /* 全部框架都探：整页是墙的挑战页常嵌在一层 iframe 里，顶层文档只剩一个空壳标题，
+       只看顶层就检不到 */
+    const results = await executeInAllFrames({ target: { tabId }, func: captchaProbe });
+    const wall = decideWallFromFrames(results);
     const cur = (await getTasks())[tabId];
     if (!cur) return;
     if (!wall) {

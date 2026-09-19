@@ -86,7 +86,7 @@
   "keepAwakeLabel": { "message": "Prevent sleep (power)" },
   "keepAwakeHint": { "message": "Holds a power lock and keeps the system awake while tasks run - be careful on laptop battery" },
   "captchaGuardLabel": { "message": "Captcha guard" },
-  "captchaGuardHint": { "message": "Pauses a task when the page title looks like a bot-check wall, so it does not keep hammering the wall; titles only, no body scan. If a normal page gets paused, use that task's Resume button or just turn this off" },
+  "captchaGuardHint": { "message": "Pauses a task when the page title or a bot-check provider's domain looks like a verification wall, so it does not keep hammering the wall; those two signals only, no body scan. A full-page challenge inside an iframe is detected the same way, while widget-sized captcha boxes are not. If a normal page gets paused, use that task's Resume button or just turn this off" },
   "webhookLabel": { "message": "Webhook" },
   "webhookPlaceholder": { "message": "https://… (empty = off)" },
   "webhookHint": { "message": "POSTs JSON to this URL: Discord / Slack / Telegram render a readable message, while ntfy delivers the raw JSON; empty = off" },

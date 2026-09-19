@@ -366,6 +366,65 @@ export function newlyOf(present, notifiedKeys) {
   );
 }
 
+/* 多框架聚合（纯函数）：executeScript 带 allFrames 之后回的是每个框架一条
+   [{frameId, result}]。个别框架可能根本进不去（沙箱框架、view-source、被扩展自己的
+   受限页规则挡掉的），那些条目缺失或 result 是 undefined——按"取到几个算几个"处理：
+   一个都没取到才算注入失败（present 回 null，调用方据此提前结束这一轮等下个刷新周期），
+   取到一个以上就照常合并。命中集按首次出现的顺序去重，顺序会被 notifiedKeys 的比对看到 */
+export function aggregateFrameHits(frames) {
+  const present = [];
+  let framesOk = 0;
+  for (const f of Array.isArray(frames) ? frames : []) {
+    const list = f && f.result;
+    if (!Array.isArray(list)) continue;
+    framesOk++;
+    for (const k of list) if (!present.includes(k)) present.push(k);
+  }
+  return { present: framesOk ? present : null, framesOk };
+}
+
+/* 挑战域名清单。只在顶层框架的资产列表与子框架自身网址上匹配 */
+export const CHALLENGE_URL_RE = /challenges\.cloudflare\.com|recaptcha|hcaptcha/i;
+
+/* 验证墙的标题特征。判据面刻意只取标题与挑战域名资产，不扫正文：正文里"验证码"
+   "access denied"是日常词（登录框提示、帮助文案、页脚都会命中），误判成墙的代价是
+   任务卡在暂停态且不自愈——页面不再加载，探测也就不再运行。标题才是墙页最稳定的特征。
+   401/403 的登录墙语义另走掉线通道，这里不重复判定 */
+export const WALL_TITLE_RE =
+  /(captcha|verify you are human|human verification|just a moment|attention required|pardon our interruption|安全验证|人机验证|验证码)/i;
+
+export function isChallengeUrl(u) {
+  return CHALLENGE_URL_RE.test(String(u == null ? "" : u));
+}
+
+/* 子框架要多过一道视口地板才算墙。挂件尺寸的 iframe 自己的文档标题也会写着
+   "Just a moment"（reCAPTCHA 复选框 304×78、Turnstile 300×65、hCaptcha 300×88，
+   隐藏起来的宽高是 0），它们都过不了这道地板；真正把整页变成墙的 iframe 是视口尺寸。
+   门槛取 400×250：高于所有常见挂件，远低于整页。漏判只少一次暂停、下轮刷新还会再看，
+   误判却会卡死，所以地板宁可留在子框架这一侧 */
+export const WALL_FRAME_MIN_W = 400;
+export const WALL_FRAME_MIN_H = 250;
+
+/* 逐框架的墙判定。页内函数只回原始事实（是否顶层、标题、自身网址、自身视口宽高、
+   挂在文档里的 iframe/frame/script 网址），两条正则一个都不下页面，所以这条决策链
+   能被单测直接断言。顶层框架维持一贯的判据：标题命中，或文档里挂着挑战域名的资产；
+   子框架要多过一道视口地板，理由见 WALL_FRAME_MIN_* */
+export function decideWallFromFrames(frames) {
+  for (const f of Array.isArray(frames) ? frames : []) {
+    const r = f && f.result;
+    if (!r || typeof r !== "object") continue; /* 这个框架没注入进去 */
+    const titled = WALL_TITLE_RE.test(String(r.title == null ? "" : r.title));
+    if (r.top) {
+      const asset = Array.isArray(r.assets) && r.assets.some(isChallengeUrl);
+      if (titled || asset) return true;
+      continue;
+    }
+    const sized = Number(r.w) >= WALL_FRAME_MIN_W && Number(r.h) >= WALL_FRAME_MIN_H;
+    if (sized && (titled || isChallengeUrl(r.url))) return true;
+  }
+  return false;
+}
+
 /* webhook 地址校验：仅接受 http(s)，其余（空/非法/其他协议）一律视为关闭 */
 export function normalizeWebhookUrl(u) {
   const v = String(u == null ? "" : u).trim();

@@ -28,7 +28,7 @@
 
 ### 三条改法纪律
 
-1. 含"先读后写、跨异步步骤共享状态"的流程要把顺序决策抽成纯函数、执行器只负责写盘，让顺序能被单测直接断言，而不是靠读代码推断。已按这条落地的两处是 `planPrune`（启动恢复）与 `decideAlarmAction`（到点处置），新写的同类流程照这个形状做
+1. 含"先读后写、跨异步步骤共享状态"的流程要把顺序决策抽成纯函数、执行器只负责写盘，让顺序能被单测直接断言，而不是靠读代码推断。已按这条落地的是 `planPrune`（启动恢复）、`decideAlarmAction`（到点处置）、`decideBackupWrite`（备份写入），以及检测链的 `aggregateFrameHits` + `decideWallFromFrames`（多框架结果怎么合并、逐框架怎么判墙）——页内注入体只回原始事实，判断一概留在 `logic.js`。新写的同类流程照这个形状做
 2. 权限与功能成对记账：新增权限要在 CHANGELOG 该版本 Added 里点名，并更新下面的权限清单；新增需要权限的功能同样要更新权限说明
 3. 默认值（开关、阈值、间隔）任何变动都要逐条列出受影响路径和"用户已显式设过值"的分支，确认不会改变既有用户的行为
 
@@ -104,13 +104,14 @@
 - 任务字段 `keywords[]`，每条 ≤100 字、上限 10 个；旧 `keyword` 单串由 `getTaskKeywords` 兼容
 - 检测链全在后台，不碰保活注入通道：每次页面加载完成起一条链，立即查一次，未命中再于 3 秒、10 秒重采样。新链起链即作废旧链，避免并发链重复通知或竞态停任务
 - 匹配在页面里做：`executeScript({func: matchInPage, args: [keywords]})` 只回传命中的关键词，正文不跨上下文序列化，因此没有早先"截 300KB、之后的内容永远检不到"的盲区。`matchInPage` 必须自包含（executeScript 是 `toString()` 注入的，引用模块作用域会在页面里变 undefined 并被 catch 吞掉），所以判定逻辑与 `logic.js` 的 `presentOf` 是两份实现，由 `tests/tab-auto-refresh/keyword-inpage.test.mjs` 切真实源码执行、逐条比对钉住。取文本一律 `innerText`，换 `textContent` 会把 `<script>` 源码和 `display:none` 的隐藏文字算进正文
+- 两条检测链（关键词与验证墙）的注入统一走 `executeInAllFrames`：先 `allFrames: true`，被拒再退回 `frameIds: [0]`。`allFrames` 的失败方式是**整次调用 reject**，一个够不着的沙箱框架就能带走整页结果，所以必须有这个回退——加多框架不许把原来单框架能成的场景换成新的失败。关键词结果由 `aggregateFrameHits` 合并（取到几个算几个，一个都没取到才回 `null` 让链提前结束）；子框架有跨源标题与文字，顶层读法 `results[0]` 会漏。**保活心跳脚本仍只注顶层**，这是刻意的：同一份模拟活动注进每个子框架会向对方服务器放大请求量，子框架的 `document.hidden` 语义也不同。门禁在 `tests/tab-auto-refresh/frame-scan.test.mjs`
 - 命中后按 `onHit` 决定停任务（默认）还是继续盯守，继续时把在场集回写 `notifiedKeys`，关键词消失后再出现会重新通知。原先"正文与上次相同就提前结束"的早停已删（回传的不再是要比较的正文）
 
 ### 自动暂停
 
 - 错误页：心跳侧 5xx/404 连续 `PAUSE_CONFIRM_SAMPLES`（2）次即暂停，回到 2xx 自动解除
 - 验证墙：页面侧特征连续 `CAPTCHA_CONFIRM_SAMPLES`（3）次即暂停，受 `settings.captchaGuard` 控制。两个阈值刻意分开，别合并回一个常量：错误页有独立的心跳 alarm 兜着、能自愈，验证墙的解除却依赖页面再次加载，误判会卡死不自愈，代价不对称
-- 匹配面只取 `document.title` 与挑战域名（Cloudflare / reCAPTCHA / hCaptcha）的 iframe 和 script，不扫正文。正文里的"验证码""access denied"是日常词，登录框提示、帮助文案、页脚都会命中。401/403 的登录墙语义另走掉线通道，这里不重复判定
+- 判据面只取标题与挑战域名（Cloudflare / reCAPTCHA / hCaptcha）：注入体 `captchaProbe` 只回**原始事实**（是否顶层、`document.title`、自身 `location.href`、自身视口宽高、挂在文档里的 iframe/frame/script 网址），两条正则一个都不下页面，判定全在 `logic.js` 的 `decideWallFromFrames`。与 `matchInPage` 那份"必须自包含所以重复实现"相反，这里刻意让页内不做判断，就没有会漂移的第二份实现。顶层判据与 A3 之前逐条一致；**子框架多过一道视口地板**（`WALL_FRAME_MIN_W`/`_H`，400×250）：reCAPTCHA 复选框 304×78、Turnstile 300×65、hCaptcha 300×88、隐藏框架 0×0 都在地板之下，整页挑战是视口尺寸，地板只挡得住前者。不扫正文：正文里的"验证码""access denied"是日常词，登录框提示、帮助文案、页脚都会命中。401/403 的登录墙语义另走掉线通道，这里不重复判定
 - 暂停期间 alarm 照常续跑，`onAlarm` 见到 `autoPaused` 早退，恢复零重建。`onAlarm` 里标签页存在性检查排在 `autoPaused` 之前，否则被自动暂停的任务在标签页关掉后没人清理
 - 计数存会话态，不进 `sessionProbe`，不污染备份冻结语义
 
@@ -158,7 +159,7 @@
 2. `node --test "tests/**/*.test.mjs"`（引号必需）
 3. 改了对应功能后跑 `_code-review/` 里的回归脚本，清单与用法见 `_code-review/README.md`。这些脚本不在 CI 里跑，要手动跑；判退出码时别接管道（`| tail` 会把退出码换成 tail 的），需要看尾部输出就用 `${PIPESTATUS[0]}` 或先重定向到文件
 4. UI 改动后可用 `scripts/screenshot-popup.mjs` 重新生成 `docs/tab-auto-refresh/popup.png`，它的 `viewport.width` 必须与 `popup.css` 的 `body width` 一致，否则截图被裁
-5. 手工验证：在 `chrome://extensions` 开发者模式加载插件文件夹，验证设置与停止、倒计时归零后继续、右键菜单、立即刷新、角标、暂停恢复、快捷键记住上次间隔、自动清理通知（停任务、重开任务、重新登录后各自的通知要从通知中心消失，点通知要跳到对应标签页并带到前台）；30 秒任务下能在 DevTools 里看到注入的心跳事件，同站另开无关标签页无心跳；关键词命中弹通知并停任务；掉线后角标变红；验证墙与错误页自动暂停（含"验证码"字样但标题正常的页面不该被暂停）；webhook 填非法地址应立刻出现红字提示；任何任务数下弹窗本身都不该出现滚动条。启动恢复这条只能真机验：开几个任务后重启浏览器（或在 `chrome://extensions` 重新加载扩展），任务要全部挂回原页面、不额外多开标签页、弹窗不卡住，被恢复的任务在 DevTools 的 `chrome://extensions → 背景 → Alarms` 里要同时看到 `refresh-<id>` 与 `hb-<id>`（缺 `hb-` 就是心跳又被排到写盘前面了）。开着"尊重你的操作"时，把某个任务页摆在当前窗口前台等它到点，不该被重载
+5. 手工验证：在 `chrome://extensions` 开发者模式加载插件文件夹，验证设置与停止、倒计时归零后继续、右键菜单、立即刷新、角标、暂停恢复、快捷键记住上次间隔、自动清理通知（停任务、重开任务、重新登录后各自的通知要从通知中心消失，点通知要跳到对应标签页并带到前台）；30 秒任务下能在 DevTools 里看到注入的心跳事件，同站另开无关标签页无心跳；关键词命中弹通知并停任务；掉线后角标变红；验证墙与错误页自动暂停（含"验证码"字样但标题正常的页面不该被暂停；A3 之后再加两个面——整页挑战嵌在 iframe 里、顶层只剩空壳标题的要能自动暂停，页面上只有 reCAPTCHA 那种挂件小框的正常页面不该被暂停，见 `BACKLOG.md` V1 (f)）；webhook 填非法地址应立刻出现红字提示；任何任务数下弹窗本身都不该出现滚动条。启动恢复这条只能真机验：开几个任务后重启浏览器（或在 `chrome://extensions` 重新加载扩展），任务要全部挂回原页面、不额外多开标签页、弹窗不卡住，被恢复的任务在 DevTools 的 `chrome://extensions → 背景 → Alarms` 里要同时看到 `refresh-<id>` 与 `hb-<id>`（缺 `hb-` 就是心跳又被排到写盘前面了）。开着"尊重你的操作"时，把某个任务页摆在当前窗口前台等它到点，不该被重载
 
 ## 环境备注
 
