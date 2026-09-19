@@ -536,7 +536,8 @@ export function tabShowsUrl(tab, url) {
      1. 变量名不能写错；
      2. 变量前必须有关键词加中文冒号，写成"关键词：{{变量}}"。裸写变量（整行只有
         {{title.DATA}}）会被平台整行丢弃。
-   这两条也写在教程页和弹窗提示里，有门禁 verify-wechat-template-doc.mjs 守着 */
+   这两条也写在教程页和弹窗提示里，有 `tests/tab-auto-refresh/wechat-copy.test.mjs` 守着
+   （示范与变量名同源、裸变量只允许出现在自带反例标记的那句里） */
 export const WECHAT_TEMPLATE_KEYS = ["title", "content"];
 
 /* 微信平台的硬上限（2023-05-04 生效的《关于规范公众号模板消息的再次公告》）：
