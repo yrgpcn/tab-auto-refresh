@@ -83,7 +83,8 @@
 ### cookie 备份与登录保持
 
 - 由 `settings.cookieBackup` 控制，默认关闭。关闭时不备份不恢复，`pruneCookieBackups` 清空全部备份
-- 备份存在 `chrome.storage.local` 的 `cookieBackup:<host>`，明文，README 有安全说明。只备份与监控目标同根域的站点
+- 备份存在 `chrome.storage.local` 的 `cookieBackup:<host>`，明文，README 有安全说明。采集范围三道约束：① 注册域判据是形状规则（末段两字母国家/地区码 + 倒数第二段品牌段 → 多切一段），**别再退回手写完整后缀清单**，漏一条就整条踩空；② `domainChain` 下探到注册域为止，绝不查注册域以上（`getAll({domain:"co.nz"})` 的语义是"等于或子域于它"）；③ `siteRoot` 取不到可信注册域时返回 null，调用方一律不备份、不建探针——宁可丢登录态也不能越界。单段主机与 IPv4 无父域可切，整串即身份。纯函数层由 `tests/tab-auto-refresh/logic.test.mjs` 钉，查询面与恢复侧由 `tests/tab-auto-refresh/cookie-backup.test.mjs` 钉
+- 启动恢复里历史越界备份的收敛是纯函数 `planBackupConvergence`（只剔注册域之外的条目，键本身是后缀或筛完为空才整条删，timestamp 不动），**必须排在按注册域恢复之前**：`restoreCookies` 按每条自己的 domain 写回浏览器，先恢复等于已经替别家站点复活了一遍登录态
 - 条目带 `schemaVersion: 2` 与每条 cookie 的 `hostOnly`。还原时 `hostOnly === true` 省略 `domain`（否则 `__Host-` 票据写不进去，或作用域被扩大），`=== false` 传 `domain`，字段缺失的 v1 旧备份统一传 `domain`
 - 单站点封顶 200 条，超限时先按"像登录票据的程度"排序再截（httpOnly > 会话票 > `__Host-`/`__Secure-` > `path=/` > 域更短）。正常规模不排序，避免无谓的顺序变化
 - 启动恢复按注册域匹配，覆盖 SSO 登录所在的兄弟子域；恢复成功的根域记在 `restoredRoots`，据此决定认领的标签页要不要补刷新

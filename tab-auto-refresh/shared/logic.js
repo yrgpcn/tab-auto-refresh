@@ -61,26 +61,61 @@ export function hostOf(u) {
   }
 }
 
-/* 常见多级公共后缀（启发式，覆盖国内外主流站点）；命中则注册域多取一段 */
-export const MULTI_SUFFIXES = new Set([
-  "gov.cn", "com.cn", "org.cn", "edu.cn", "net.cn", "ac.cn",
-  "co.uk", "org.uk", "ac.uk", "gov.uk",
-  "com.au", "net.au", "org.au", "gov.au",
-  "co.jp", "or.jp", "ne.jp", "ac.jp", "go.jp",
-  "com.br", "co.in", "com.hk", "org.hk", "idv.hk",
-  "com.tw", "org.tw", "co.kr", "or.kr", "com.sg", "com.my",
-  "com.mx", "co.za", "com.ar", "com.tr", "com.pl"
+/* 二级公共后缀里的"品牌段"：co / com / net / org / gov / ac 这一类。
+   以前这里是一张手写的完整后缀表（"co.uk"、"com.cn"…），漏一条就整条踩空——
+   co.nz、com.ua、co.id、com.ph 都不在表里，于是 shop.example.co.nz 的根域被判成
+   "co.nz"，接着拿它去查 cookie，把浏览器里所有 .co.nz 站点的登录态捞进明文备份（见 BACKLOG A2）。
+   现在的判据是一条形状规则：末段是两字母国家/地区码，且倒数第二段是品牌段。
+   它一次覆盖整个 ccTLD × 品牌段组合，不依赖清单抄全。
+   清单的边界要说清：一是品牌段没抄全的那条后缀仍会算宽（漏 "co" 之外的生僻段才会发生，
+   新增条目只增不减即可），二是 github.io / blogspot.com 这类"私有后缀"任何形状规则都抓不到。
+   真正兜住这两条的是 domainChain 的下探地板（绝不查注册域以上）与启动时的备份收敛 */
+const SLD_BRANDS = new Set([
+  "co", "com", "net", "org", "gov", "mil", "ac", "or", "ne", "go", "ed", "edu",
+  "sch", "res", "gen", "asn", "nic", "idv", "club", "biz", "info", "nom", "asso",
+  "coop", "gob", "gouv", "adm", "adv", "amb", "apo", "art", "blog", "cnt", "eco",
+  "esp", "eti", "far", "flog", "fnd", "g12", "log", "mat", "not", "oji", "psi",
+  "qsl", "rcv", "seg", "slg", "srv", "taxi", "teo", "tmp", "tur", "tv", "vet",
+  "vlog", "wiki", "tol", "firm", "ind", "in", "lg", "pb", "hs", "ms", "es", "re"
 ]);
 
-/* 站点根域（注册域）：a.b.example.com → b.example.com；多级后缀如 news.example.org.cn → example.org.cn */
+/* 一对标签看起来就是"品牌段 + 两字母码"（co.nz / com.ua / or.jp / gov.uk …） */
+function isSuffixPair(pair) {
+  return pair.length === 2 && /^[a-z]{2}$/.test(pair[1]) && SLD_BRANDS.has(pair[0]);
+}
+
+const IPV4_HOST = /^\d+\.\d+\.\d+\.\d+$/;
+
+/* 主机的标签段（小写、去空） */
+function hostParts(host) {
+  return String(host == null ? "" : host).toLowerCase().split(".").filter(Boolean);
+}
+
+/* 可信注册域：a.b.example.com → b.example.com；shop.example.co.nz → example.co.nz。
+   取不到可信注册域时返回 null，调用方一律不备份、不建探针——宁可丢掉登录态
+   （用户重新登录就好），也不能退化成公共后缀，那等于替无关站点复活一遍会话票据。
+   单段主机（localhost、单机内网名）与 IPv4 没有父域可下探，整串即身份，照原样返回。
+   规则偏保守：判据命中就多切一段，最坏结果是把根域算窄（少覆盖一些兄弟子域的 SSO 票），
+   而不是算宽——只有算宽才会越界采集到别人的 cookie */
 export function siteRoot(host) {
-  if (!host) return null;
-  const parts = String(host).toLowerCase().split(".").filter(Boolean);
-  /* IPv4 主机不做注册域切片，整串即身份 */
-  if (/^\d+(\.\d+){3}$/.test(parts.join("."))) return parts.join(".");
-  if (parts.length <= 2) return parts.join(".");
-  const cut = MULTI_SUFFIXES.has(parts.slice(-2).join(".")) ? 3 : 2;
+  const parts = hostParts(host);
+  if (!parts.length) return null;
+  const joined = parts.join(".");
+  if (IPV4_HOST.test(joined)) return joined;
+  if (parts.length === 1) return joined;
+  const cut = isSuffixPair(parts.slice(-2)) ? 3 : 2;
+  /* 整串本身就是公共后缀（如主机就叫 co.nz）：切不出可信注册域 */
+  if (parts.length < cut) return null;
   return parts.slice(-cut).join(".");
+}
+
+/* 这个域落在注册域之内吗（含它自己和它的子域）；cookie 的 .example.com 写法要先去掉前导点 */
+export function withinRoot(root, domain) {
+  if (!root || !domain) return false;
+  const d = String(domain).toLowerCase().replace(/^\./, "");
+  const r = String(root).toLowerCase();
+  if (!d) return false;
+  return d === r || d.endsWith("." + r);
 }
 
 /* 同一主机或其子域视为同站（比注册域更严格，用于目标网址跟随，避免被带到兄弟 SSO 子域） */
@@ -101,13 +136,19 @@ export function sameSite(a, b) {
 /* 浏览器内部页面：不能刷新也种不了 cookie，弹窗用于提示，后台用于拒绝建任务 */
 export const RESTRICTED_URL = /^(chrome|edge|devtools|about|chrome-extension):/i;
 
-/* 主机的域链：a.b.example.com → b.example.com → example.com；登录票据常种在父域 */
+/* 主机的域链：a.b.example.com → b.example.com → example.com；登录票据常种在父域。
+   下探到注册域就停，一层都不能再多。旧写法是"一直切到只剩两段"，于是
+   shop.example.co.nz 会连着交出 example.co.nz 和 co.nz，而后者的语义是
+   "域等于或子域于它"，一次查询就把全站 .co.nz 的 cookie 都捞进备份。
+   拿不到可信注册域（siteRoot 返回 null）时给空链：宁可不采，也不能越界 */
 export function domainChain(host) {
-  const parts = host.split(".").filter(Boolean);
+  const parts = hostParts(host);
+  if (!parts.length) return [];
+  const root = siteRoot(parts.join("."));
+  if (!root) return [];
+  const floor = root.split(".").length;
   const list = [];
-  for (let i = 0; i < parts.length - 1; i++) {
-    list.push(parts.slice(i).join("."));
-  }
+  for (let i = 0; i <= parts.length - floor; i++) list.push(parts.slice(i).join("."));
   return list;
 }
 
@@ -213,6 +254,40 @@ export function capCookies(cookies, max) {
   list.sort(compareCookiePriority);
   list.length = max;
   return list;
+}
+
+/* 历史越界备份的收敛计划（纯函数，纪律 1）：domainChain 修好之前落盘的备份里混着别家
+   站点的 cookie，而 restoreCookies 是按每条自己的 domain 写回的——留着它等于每次重启都
+   替无关站点复活一遍登录态。整条清除又会让"重启后恢复登录"在用户没碰过任何开关的情况下
+   静默失效，所以只剔越界的那几条：
+     - 备份键本身就是公共后缀（siteRoot 为 null）→ 整条删，里面每一条都属于别人；
+     - 键可信 → 留注册域之内的（含兄弟子域的 SSO 票据），其余丢掉；筛完为空的也删，
+       它恢复不出任何东西，却照样占掉 pruneCookieBackups 那 20 站的额度。
+   timestamp 一律不动：它是"最后一次有效备份"的时间，30 天 TTL 照原样起效，
+   收敛不是重新备份。
+   入参 [{ key, host, entry }]，返回 { remove, rewrite, clean } */
+export function planBackupConvergence(backups) {
+  const remove = [];
+  const rewrite = [];
+  let clean = 0;
+  for (const { key, host, entry } of backups || []) {
+    const cookies = entry && Array.isArray(entry.cookies) ? entry.cookies : null;
+    /* 结构不成样子的条目不在这里处理，交给 pruneCookieBackups 的 TTL 与键数淘汰 */
+    if (!cookies) {
+      clean++;
+      continue;
+    }
+    const root = siteRoot(host);
+    if (!root) {
+      remove.push(key);
+      continue;
+    }
+    const kept = cookies.filter((c) => withinRoot(root, c && c.domain));
+    if (kept.length === cookies.length) clean++;
+    else if (kept.length === 0) remove.push(key);
+    else rewrite.push({ key, entry: Object.assign({}, entry, { cookies: kept }) });
+  }
+  return { remove, rewrite, clean };
 }
 
 /* 错误页判定：服务器故障或页面失踪，心跳连续命中则自动暂停任务 */

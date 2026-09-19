@@ -52,6 +52,9 @@ export function makeEnv() {
     reloaded: [],
     navigated: [],
     messagesSent: [],
+    /* getAll 的查询参数也要记：备份越界与否看的正是"查了哪几层域"，
+       只记写入结果等于放过了查询面（A2） */
+    cookieGet: [],
     cookieSet: [],
     /* 每条外发请求都记下来：请求形状（Range 的写法、credentials、redirect）本身就是门禁对象 */
     fetch: []
@@ -318,6 +321,7 @@ export function makeEnv() {
       async getAll(q) {
         /* 真实语义：domain 命中"等于该域或其子域"的 cookie。原先恒返回 []，
            于是备份采集、hostOnly 还原分支、200 条封顶全都在空数据上跑 */
+        calls.cookieGet.push(q && q.domain !== undefined ? String(q.domain) : null);
         const list = cookieJar;
         if (!q || q.domain === undefined) return clone(list);
         const d = String(q.domain).toLowerCase();

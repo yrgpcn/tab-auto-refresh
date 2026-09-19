@@ -114,6 +114,30 @@ test("到点刷新：重挂下一次定时器，再刷新页面", async () => {
   assert.deepEqual(reloaded(env), [7]);
 });
 
+test("只是同公共后缀的另一家站点：算漂移，导航回监控目标而不是原地刷新", async () => {
+  /* reloadTab 的同站判断吃的是 siteRoot。多级公共后缀（co.nz 一类）以前被当成注册域，
+     于是 shop.example.co.nz 与 other.co.nz 被判成同站，用户误开的外链页被原地刷新 */
+  const task = { intervalSec: 300, createdAt: 1, url: "https://shop.example.co.nz/board" };
+  const env = await bootAlarm({
+    tasks: { 7: task },
+    tabs: [{ id: 7, url: "https://other.co.nz/whatever" }]
+  });
+  await env.fire.alarm("refresh-7");
+  assert.deepEqual(env.calls.navigated, [[7, task.url]], "跨注册域的漂移没被认出来");
+  assert.deepEqual(reloaded(env), [], "误开的无关站点被原地刷新了");
+});
+
+test("同注册域的子域跳转仍算同站：原地刷新，不改回旧地址", async () => {
+  const task = { intervalSec: 300, createdAt: 1, url: "https://shop.example.co.nz/board" };
+  const env = await bootAlarm({
+    tasks: { 7: task },
+    tabs: [{ id: 7, url: "https://sso.example.co.nz/login" }]
+  });
+  await env.fire.alarm("refresh-7");
+  assert.deepEqual(env.calls.navigated, [], "兄弟子域的 SSO 跳转被当成了漂移");
+  assert.deepEqual(reloaded(env), [7]);
+});
+
 test("全局暂停期间不刷新，但定时器要续跑，恢复时零重建", async () => {
   const env = await bootAlarm({ tasks: { 7: TASK }, tabs: [{ id: 7, url: TASK.url }], pausedAll: true });
   await env.fire.alarm("refresh-7");
@@ -259,4 +283,7 @@ test("关掉'有活动时跳过'后不再去问窗口焦点", async () => {
            只改前一处时第二条仍是绿的——两条合起来才盖住"认不出来一律放行"的两个入口。
    第 5 处第一次跑对照时是绿的：用例自己先 focusWindow(1) 把窗口 id 灌进了模块缓存，
    isTabOnScreen 走缓存就不再去问 getLastFocused，被数的调用一次也没发生。去掉那次
-   focusWindow 之后才红。断言看着有、实际空跑，只有对照能抓出来。 */
+   focusWindow 之后才红。断言看着有、实际空跑，只有对照能抓出来。
+   2026-09-19 追加的两条同站判据用例（"只是同公共后缀的另一家站点"与"同注册域的子域跳转"）
+   不在本文件的对照清单里：改坏的是 shared/logic.js 的注册域判据而不是 background.js，
+   TAR_BG 够不着，做法与红名单见 cookie-backup.test.mjs 末尾第 3 处。 */

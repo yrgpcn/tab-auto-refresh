@@ -33,6 +33,8 @@ import {
   sameSite,
   sessionLostDetected,
   siteRoot,
+  planBackupConvergence,
+  withinRoot,
   tabShowsUrl,
   urlKey,
   NOTIFY_EVENTS,
@@ -137,6 +139,108 @@ test("hostOf extracts hostname from URL and rejects junk", () => {
 test("domainChain walks the parent domains of a host", () => {
   assert.deepEqual(domainChain("a.b.example.com"), ["a.b.example.com", "b.example.com", "example.com"]);
   assert.deepEqual(domainChain("example.com"), ["example.com"]);
+});
+
+test("siteRoot never degrades to a multi-level public suffix", () => {
+  /* 旧实现是一张手写的完整后缀表（"co.uk"、"com.cn"…），漏一条就把整段公共后缀当成注册域：
+     shop.example.co.nz 的根域算成 "co.nz"，随后拿它去查 cookie，全站 .co.nz 一起进备份。
+     换成"品牌段 + 两字母码"的形状规则之后，这一整类不再依赖清单抄全 */
+  assert.equal(siteRoot("shop.example.co.nz"), "example.co.nz");
+  assert.equal(siteRoot("a.example.com.ua"), "example.com.ua");
+  assert.equal(siteRoot("www.example.co.id"), "example.co.id");
+  assert.equal(siteRoot("shop.example.com.ph"), "example.com.ph");
+  assert.equal(siteRoot("shop.example.com.vn"), "example.com.vn");
+  assert.equal(siteRoot("api.example.com.ru"), "example.com.ru");
+  /* 表里原本有的那些不能因为换规则而退化 */
+  assert.equal(siteRoot("news.example.com.au"), "example.com.au");
+  assert.equal(siteRoot("shop.example.co.jp"), "example.co.jp");
+  assert.equal(siteRoot("shop.example.com.br"), "example.com.br");
+  /* 末段是两字母码、但倒数第二段不是品牌段：注册域就是它自己，不许多切一段 */
+  assert.equal(siteRoot("shop.example.io"), "example.io");
+  assert.equal(siteRoot("my.site.me"), "site.me");
+  /* 单段主机与 IPv4 没有父域可切，整串即身份 */
+  assert.equal(siteRoot("intranet"), "intranet");
+  assert.equal(siteRoot("localhost"), "localhost");
+  assert.equal(siteRoot("10.0.0.7"), "10.0.0.7");
+  /* 整串本身就是公共后缀：取不到可信注册域就返回 null，调用方宁可不备份 */
+  assert.equal(siteRoot("co.nz"), null);
+  assert.equal(siteRoot("com.ua"), null);
+});
+
+test("domainChain bottoms out at the registrable root, never above it", () => {
+  /* 这条不变式是越界采集的总闸：只要末段恒等于 siteRoot，就永远不可能拿公共后缀去查 cookie。
+     逐条断言具体层级只能覆盖写到用例里的那几个域名，形状规则改了也测不出来 */
+  const hosts = [
+    "a.b.example.com", "example.com", "shop.example.co.nz", "deep.a.b.example.org.cn",
+    "x.example.com.ua", "localhost", "intranet", "192.168.1.10", "WWW.Example.COM",
+    "shop.example.io", "a.gov.uk", "co.nz", "com.ua"
+  ];
+  for (const host of hosts) {
+    const chain = domainChain(host);
+    const root = siteRoot(host);
+    if (!root) {
+      assert.deepEqual(chain, [], host + " 取不到可信注册域，域链必须是空的");
+      continue;
+    }
+    assert.equal(chain.at(-1), root, host + " 的域链末段不是它的注册域");
+    for (const d of chain) assert.ok(withinRoot(root, d), host + " 的域链里有 " + d + " 跑到注册域之外");
+  }
+  /* 修之前的失效形状点名一遍：旧链最后一层是 co.nz，语义是"等于或子域于它" */
+  assert.deepEqual(domainChain("shop.example.co.nz"), ["shop.example.co.nz", "example.co.nz"]);
+  assert.deepEqual(domainChain("localhost"), ["localhost"]);
+  assert.deepEqual(domainChain("192.168.1.10"), ["192.168.1.10"]);
+  assert.deepEqual(domainChain("co.nz"), []);
+});
+
+test("withinRoot covers the root itself and its subdomains only", () => {
+  assert.ok(withinRoot("example.co.nz", "example.co.nz"));
+  assert.ok(withinRoot("example.co.nz", ".example.co.nz")); /* cookie 的父域写法 */
+  assert.ok(withinRoot("example.co.nz", "sso.example.co.nz"));
+  assert.ok(!withinRoot("example.co.nz", "other.co.nz"));
+  assert.ok(!withinRoot("example.co.nz", "example.co.nz.evil.com"));
+  assert.ok(!withinRoot("example.co.nz", ""));
+  assert.ok(!withinRoot(null, "example.co.nz"));
+  assert.ok(!withinRoot("example.co.nz", null));
+});
+
+test("planBackupConvergence drops only what sits outside the registrable root", () => {
+  const c = (domain, name) => ({ domain, name, path: "/", value: "v" });
+  const own = c("shop.example.co.nz", "sid");
+  const parent = c(".example.co.nz", "sso");
+  const sibling = c("sso.example.co.nz", "tick");
+  const foreign = c("other.co.nz", "their-session");
+  const unrelated = c("unrelated.com", "x");
+  const plan = planBackupConvergence([
+    {
+      key: "cookieBackup:shop.example.co.nz",
+      host: "shop.example.co.nz",
+      entry: { cookies: [own, parent, sibling, foreign, unrelated], timestamp: 111, schemaVersion: 2 }
+    },
+    /* 键本身就是公共后缀：里面每一条都属于别人 */
+    { key: "cookieBackup:co.nz", host: "co.nz", entry: { cookies: [foreign], timestamp: 222 } },
+    /* 只有这一条才真正钉住"键不可信就整条删"：后缀键里一条 cookie 都没有时，
+       走过滤分支的结果是"干净、留着"，只有 !root 分支会把它删掉 */
+    { key: "cookieBackup:com.ua", host: "com.ua", entry: { cookies: [], timestamp: 666 } },
+    /* 全是从别家捞来的：整条删掉，不留空壳 */
+    { key: "cookieBackup:clean.example.com", host: "clean.example.com", entry: { cookies: [foreign], timestamp: 333 } },
+    /* 一条越界的都没有：不该出现在 remove / rewrite 里，也不该被写一遍 */
+    { key: "cookieBackup:a.example.com", host: "a.example.com", entry: { cookies: [c("a.example.com", "sid")], timestamp: 444 } },
+    /* 结构不成样子：这里不处理，留给 pruneCookieBackups 的 TTL 淘汰 */
+    { key: "cookieBackup:junk.example.com", host: "junk.example.com", entry: { timestamp: 555 } }
+  ]);
+  assert.deepEqual(plan.remove.sort(), [
+    "cookieBackup:clean.example.com",
+    "cookieBackup:co.nz",
+    "cookieBackup:com.ua"
+  ]);
+  assert.equal(plan.rewrite.length, 1);
+  const rw = plan.rewrite[0];
+  assert.equal(rw.key, "cookieBackup:shop.example.co.nz");
+  assert.deepEqual(rw.entry.cookies.map((x) => x.name).sort(), ["sid", "sso", "tick"]);
+  /* timestamp 是"最后一次有效备份"的时间，收敛不是重新备份，30 天 TTL 照原样起效 */
+  assert.equal(rw.entry.timestamp, 111);
+  assert.equal(rw.entry.schemaVersion, 2);
+  assert.equal(plan.clean, 2);
 });
 
 test("urlKey keeps origin+pathname and drops query and hash", () => {
@@ -664,3 +768,10 @@ test("buildWechatMessage never emits a newline or an over-long field", () => {
     assert.ok(v.length <= 20, k + " 超过平台的 20 字上限: " + v.length);
   }
 });
+
+/* 红→绿对照（A2 那四条：siteRoot 不退化成公共后缀、domainChain 的注册域地板不变式、
+   withinRoot 边界、planBackupConvergence）
+   本文件直接 import 真源码，而 harness 的 TAR_BG 只换 background.js，所以对照必须
+   把**整仓**复制到仓库外、在副本里改坏 tab-auto-refresh/shared/logic.js，再在副本里跑。
+   五处改坏的完整红名单与两条"第一次跑是绿的"的教训记在 cookie-backup.test.mjs 末尾，
+   那里同时跑的是同一份副本，一份证据覆盖两个文件。 */

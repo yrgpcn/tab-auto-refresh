@@ -19,6 +19,31 @@
     冷启动无窗口 / 冷启动有最后聚焦窗口 / 浏览器退到后台但窗口还在，对照重跑过
   - 真机验证只能手工做（把任务页摆在当前窗口前台、焦点切到别的应用、等 2~3 个周期要照常刷新），
     已记进 `BACKLOG.md` 的 V1 (c)
+- cookie 备份会越界捞进无关站点的登录票据（`BACKLOG.md` A2，P0）。链条是两段拼起来的：
+  `siteRoot` 靠一张手写的多级公共后缀清单（`co.uk`、`com.cn`…），清单外的多级后缀一律只切两段，
+  于是 `shop.example.co.nz` 的"注册域"算成了 `co.nz`（`co.nz` / `com.ua` / `com.ru` / `co.id` /
+  `com.ph` / `com.vn` 都不在表里）；而 `domainChain` 又是"一路切到只剩两段"，把 `co.nz` 也交出去查。
+  `chrome.cookies.getAll({domain})` 的语义是"域等于它或它的子域"，一次查询就把浏览器里**所有** .co.nz
+  站点的 cookie 收进来、去重、按票据得分截到 200 条，明文写进 `cookieBackup:shop.example.co.nz`；
+  `restoreCookies` 再按每条自己的 `domain` 写回浏览器——等于每次重启都替无关站点复活一遍登录态。
+  三道约束一起改：① 判据从"抄全清单"换成形状规则（末段是两字母国家/地区码、倒数第二段是品牌段就多切一段），
+  一次覆盖整个 ccTLD × 品牌段组合；② `domainChain` 下探到注册域为止，绝不查注册域以上那层；
+  ③ 整串本身就是公共后缀时 `siteRoot` 返回 `null`，备份与探针一律放弃这个站点（宁可丢登录态，用户重新登录就好）。
+  形状规则偏保守：判据命中就多切一段，最坏结果是根域算窄（少覆盖几个兄弟子域的 SSO 票），不会算宽。
+  同一根因顺带修掉的两处：`sessionProbe` 以根域为键，过去两个无关站点共用一份掉线状态、A 站掉线会冻结 B 站的备份写入；
+  `reloadTab` 的同站判断也吃 `siteRoot`，过去 `other.co.nz` 被当成"和 `shop.example.co.nz` 同站"，
+  用户误开的外链页会被原地刷新而不是导航回监控目标
+  - 历史备份按**收敛**处理而不是整条清除（纪律 3）：`planBackupConvergence` 只剔掉落在注册域之外的条目，
+    其余原样留着，`timestamp` 不动（它是"最后一次有效备份"的时间，30 天 TTL 照原样起效）。
+    整条清除会让"重启后恢复登录"在用户没碰过任何开关的情况下静默失效。逐路径核对：键本身是公共后缀的
+    （`siteRoot` 为 `null`）与筛完为空的整条删掉，前者里面每一条都属于别人；结构不成样子的条目不在这里处理，
+    仍由 `pruneCookieBackups` 的 TTL 与 20 站额度淘汰。收敛排在恢复之前，反过来等于先复活再删存档
+  - 默认值一个都没动：`cookieBackup` 仍默认关闭，判据只在"开启且站点在多级公共后缀之下"时才影响结果
+  - 之前躲过了门禁：桩件的 `cookies.getAll` 恒返回 `[]`，备份采集与还原整段在空数据上跑（`BACKLOG.md` A6 第 8 条）。
+    现在罐子按 `domain` 真过滤、`set` 会 upsert，并新增 `calls.cookieGet` 记录**查了哪几层域**——
+    越界与否恰恰体现在查询面上，只记写入结果等于放过了它。纯函数层 4 条 + 执行器层 13 条新用例，
+    五处红→绿对照实跑过（含两处第一次跑是绿的、补断言之后才红），完整红名单记在
+    `tests/tab-auto-refresh/cookie-backup.test.mjs` 末尾
 
 ### Changed
 - 共享测试桩件 `tests/helpers/background-harness.mjs` 按真实 Chrome 语义补齐十一处，为的是让"看着绿、实际空跑"
@@ -28,7 +53,8 @@
   关键词命中后要做的三件事与验证墙连续命中的自动暂停因此一次也没被执行过，而桩件留的那个 `opts.__fixture`
   入口后台根本不读，从写下起就没人用得起）；`env.send()` 在监听器没 `return true` 时直接 reject
   （异步应答契约此前没有任何东西钉着）；`tabs.query` 真按 `active` / `discarded` / `windowId` / `currentWindow` 过滤；
-  右键菜单有了登记表与 `env.fire.menuClicked`；cookie 换成真按 `domain` 过滤、`set` 会 upsert 的罐子；
+  右键菜单有了登记表与 `env.fire.menuClicked`；cookie 换成真按 `domain` 过滤、`set` 会 upsert 的罐子，
+  并用 `calls.cookieGet` 记下**查了哪几层域**（备份越界与否恰恰体现在查询面上，只记写入结果等于放过了它）；
   `windows.getLastFocused` 改成"只有完全没有窗口才 reject"（见上条 Fixed）；`env.fire.tabRemoved`
   先摘页再派发（真实时序，并记了一句"目前没有断言依赖它"）；`alarms.clear` 集中记日志；
   外加 `fetch` 桩件与 `env.reply()`（真实 MV3 SW 里 `fetch` 一定在，桩件没有它，三条外发链路一进 `fetch`
@@ -61,6 +87,18 @@
   `stable_token` + 40001 清缓存重取重试一次、非令牌错误码不重试、失败留痕的 `kind` 与 `errorKey`。
   合计 21 处红→绿对照实跑过（心跳 8、外发 13），每处只红在它点名的那一条（两处例外如实记下：
   阈值改成"一次就暂停"会连带红第二条用例，删掉令牌缓存写入会让两条都红）
+- 新增 `tests/tab-auto-refresh/cookie-backup.test.mjs`（13 条）：cookie 备份的**执行器层**第一次在真数据上跑
+  （此前桩件的 `cookies.getAll` 恒返回 `[]`，采集、还原、封顶全在空数据上空转）。采集侧钉查询面
+  （域链只有 `shop.example.co.nz` 与 `example.co.nz` 两层，`co.nz` 一层都不许问）、同根域内三条都进备份而
+  别家的一条进不来、拿不出可信注册域的站点一笔不查不写、开关关着不查、外链漂移不写进别的站点备份、
+  确认掉线时"采集确实跑到了但不落盘"、疑似只并计数不覆盖好备份、200 条封顶留票据切杂项；
+  还原侧走 `onStartup` 的 `prune`，钉 `hostOnly` 三分支（专属票省略 `domain`、域票照写、v1 缺字段沿用旧行为）、
+  已过期条目不写、历史越界备份先收敛再恢复、后缀键整条删掉不留空壳、开关关着时遗留备份清空。
+  `alarm-gate.test.mjs` 另加 2 条同站判据（只是同公共后缀算漂移、同注册域的子域跳转算同站）
+  - 对照方法学差异：A2 改的三件事里 `siteRoot` / `domainChain` / `planBackupConvergence` 都在
+    `shared/logic.js`，而 `logic.test.mjs` 直接 import 真源码，harness 的 `TAR_BG` 只换 `background.js`、
+    够不着那条路。所以这批对照复制的是**整仓**（不含 `.git` 与 `_code-review`）到仓库外，
+    在副本里分别改坏 `logic.js` 与 `background.js`，再在副本里跑那三个文件
 - 桩件侧的一条反向事实，两条新链路都验过：把 `globalThis.fetch = env.fetch` 那一行摘掉，
   心跳文件红 8/10、外发红 7/11，而**绿下来的正好全是"断言一笔都不发"的否定式用例**。
   这就是 A6 第 9 条修之前"外发链路一行没跑"的直接证据，也记成一条一般结论：
@@ -71,8 +109,12 @@
 - `keyword-inpage.test.mjs` 的"注入体不得引用模块作用域"从四个名字的枚举黑名单换成扫标识符：
   原先任何一个新加的模块函数调用（`hostOf(`、`clipOneLine(` …）都能漏过去。现在按 `logic.js` / `config.js`
   的真实导出集比对，新增导出自动进守卫范围
-- 文档：`BACKLOG.md` 记下已修与在账的条目，`AGENTS.md` 补上焦点三态这条约束、"关掉被监控的标签页会重开一张"
-  的行为，以及本机 node 门禁的实际恢复路线（`winget` 那条在非交互环境下装不出任何东西，改用官方便携压缩包）
+- 文档：`BACKLOG.md` 记下已修与在账的条目（本批之后 A1、A2 与 A6 全部收口，A6 第 8 条的 cookie 执行器用例随 A2 交付），
+  `AGENTS.md` 补上焦点三态这条约束、"关掉被监控的标签页会重开一张"的行为、cookie 采集范围的三道约束
+  （形状规则 / 域链地板 / 取不到可信注册域就不备份）、新增"测试纪律"小节
+  （外发用例必须有真应答桩件；只断言"没发、没写、没通知"的用例永远证明不了链路被执行过），
+  以及本机 node 门禁的实际恢复路线（`winget` 那条在非交互环境下装不出任何东西，改用官方便携压缩包）；
+  `README.md` 把备份范围从"与监控目标同站的站点"改成"以该站点的注册域为界，公共后缀不会被当成站点"
 - 本机验证环境：Node v24.21.0 以官方 win-x64 压缩包装在 `%LOCALAPPDATA%\node-tools\`，不在 PATH 上，
   验证清单第 1、2 条按绝对路径调用；CI 仍是最终裁决
 

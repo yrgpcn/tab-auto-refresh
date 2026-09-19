@@ -23,6 +23,7 @@ import {
   notifyEventsOf,
   oneLine,
   parseKeywords,
+  planBackupConvergence,
   planPrune,
   looksLikeLoginPage,
   sameHost,
@@ -1413,9 +1414,22 @@ async function prune(adoptLegacyUrls = false) {
   const restoredRoots = new Set();
   if (settings.cookieBackup) {
     const all = await chrome.storage.local.get(null);
+    const backups = [];
     for (const key of Object.keys(all)) {
-      if (!key.startsWith(COOKIE_BACKUP_PREFIX)) continue;
-      const host = key.slice(COOKIE_BACKUP_PREFIX.length);
+      if (key.startsWith(COOKIE_BACKUP_PREFIX)) {
+        backups.push({ key, host: key.slice(COOKIE_BACKUP_PREFIX.length), entry: all[key] });
+      }
+    }
+    /* 先收敛历史越界备份，再恢复。反过来不行：restoreCookies 按每条自己的 domain 写回浏览器，
+       先恢复等于已经替别家站点复活了一遍登录态，之后删存档也收不回来 */
+    const conv = planBackupConvergence(backups);
+    if (conv.remove.length) await chrome.storage.local.remove(conv.remove);
+    if (conv.rewrite.length) {
+      await chrome.storage.local.set(
+        Object.fromEntries(conv.rewrite.map((r) => [r.key, r.entry]))
+      );
+    }
+    for (const { host } of backups) {
       const root = siteRoot(host);
       if (!root || !taskRoots.has(root)) continue;
       if (await restoreCookies(host)) restoredRoots.add(root);

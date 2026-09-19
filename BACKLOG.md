@@ -10,20 +10,17 @@
 维护方式：修完不删条目，整段移进 `CHANGELOG.md` 对应版本，本文件只留还在账上的。
 新增条目同样要带源码位置，不接受"某处可能有问题"这种形状。
 
-2026-09-19 一轮之后：A1（焦点三态）与 E1（本机 node 门禁）已修完并移进 `CHANGELOG.md` 的 `[未发布]`，
-编号不复用。A6 十二条里关掉十一条，只剩第 8 条的**执行器层用例**（`cookies.getAll` 那处桩件本身已经改对，
-缺的是 `backupCookies` 采集与冻结、`restoreCookies` 的 `hostOnly` 分支这组用例）。它随 A2 一起做：
-改 `domainChain` / `siteRoot` 正需要那批用例来验收。其余条目原样在账。
+2026-09-19 两轮之后：A1（焦点三态）、A2（公共后缀越界采集）、A6（桩件十二条全部）、E1（本机 node 门禁）
+已修完并移进 `CHANGELOG.md` 的 `[未发布]`，编号不复用。A6 第 8 条欠的 cookie 执行器用例随 A2 一起交付
+（`tests/tab-auto-refresh/cookie-backup.test.mjs` 13 条）。下一条动手是 A5。其余条目原样在账。
 
 ## 优先级一览
 
 | 编号 | 优先级 | 一句话 | 状态 |
 | --- | --- | --- | --- |
-| A2 | P0 | 公共后缀使 cookie 备份越界采集到无关站点 | 待做 |
 | A3 | P1 | 关键词与验证墙检测只覆盖顶层框架 | 待做 |
 | A4 | P1 | 外发载荷带完整 query 网址；凭据存 sync 且明文 | 待做 |
 | A5 | P1 | 弹窗不回填任务的关键词/继续盯守/间隔 | 待做 |
-| A6 | P1 | 桩件只剩"cookie 执行器层没有用例"一条 | 剩一条，随 A2 交付 |
 | A7 | P2 | `settings` 两条无锁读-改-写互相覆盖 | 待做 |
 | A8 | P2 | webhook 失败无痕，且没有"发送测试" | 待做 |
 | A9 | P2 | `onMessage` 不校验来源、设置键不做白名单 | 待做 |
@@ -33,61 +30,41 @@
 | V1 | — | 2.1.0 真机手工验证（含下面三条只能真机验的检查） | 待做 |
 | E2 | — | `_code-review/` 门禁是否迁入入库路径 | 待定 |
 
-建议动手顺序：A2 → A5 → A7 → A9 → 其余。A6 排在最前面那条理由（要先有"能真的变红"的桩件）
-已经兑现，它剩的那一条并入 A2 的验收；下一条就是 A2。
-
-## P0：会让功能朝反方向静默失效
-
-### A2 `siteRoot` 手写字表 + `domainChain` 下探过头，备份捞进无关站点的 cookie
-
-- 位置：`tab-auto-refresh/shared/logic.js:65-84`（`MULTI_SUFFIXES` / `siteRoot`）、
-  `logic.js:113-121`（`domainChain`）、`tab-auto-refresh/background.js:971-986`（采集）
-- 链条：`siteRoot` 对不在手写字表里的多级公共后缀一律 `cut = 2`。例：`shop.example.co.nz` → `co.nz`
-  （`co.nz` / `com.ua` / `com.ru` / `co.id` / `com.ph` / `com.vn` 等都不在表里）。
-  而 `domainChain("shop.example.co.nz")` 返回 `["shop.example.co.nz", "example.co.nz", "co.nz"]`，
-  `chrome.cookies.getAll({ domain: "co.nz" })` 的语义是"域等于或子域于它"，于是把浏览器里**所有**
-  .co.nz 站点的 cookie 全捞进来，去重、按票据得分截到 200 条，明文写进
-  `cookieBackup:shop.example.co.nz`；`restoreCookies` 再按每条自己的 `domain` 写回去，
-  等于替无关站点复活一遍登录态。
-- 同一根因还波及：`sessionProbe` 以 `siteRoot` 为键（两个无关站点共用一个掉线状态，A 站掉线会
-  冻结 B 站的备份写入）、`pruneCookieBackups` 的"还在被监控"判断、以及 `background.js:971`
-  那句注释承诺的"只备份与监控目标同根域的站点"本身。
-- 前置条件：`settings.cookieBackup` 开启（默认关），且监控目标位于多级公共后缀之下。
-- 改法（两处都要，缺一不可）：
-  1. `domainChain` 在 `siteRoot` 处停止下探，绝不查询注册域以上的层；
-  2. `siteRoot` 不能只靠手写字表。取不到可信注册域时**宁可不备份**，也不要退化成公共后缀。
-- 已定路线（不改变既有用户的行为，按 `AGENTS.md` 纪律 3）：不整条清除老备份，而是做一次收敛——
-  把已存条目里落在注册域之外的 cookie 剔掉，其余原样留着。整条清除会让"重启后恢复登录"
-  在用户没碰过任何开关的情况下静默失效。
-- 验收：`logic.test.mjs` 补 `co.nz` / `com.ua` / 单段内网名 / `localhost` / IPv4 的断言；
-  新增一条门禁断言"对任意主机，`domainChain` 的末段恒等于 `siteRoot(该主机)`"。
+建议动手顺序：A5 → A7 → A9 → 其余。A6 排在最前面那条理由（要先有"能真的变红"的桩件）
+已经兑现，它剩的 cookie 执行器用例随 A2 一起交付完毕，两条都已移进 `CHANGELOG.md`。
 
 ## P1
 
 ### A3 关键词与验证墙都只查顶层框架
 
-- 位置：`background.js:674-678`（`matchInPage` 注入）、`background.js:1583-1585`（`probeCaptcha`）
+- 位置：`background.js:675-679`（`matchInPage` 注入）、`background.js:1608-1626`（`probeCaptcha`）
 - 两处 `executeScript` 都只给 `target: { tabId }`，没有 `allFrames`，只在顶层框架跑。
   有 <all_urls> 主机权限，跨源 iframe 一样能注入，所以现在检不到纯粹是没要。
 - 不要盲目加 `allFrames: true`：
-  1. 返回结构变成多框架数组，现在读的是 `results[0].result`（`background.js:679`），
+  1. 返回结构变成多框架数组，现在读的是 `results[0].result`（`background.js:680`、`1627`），
      关键词（返回数组）与验证墙（返回布尔）的聚合方式不一样；
   2. 个别框架注入失败会给 `undefined`，要按"取到几个算几个"处理，不能让一个失败吞掉整次判定；
   3. 验证墙侧防反向误判：正常页面的广告/统计 iframe 里出现 recaptcha 脚本不等于整页是墙。
-     `probeCaptcha` 的判据刻意是"整页就是墙"（标题优先，见 1590-1600 注释），放宽判定面必须
+     `probeCaptcha` 的判据刻意是"整页就是墙"（标题优先，见 1611-1615 注释），放宽判定面必须
      同时保住这一点——误判验证墙的代价是"卡在暂停态且不自愈"，与错误页能自愈不对称。
-- 验收：`keyword-inpage.test.mjs` 只测函数体语义，覆盖不到框架聚合；多框架聚合要新写单测，
-  依赖 A6 第 3 条把 `__fixture` 真正用起来。
+- 验收：`keyword-inpage.test.mjs` 只测函数体语义，覆盖不到框架聚合；多框架聚合要在执行器层新写单测。
+  桩件已备好两条口子：`env.onScript((opts) => ...)` 按调用点改口返回多框架数组，
+  `calls.executeScript` 记下每次的 `target` / `allFrames` 实参（注入面本身就是要断言的东西）。
+  `detect-chain.test.mjs` 里已有用例在用这条通道，照它的形状写。
 
 ### A4 外发内容与凭据的暴露面
 
-- 位置：`background.js:725-730`（关键词命中载荷）、`background.js:751-777`（webhook）、
+- 位置：`background.js:726-731`（keyword 命中载荷）、`1185-1190`（task-stopped）、
+  `1669-1674`（task-paused）、`752-778`（webhook 本体）、
   `popup.js:341-368`（saveSettings）、`popup.html` 里 `webhookUrlInput` / `wechatSecretInput`
 - 三件事：
-  1. 载荷带完整 `task.url`。`URL` 的 query 常含会话令牌、一次性签名、邮箱手机号（工单与后台系统
+  1. 载荷带完整 `task.url`。**三个**外发点各有 `url:` 字段（上面列的前三处），
+     `session-lost` 只带 `host`，不在其列。只改关键词那一处等于留两个出口。
+     `URL` 的 query 常含会话令牌、一次性签名、邮箱手机号（工单与后台系统
      尤其如此）。改成默认只发 `origin + pathname`（`urlKey` 已有实现）。**已定：不加开关，直接切**——
      精简版照样可跳转、可定位页面，而"带 query"这个选项等于长期留一个把令牌外发的入口。
      属纪律 3 范畴，CHANGELOG 要点名。
+     外发点由 `outbound.test.mjs` 钉住，加一条"任意事件的载荷里不得出现 query"的断言比逐处改更有效。
   2. 关键词命中的 `text` 就是把用户监控的字面发给外部端点。这是用户主动配的，可接受，
      但 README 外发一节要点名（现在只说"通知内容会发出去"）。
   3. `webhookUrl` 与微信 appsecret 存在 `settings`（即 `chrome.storage.sync`），随 Google 账号
@@ -107,36 +84,11 @@
   只在首次打开或 `currentTab` 变化时回填，别覆盖用户正在输入的内容。
 - 验收：只能真机 + 弹窗 DOM 验，单测覆盖不到 popup。见 V1 (d)。
 
-### A6 共享桩件偏离真实 Chrome —— 只剩一条
-
-十一条已经修完，逐条的写法与红→绿对照记在 `CHANGELOG.md` 的 `[未发布] / Changed`，
-以及各测试文件末尾的对照清单里（`detect-chain` / `tab-removed` / `idle-resync` /
-`entry-points` / `heartbeat` / `outbound` 六个文件共 44 处实跑）。剩这一条：
-
-8. cookie 的**执行器层**没有用例。`cookies.getAll` 那处桩件已经改对（真按 `domain` 过滤、
-   `env.setCookies` 能放数据），但没人用它测过执行器：
-   - 位置：`background.js:959-1045`（`backupCookies` 的采集、根域判定、疑似掉线时冻结写入）、
-     `background.js:1046-1090`（`restoreCookies` 的 `hostOnly` 三分支：`true` 省略 `domain`、
-     `false` 传 `domain`、字段缺失的 v1 旧备份统一传 `domain`）
-   - 要钉的：纯函数层（`capCookies` / `decideBackupWrite`）`logic.test.mjs` 已经覆盖，
-     这里缺的是"真去 `chrome.cookies` 拿、真按拿到的条数写盘"那一段——
-     `hostOnly` 少一个分支就把 `__Host-` 票据写成全域 cookie 或者干脆写不进去，
-     而这正是备份唯一存在的理由
-   - 与 A2 同批交付：A2 要改的 `domainChain` 决定的就是"采集时按哪几个域查"，
-     没有这批用例，A2 改完仍然只能靠读代码判断对不对
-
-另外两条"看着是门禁、实际不是"的教训留在原地，别再踩：
-- 桩件 `fire.tabRemoved` 的先摘页再派发没有任何断言依赖它（把它改回去，本仓库没有一条用例会红），
-  这件事记在 `tab-removed.test.mjs` 末尾，不当已修
-- 只断言"没发、没写、没通知"的用例永远证明不了一条链路被执行过：摘掉 `globalThis.fetch` 之后，
-  `outbound.test.mjs` 绿的四条正好全是这种否定式用例（`heartbeat.test.mjs` 8/10 红、其余同理）。
-  写新用例时先问一句"这条链路的请求真发出去过吗"，能答上来的断言才算是门禁
-
 ## P2
 
 ### A7 `settings` 两条无锁读-改-写互相覆盖
 
-- 位置：`background.js:587-601`（`rememberLastInterval`）、`background.js:1700-1706`（`save-settings`）
+- 位置：`background.js:588-602`（`rememberLastInterval`）、`background.js:1719-1731`（`save-settings`）
 - 两处都是 `getSettings()` → `Object.assign({}, settings, 增量)` → `sync.set({ settings: 整份 })`，
   都没有走锁（`tasks` 有 `withTaskLock`，`settings` 没有）。点"开始"会走 `rememberLastInterval`，
   同一时刻切任何一个开关会走 `save-settings`，两条链各自读一份合并基座再整份写回，交错时后落地的
@@ -149,7 +101,7 @@
 
 ### A8 webhook 失败完全无痕，且没有与微信对等的"发送测试"
 
-- 位置：`background.js:751-777`，对照 `886-949`（`postWechat` 有 `wechatLastResult`、`errorKey`、弹窗显示）
+- 位置：`background.js:752-778`，对照 `887-953`（`postWechat` 有 `wechatLastResult`、`errorKey`、弹窗显示）
 - `await fetch` 之后不看 `res.ok`（Discord webhook 过期、Slack 被踢都算成功）；不记录任何结果；
   弹窗只有微信有测试按钮。三条不对称，同一后果：用户以为"配好了、在发"。
 - 改法：与微信同构——`{ok, status, errorKey, at}` 写 `chrome.storage.local` 的 `webhookLastResult`，
@@ -158,12 +110,12 @@
 
 ### A9 `onMessage` 不校验来源与设置键白名单
 
-- 位置：`background.js:1674-1736`（分发全程不看 `sender`）
+- 位置：`background.js:1699-1761`（分发全程不看 `sender`）
 - MV3 下 `runtime.onMessage` 收不到网页消息，所以这不是"任意网页能调"的洞；但消息表里已有能写盘
   与外发的入口，两条值得收紧成代码约束：
-  1. `save-settings` 把 `msg.settings` 整份合并（`1702-1704`），不做键白名单 → 只接受
+  1. `save-settings` 把 `msg.settings` 整份合并（`1726-1729`），不做键白名单 → 只接受
      `DEFAULT_SETTINGS` 里存在的键，其余丢弃；
-  2. `user-activity` 已经正确地只用 `sender.tab.id` 而忽略 msg 里的 id，这就是对的形状——
+  2. `user-activity`（`1739-1743`）已经正确地只用 `sender.tab.id` 而忽略 msg 里的 id，这就是对的形状——
      给弹窗专用类型补"`sender.tab` 必须为空"的断言，把"内容脚本不能起停任务"写进代码。
 - 验收：新增用例，由带 `sender.tab` 的来源发 `save-settings` / `start`，必须被拒。
 
@@ -191,11 +143,12 @@
 
 ### A12 SKIP 原因无痕；三处 `storage.local.get(null)` 全量扫描
 
-1. `background.js:1245-1288`：`decideAlarmAction` 返回的 `reason` 只在 `action === STOP` 时被用掉，
+1. `background.js:1279-1299`：`decideAlarmAction` 返回的 `reason` 只在 `action === STOP` 时被用掉，
    SKIP 的 `paused-all` / `user-active` / `discarded` / `auto-paused` 一律不留痕。用户看到"任务没在刷"
    只能靠猜，而 A1 那个误判正落在这里——不可见。改法：SKIP 时把最近一次 reason + 时间戳写会话态
    `rt:skip:<tabId>`（别写 local，那是每个刷新周期都要动的键），弹窗任务行显示一行原因。
-2. `background.js:352-380`（两次）与 `1404`（一次）：备份上限 20 站 × 200 条，最坏一次读要反序列化
+2. `background.js:361` 与 `367`（同在 `pruneCookieBackups`）与 `1416`（`prune` 里 A2 新写的备份收敛读取）：
+   备份上限 20 站 × 200 条，最坏一次读要反序列化
    几 MB 明文进 SW，只为拿键名做前缀过滤。注释里"get 不支持通配符，必须全量读取"是对的，但不是唯一解
    ——写备份时同步维护一个 `cookieBackupHosts` 索引键，清理只读索引。要带迁移：索引缺失时退回全量读
    并顺手建索引，**绝不能**把老用户的备份当无主数据清掉。
@@ -222,4 +175,4 @@
 - "`logic.test.mjs:294` 的 `hi >= 60000` 是恒真断言" —— 假。去掉 `pct` 上限夹取后 `hi` 会变 114000，
   这条会红，夹取实际是被钉住的。它只是范围宽，不是空跑。
 - "`alarm-gate` 的焦点用例没做对照" —— 假，而且做过了（文件末尾第 4、5 处）。问题不在断言松，
-  在桩件把 `getLastFocused` 建模反了，见 A1 / A6 第 10 条。
+  在桩件把 `getLastFocused` 建模反了。对应条目已修完移进 `CHANGELOG.md` 的 `[未发布]`。
