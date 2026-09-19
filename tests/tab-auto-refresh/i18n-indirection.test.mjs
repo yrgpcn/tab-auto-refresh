@@ -7,7 +7,8 @@
    被提到过。第十四轮给消息载荷记的那三本账（message-ledger）里第三本就是这个形状，
    这一轮把同一个办法用到文案键上，并且把"通道清单必须齐平语言包"做成判据。
 
-   三处实测盲区（第十五轮在仓库外整仓副本上跑 19 个变异量出来的，表在文件末尾）：
+   三处实测盲区（第十五轮在仓库外整仓副本上跑 20 个变异量出来的，表在文件末尾；
+   其中 W13 那版样本本身不成立，有效对照是 19 条）：
    - 表值拼错而旧键在别处还被提到：`WECHAT_ERROR_KEYS` 里 40001 与 42001 合用
      `wechatErrToken`，把 40001 改成不存在的键，那一条键名照样"被提到过"，
      validate 与全套单测两头全绿。症状是凭证失效推给用户一张空白语义的卡片，接口照旧回 errcode=0
@@ -31,8 +32,11 @@
 
    为什么扫源码而不 import 常量：判据要问的是"源码里有没有人递了个变量当键名"，
    import 进来的值看不出来；而且扫源码才能在**副本**上跑红→绿对照（第十四轮同样）。
-   抽取器一律从 validate-refs.mjs 借同一套正则，本文件不另写一份通道定义——写第二份
-   就会和 validate 漂移，而"扫不到"在这套判据里的表现是不报错。
+   抽取器一律借来的，本文件不另写一份通道定义：通道那一层（哪些字面量算调用点、哪些是别名、
+   manifest 与 HTML 那两条）从 validate-refs.mjs import 同一套正则，切声明体与表行那一层
+   （`declarationBody` / `objectPairs` / `presetRows` / `rowLastStrings` / `stripComments`）
+   从 tests/helpers/source-tables.mjs import，第十六轮那台机器读的是同一份。写第二份就会漂移，
+   而"扫不到"在这套判据里的表现是不报错。
    反向判据刻意**先剔注释**再取证据：注释里写着的键名不是取用路径，把它当证据等于
    允许一条通道死掉而账上照旧绿（validate 那头按"提到过"算，是它的口径，不是这条）。
 */
@@ -48,6 +52,13 @@ import {
   jsMessageKeys,
   manifestMsgKeys,
 } from "../../scripts/validate-refs.mjs";
+import {
+  declarationBody,
+  objectPairs,
+  presetRows,
+  rowLastStrings,
+  stripComments,
+} from "../helpers/source-tables.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const pluginRoot = join(repoRoot, "tab-auto-refresh");
@@ -68,97 +79,13 @@ const jsRelPaths = walkJs(pluginRoot)
   .filter((p) => !p.includes(join("_locales")))
   .map((p) => relative(pluginRoot, p).split("\\").join("/"));
 
-/* 逐行剔注释：本仓库的注释一律整行，没有行尾注释被切一半的风险（实测如此）。
-   这一条只服务于"注释里的键名不算取用路径"，不承担切分表达式的责任 */
-const stripComments = (src) =>
-  src
-    .split("\n")
-    .map((line) => (/^\s*(?:\/\/|\*|\/\*|<!--)/.test(line) ? "" : line))
-    .join("\n");
+/* 逐行剔注释与表格切取五个原语一起搬到 `tests/helpers/source-tables.mjs`：
+   第十六轮的预算账（`wechat-budget.test.mjs`）要从同一批表里取值，各写一份就会漂移，
+   而"切少了"在这里的表现是不报错 */
 
 const ZH = JSON.parse(read("_locales/zh_CN/messages.json"));
 const EN = JSON.parse(read("_locales/en/messages.json"));
 const LOCALE_KEYS = new Set([...Object.keys(ZH), ...Object.keys(EN)]);
-
-/* ---------- 声明体切取：const NAME = { … } / [ … ] / "…" ---------- */
-
-function declarationBody(src, name) {
-  const m = src.match(new RegExp("(?:export\\s+)?const\\s+" + name + "\\s*=\\s*"));
-  if (!m) throw new Error(`源码里找不到 const ${name}`);
-  const rest = src.slice(m.index + m[0].length);
-  if (rest.startsWith('"') || rest.startsWith("'")) {
-    const close = rest.slice(1).search(rest[0]);
-    return { scalar: rest.slice(1, close + 1), body: rest.slice(0, close + 2) };
-  }
-  const open = rest[0];
-  if (open !== "{" && open !== "[") throw new Error(`${name} 的声明形状不认识：${open}`);
-  const closeChar = open === "{" ? "}" : "]";
-  let depth = 0;
-  let inStr = false;
-  let i = 0;
-  for (; i < rest.length; i++) {
-    const c = rest[i];
-    if (inStr) {
-      if (c === "\\") i++;
-      else if (c === '"') inStr = false;
-      continue;
-    }
-    if (c === '"') inStr = true;
-    else if (c === "{" || c === "[") depth++;
-    else if (c === "}" || c === "]") {
-      depth--;
-      if (depth === 0) break;
-    }
-  }
-  return { body: rest.slice(0, i + 1), closeChar };
-}
-
-/* 对象表的"值槽"个数与值本身。slots 用来证明抽取没空跑：形状一改（比如值不再
-   是字符串字面量），条目数就会掉到槽数以下，那要红而不是静默少收几条。
-   属性名三种写法都要认：引号包着的事件名（"task-stopped"）、裸标识符（keyword）、
-   裸数字（40001）——数字这一种别省，WECHAT_ERROR_KEYS 整张表都是它 */
-function objectPairs(decl) {
-  const body = decl.body;
-  const entries = [];
-  for (const m of body.matchAll(/(?:^|[{,\s])(?:"([^"\n]*)"|([A-Za-z0-9_$][A-Za-z0-9_$]*))\s*:\s*"([^"\n]*)"/g)) {
-    entries.push({ label: m[1] === undefined ? m[2] : m[1], key: m[3] });
-  }
-  const slots = [...body.matchAll(/:/g)].length;
-  return { entries, slots };
-}
-
-/* 数组表的"每行取最后一个字符串字面量"：WEBHOOK_STATUS_BUCKETS 一行是
-   [状态码数组, kind, errorKey]，前两个字面量是 kind，不是键 */
-function rowLastStrings(decl) {
-  const body = decl.body;
-  const rows = [];
-  let depth = 0;
-  let start = -1;
-  for (let i = 0; i < body.length; i++) {
-    const c = body[i];
-    if (c === "[") {
-      depth++;
-      if (depth === 2) start = i;
-    } else if (c === "]") {
-      depth--;
-      if (depth === 1) rows.push(body.slice(start, i + 1));
-    }
-  }
-  const entries = rows.map((row) => {
-    const lits = [...row.matchAll(/"([^"\n]*)"/g)];
-    return { label: row, key: lits.length ? lits[lits.length - 1][1] : "" };
-  });
-  return { entries, slots: rows.length };
-}
-
-function presetRows(decl) {
-  const body = decl.body;
-  const entries = [];
-  for (const m of body.matchAll(/key:\s*"([^"\n]*)"\s*,\s*seconds:\s*(\d+)/g)) {
-    entries.push({ label: m[2], key: m[1] });
-  }
-  return { entries, slots: [...body.matchAll(/key:/g)].length };
-}
 
 const pascal = (s) =>
   String(s)
@@ -507,7 +434,8 @@ test("对照 validate 的口径：调用点通道与语境通道各自只覆盖�
       wechatErrAppId 之间没有任何命名可推，而被弃用的 wechatErrToken 还挂在 42001 上，
       反向也过。同一个形状在 PRESETS 上就拦得住（W15），因为那里键与值有名字关系可查
    2. 只管**名字**，不管**内容**：语言包那条文案本身长什么样、超没超微信那 20 字，
-      本文件一个字都不看（W20）。那是下一轮的账
+      本文件一个字都不看（W20）。第十六轮的账在 `wechat-budget.test.mjs`，它从本文件那批表里
+      取键、去语言包取值，跑的是真 `wechatTitleOf`
    3. 值槽里放模板字符串、或把键拼出来（"skipReason" + pascal(reason)）的写法，抽取器
       会因槽数与条目数不等而红（V1），不会静默少收——但要记得这种写法本身等于新增一条
       通道，本文件不认它，改那种形状要连抽取器一起改
