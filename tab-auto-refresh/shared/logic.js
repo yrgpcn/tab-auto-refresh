@@ -22,6 +22,21 @@ export function normalizeStoredSettings(stored, defaults) {
   return s;
 }
 
+/* 外部来源交来的设置增量按已知键过滤（弹窗 save-settings 的载荷就是这个来源）。
+   只管键不管值：值的形状由读侧负责（normalizeStoredSettings 补默认，webhookUrl 另有
+   normalizeWebhookUrl，非法即当空）。放任意外来键进 settings 的代价是持久的——它会跟着
+   `sync` 漫游到用户其它设备、占 8KB 配额，而且没人读它，属于纯粹的污染。
+   判据必须是自有属性而不是 `in`：`constructor in DEFAULT_SETTINGS` 为真，
+   用 `in` 等于把原型链上那批键全当成合法设置键收下来 */
+export function pickKnownSettings(partial, defaults) {
+  const out = {};
+  if (!partial || typeof partial !== "object") return out;
+  for (const k of Object.keys(partial)) {
+    if (Object.prototype.hasOwnProperty.call(defaults || {}, k)) out[k] = partial[k];
+  }
+  return out;
+}
+
 /* 兜底刷新间隔：无效输入与过小值都按最小间隔处理（30 秒起步） */
 export function clampInterval(seconds, min = MIN_INTERVAL_SEC) {
   const n = Math.floor(Number(seconds));

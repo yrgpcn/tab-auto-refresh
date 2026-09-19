@@ -12,13 +12,14 @@
 源码位置一律写符号名（函数名、消息类型、存储键）而不写行号——行号每动一轮就漂一次，
 2026-09-19 的 A7 那轮之后，本文件所有位置已统一改成符号名。
 
-2026-09-19 四轮之后：A1（焦点三态）、A2（公共后缀越界采集）、A5（弹窗不回填任务级字段）、
-A6（桩件十二条全部）、A7（`settings` 两条无锁读-改-写互相覆盖）、E1（本机 node 门禁）已修完并移进
-`CHANGELOG.md` 的 `[未发布]`，编号不复用。
+2026-09-19 当日累计：A1（焦点三态）、A2（公共后缀越界采集）、A5（弹窗不回填任务级字段）、
+A6（桩件十二条全部）、A7（`settings` 两条无锁读-改-写互相覆盖）、A9（`onMessage` 不认来源、
+设置键无白名单）、E1（本机 node 门禁）已修完并移进 `CHANGELOG.md` 的 `[未发布]`，编号不复用。
 A6 第 8 条欠的 cookie 执行器用例随 A2 一起交付（`tests/tab-auto-refresh/cookie-backup.test.mjs` 13 条）；
 A5 让 popup 第一次有了门禁（`popup-repopulate.test.mjs` 10 条，切源码跑）；
-A7 给 `settings-cache.test.mjs` 补了 4 条（并发覆盖、读前失效、锁方向、锁内"没变就不写"）。
-下一条动手是 A9。其余条目原样在账。
+A7 给 `settings-cache.test.mjs` 补了 4 条（并发覆盖、读前失效、锁方向、锁内"没变就不写"）；
+A9 新增 `message-gate.test.mjs` 9 条（来源守卫逐类型、零副作用指纹、白名单端到端与纯函数、两条扫源码）。
+下一条动手是 A3。其余条目原样在账。
 
 ## 优先级一览
 
@@ -27,15 +28,14 @@ A7 给 `settings-cache.test.mjs` 补了 4 条（并发覆盖、读前失效、�
 | A3 | P1 | 关键词与验证墙检测只覆盖顶层框架 | 待做 |
 | A4 | P1 | 外发载荷带完整 query 网址；凭据存 sync 且明文 | 待做 |
 | A8 | P2 | webhook 失败无痕，且没有"发送测试" | 待做 |
-| A9 | P2 | `onMessage` 不校验来源、设置键不做白名单 | 待做 |
 | A10 | P3 | 语言包内部自相矛盾（四项/三项、英文冒号/中文冒号） | 待做 |
 | A11 | P3 | 弹窗文本框只在失焦保存；测试按钮无 finally | 待做 |
 | A12 | P3 | SKIP 原因无痕；三处 `storage.local.get(null)` 全量扫描 | 待做 |
 | V1 | — | 2.1.0 真机手工验证（含下面三条只能真机验的检查） | 待做 |
 | E2 | — | `_code-review/` 门禁是否迁入入库路径 | 待定 |
 
-建议动手顺序：A9 → A3 → 其余。A6 排在最前面那条理由（要先有"能真的变红"的桩件）
-已经兑现，A1、A2、A5、A6、A7 五条都已移进 `CHANGELOG.md`。
+建议动手顺序：A3 → A4 → 其余。A6 排在最前面那条理由（要先有"能真的变红"的桩件）
+已经兑现，A1、A2、A5、A6、A7、A9 六条都已移进 `CHANGELOG.md`。
 
 ## P1
 
@@ -86,17 +86,6 @@ A7 给 `settings-cache.test.mjs` 补了 4 条（并发覆盖、读前失效、�
 - 改法：与微信同构——`{ok, status, errorKey, at}` 写 `chrome.storage.local` 的 `webhookLastResult`，
   弹窗复用 `wechatState` 那套显示；补 `webhook-test` 消息类型（`ignoreToggle` 语义同微信：
   只要求地址合法，不受事件勾选约束）。HTTP 状态分类放 `shared/logic.js` 做纯函数。
-
-### A9 `onMessage` 不校验来源与设置键白名单
-
-- 位置：`background.js` 的 `chrome.runtime.onMessage.addListener` 整个分发（全程不看 `sender`）
-- MV3 下 `runtime.onMessage` 收不到网页消息，所以这不是"任意网页能调"的洞；但消息表里已有能写盘
-  与外发的入口，两条值得收紧成代码约束：
-  1. `save-settings` 那一支把 `msg.settings` 整份合并，不做键白名单 → 只接受
-     `DEFAULT_SETTINGS` 里存在的键，其余丢弃；
-  2. `user-activity` 那一支已经正确地只用 `sender.tab.id` 而忽略 msg 里的 id，这就是对的形状——
-     给弹窗专用类型补"`sender.tab` 必须为空"的断言，把"内容脚本不能起停任务"写进代码。
-- 验收：新增用例，由带 `sender.tab` 的来源发 `save-settings` / `start`，必须被拒。
 
 ## P3
 

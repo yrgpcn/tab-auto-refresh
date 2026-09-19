@@ -23,6 +23,7 @@ import {
   notifyEventsOf,
   oneLine,
   parseKeywords,
+  pickKnownSettings,
   planBackupConvergence,
   planPrune,
   looksLikeLoginPage,
@@ -1728,10 +1729,22 @@ async function resumeTaskAuto(tabId) {
   }
 }
 
+/* 页面侧唯一会发消息的是注入的 content/keepalive.js，它只用这两种。
+   MV3 下普通网页根本到不了 runtime.onMessage，这条守的是同样带 sender.tab 的自己人：
+   注入脚本一旦被站点想办法碰到，能起停任务、能整份改设置。把"页面不能做这些"从
+   "碰巧没写"变成代码里的约束，代价是一次集合查表。
+   反向不守（弹窗发 user-activity / keepalive-query）：前者只认 sender.tab.id，
+   弹窗那条自己就空转了，后者是只读的配置快照，拒了反而添乱 */
+const FROM_PAGE_TYPES = new Set(["keepalive-query", "user-activity"]);
+
 /* 与弹窗通信 */
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
+      if (sender && sender.tab && !FROM_PAGE_TYPES.has(msg.type)) {
+        sendResponse({ ok: false, error: "page sender not allowed: " + msg.type });
+        return;
+      }
       if (msg.type === "prune-now") {
         await cleanupInvalidTasks();
         sendResponse({ ok: true });
@@ -1753,8 +1766,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         /* 必须走 patchSettings 而不是在这里自己 get/set：它和 rememberLastInterval 是两条
            "读基座 → 整份写回"的链，不串行时后落地的会把前一条刚改的开关按旧值写回去。
            两头失效的契约在 patchSettings 里。弹窗的"发送测试消息"会 await 到这里才发出，
-           靠的正是写盘后那次失效（2.0.0 修过的时序竞态，不能被缓存重新引入） */
-        await patchSettings(msg.settings || {});
+           靠的正是写盘后那次失效（2.0.0 修过的时序竞态，不能被缓存重新引入）。
+           白名单放在这个入口而不是 patchSettings 里：msg.settings 是唯一的外部输入，
+           内部调用方交来的增量都是源码里写死的键 */
+        await patchSettings(pickKnownSettings(msg.settings, DEFAULT_SETTINGS));
         sendResponse({ ok: true });
       } else if (msg.type === "keepalive-query") {
         /* 页面脚本注入后拉配置快照（心跳/活动监听各自开关） */

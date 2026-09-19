@@ -131,6 +131,12 @@
 - 清理按时机分，不按"任务还存不存在"一刀切：`startTask` 清该标签页的 keyword-hit / task-stopped / task-paused（上一轮的结论已作废）；`stopTask` 只清 task-paused（keyword-hit 往往正是命中即停的产物，在 `stopTask` 里清等于当场撤回用户刚收到的通知）；`resumeTaskAuto` 只在真恢复了才清
 - 点通知 = 把对应标签页带到前台并聚焦它的窗口，然后自动收掉。`chrome.windows` 不需要新权限（`tabs` 已给到 `windowId`）；标签页早就不在了就什么都不做
 
+### 消息入口（`runtime.onMessage`）
+
+- 守卫排在异步分发体的**第一行**：带 `sender.tab` 的来源（我们自己注入的 `content/keepalive.js`）只能用 `keepalive-query` 与 `user-activity`，其余一律 `ok: false` 回掉。MV3 下网页本来到不了这个入口，这条守的是同样带 `sender.tab` 的自己人。**新增页面侧消息类型必须同时登记进 `FROM_PAGE_TYPES`**，漏登记的表现是那条功能静默失效（注入脚本自己吞掉失败），由 `tests/tab-auto-refresh/message-gate.test.mjs` 扫 `keepalive.js` 源码比对钉住
+- 反向刻意不守：弹窗发 `user-activity` 自己就空转（只认 `sender.tab.id`，不看 msg 里的 id），`keepalive-query` 是只读配置快照
+- `save-settings` 的载荷先过 `pickKnownSettings`（`shared/logic.js` 纯函数）再进 `patchSettings`：只留 `DEFAULT_SETTINGS` 的**自有**键（判据不能用 `in`，否则 `constructor` 那批原型链键全被收下），未知键丢弃——进了 `settings` 就会随 `sync` 漫游并占配额。只管键不管值，值的形状由读侧（`normalizeStoredSettings` / `normalizeWebhookUrl`）负责
+
 ### 弹窗
 
 - Chrome 弹窗外框上限 800×600，整页高度必须留在 600px 内。宽度 400px，10 个开关用 `repeat(2, minmax(0,1fr))` 双列网格（不能写成 `1fr`，`1fr` 的隐含下限是 `min-content`，长标签会把列撑成不等宽），所以标签必须短且一律单行

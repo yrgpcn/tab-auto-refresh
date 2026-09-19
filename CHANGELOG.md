@@ -79,6 +79,31 @@
     于是加了 90 秒超时并把挂住单独报出来）
   - 纪律 3：默认值、存储键、存盘数据结构一个都没动。受影响路径只有上面两条写盘入口，
     老用户已有的 `lastIntervalSec` 与其它开关从此不再被并发写丢掉
+- `runtime.onMessage` 的分发口开始认来源，`save-settings` 的载荷按已知键收（`BACKLOG.md` A9）。
+  MV3 下普通网页到不了这个入口，所以这不是"任意网页能调扩展 API"的洞；真实存在的来源是**我们自己注入到
+  被监控页里的** `content/keepalive.js`——它带的就是 `sender.tab`，而分发口原先全程不看 `sender`，
+  任何一条分支它都能走：起停任务、整份改写设置、触发外发。现在守卫排在异步分发体的第一行，
+  页面侧只放行 `keepalive-query` 与 `user-activity` 这一对（注入脚本实际会发的全部），其余回 `ok: false`
+  - 反向刻意不守：弹窗发 `user-activity` 自己就空转（它只认 `sender.tab.id`，不看 msg 里的 id），
+    `keepalive-query` 是只读的配置快照，拒了只会给调试添乱
+  - **新增页面侧消息类型必须同时登记进 `FROM_PAGE_TYPES`**。漏登记的表现很静默：注入脚本照发，
+    守卫照拒，而 `keepalive.js` 那边的失败是自己吞掉的，功能当场失效却不报错。所以有一条用例去扫
+    `keepalive.js` 真实源码，把它发出的 `type` 与白名单逐条比对
+  - `save-settings` 的增量现在过 `pickKnownSettings`（`shared/logic.js` 的纯函数）：只留
+    `DEFAULT_SETTINGS` 里有的键，其余整条丢弃。放任意外来键进 `settings` 的代价是持久的——它会跟着
+    `sync` 漫游到用户其它设备、占 8KB 配额，而代码里没有任何一处读它。判据必须是**自有属性**而不是 `in`：
+    `constructor in DEFAULT_SETTINGS` 为真，用 `in` 等于把整条原型链上的键都当成合法设置键收下
+  - 只管键不管值：值的形状本来就由读侧负责（`normalizeStoredSettings` 补默认，`webhookUrl` 另有
+    `normalizeWebhookUrl` 把非法值当空处理），在这里重复一遍只会多一处会漂移的判断
+  - 纪律 3：默认值一个都没动，正常路径（弹窗勾选保存、注入脚本拉配置与上报活动）行为不变。
+    唯一收窄的是"载荷里的未知键不再进盘"，而弹窗自己从不发未知键；已存在老存盘里的多余键仍按原样
+    被读侧忽略，`webhookEvents`（1.7.0 旧名）这类改名遗留也不会被这次写盘复活
+  - 门禁：新增 `tests/tab-auto-refresh/message-gate.test.mjs`（9 条）——八条弹窗专用类型逐条从页面来源
+    发一遍并要求"拒绝且零副作用"（按存储、alarm、reload、外发、通知、角标全量取指纹比对），合法两种
+    照常用，`user-activity` 不许冒充别的标签页，白名单端到端与纯函数各一条，再加两条扫源码
+    （守卫必须在分发链最前面、白名单必须与 `keepalive.js` 实际发的类型齐平）。八处红→绿对照实跑过，
+    每处的红名单原样记在该文件末尾，其中"守卫挪到第一条分支之后"那处正是只有源码扫描抓得到：
+    行为上八条里只有一条逃守卫，循环里其余七条照旧绿
 
 ### Changed
 - 共享测试桩件 `tests/helpers/background-harness.mjs` 按真实 Chrome 语义补齐十一处，为的是让"看着绿、实际空跑"
