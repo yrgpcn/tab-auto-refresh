@@ -20,6 +20,20 @@
   执行器没有 fixture 也没有 DOM，能判的那一半必须能单独 import。门禁 `tests/tab-auto-refresh/validate-refs.test.mjs`
   （28 条，含五条通道与位数各自的数量下限——下限只挡"对着空集合绿过去"），末尾记着 41 处对照的落点，
   以及一处真实假报警的成因（三元条件里的 `"captcha"` 是拿去比值的、不是键，故 `jsMessageKeys` 先切分支）
+- 那两份 workflow 自己**此前也在零判据那一格**：`validate.mjs` 不吃 `.github/`，`tests/` 与 `scripts/` 里
+  没有一个文件提到过它们（第二十五轮 A43 实测）。这一片的静默形状是"改了不报错，只是那一步安静地不做事"，
+  而最阴的一处有实测：测试 glob 的目录名漂一个字母时 `node --test` **退出码仍是 0**、只报一行 `ℹ tests 0`
+  ——CI 对着空集合绿过去，此后任何一轮新门禁都没在 CI 上跑过，而 Actions 显示成功。
+  门禁 `tests/tab-auto-refresh/pipeline-ledger.test.mjs` 13 条，六本账：测试 glob（三处齐平**并且**每一处
+  真吃到现遍历出来的全部测试文件）、校验命令（三处齐平且那个文件真存在）、`node-version` 与 `setup-node`
+  的版本（两份 workflow ↔ `AGENTS.md` 那两处写法）、**一个名字十一处**（tag 模式的名字段 ↔ `package.json`
+  的 `name` ↔ 插件目录真名 ↔ 三处剥前缀 ↔ 清理那一步的 URL 编码前缀 ↔ 两份说明书 ↔ `CHANGELOG.md`
+  每个发布标题的名字段 ↔ `git archive` 的前缀与引用路径 ↔ 版本比对那一步 `require` 的目录段）、
+  版本算术（manifest 版本拼成 tag，再按 workflow 里那两步的参数展开剥回来还得是它）、步骤次序与写权限
+  （闸门 → 版本比对 → 打包 → 建 Release → 清理；有 `gh release create` 那一步就要有 `contents: write`，
+  没有写动作就不许白要）。YAML 一律按行形状切、认不出就抛，比较全走纯函数，所以三台常驻对照能拿改过的
+  输入叫同一段代码再判一遍。**挪测试文件的位置（新增一层子目录）要确认那三处 glob 仍吃得到它**；
+  换仓库名或插件目录名要一次改齐那十一处；动发布步骤的次序前先记住次序就是语义本身
 - 语言包键的取用有**两条写法，判据两条都要走**：直调 `chrome.i18n.getMessage("键")`，或经包装函数
   `msg("键")`（popup.js 是 `function msg(key, subs)`，wechat-setup.js 是 `const msg = (key) => ...`）。
   别名名**不写死在表里**，由 `i18nAliases` 从源码现推（判据：谁把自己的入参原样递给 `getMessage`），
