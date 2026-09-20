@@ -274,7 +274,7 @@ function scenariosRegion(src) {
 test("量高度的形状引用真实场景、补丁键是真实设置键（打错一个键就是白量一场）", () => {
   const produced = new Set([...SHOT_SRC.matchAll(/file:\s*"([\w.-]+\.png)"/g)].map((m) => m[1]));
   const shots = [...SHOT_SRC.matchAll(/shot:\s*"([\w.-]+\.png)"/g)].map((m) => m[1]);
-  assert.ok(shots.length >= 6, `只扫到 ${shots.length} 个量高度的形状，PROBES 的形状变了`);
+  assert.ok(shots.length >= 7, `只扫到 ${shots.length} 个量高度的形状，PROBES 的形状变了`);
   assert.deepEqual(
     shots.filter((f) => !produced.has(f)),
     [],
@@ -290,6 +290,98 @@ test("量高度的形状引用真实场景、补丁键是真实设置键（打�
     }
   }
   assert.deepEqual(unknown, [], "补丁键不在 DEFAULT_SETTINGS 里：合并进去没人读，那一行根本不会出现");
+});
+
+/* 2026-09-20 把 V1 的 (d) 弹窗回填、(h) 长中文站点名挤行、(j)① 跳过解释的正文与悬停时刻
+   三面从"只能真机看"改成本地验：`--measure` 那一趟渲染顺手把 DOM 的真实取值读回去判。
+   下面四条钉的是这条通道自己的形状——它比高度更静：期望值抄错、量行数的方法用错、
+   当前标签页两处各写一个数字，红都不会红，只是那三面又回到"只有人眼看图"。 */
+
+/* 标签页补丁：id 必须是场景里真有的那一页，字段必须是 popup 真读的字段。
+   两样打错都不响——tabsFor 找不到 id 会抛，可字段名打错（tilte）就是"标题没变"，
+   于是那一格量的还是短标题，而报告上写着"长中文站点名" */
+test("改标签页标题的形状只改真实存在的页与真实读取的字段", () => {
+  const tabIds = new Set(keysOf(sliceObject(SHOT_SRC, "const TABS = {")));
+  assert.ok(tabIds.size >= 2, `TABS 只扫到 ${tabIds.size} 个标签页，形状变了要回来改这条`);
+  /* popup.js 里 buildTaskItem 与 renderCurrentTab 读的字段，抄自那两处 */
+  const TAB_FIELDS = new Set(["id", "title", "url", "favIconUrl", "discarded", "windowId"]);
+  const blocks = [...SHOT_SRC.matchAll(/tabsPatch:\s*\{/g)];
+  assert.ok(blocks.length >= 1, "一个改标签页的形状都没有：(h) 那一格被删了，V1 (h) 又回到真机清单");
+  const badIds = [];
+  const badFields = [];
+  for (const m of blocks) {
+    const block = sliceObject(SHOT_SRC.slice(m.index), "tabsPatch: {");
+    for (const id of keysOf(block)) {
+      if (!tabIds.has(id)) badIds.push(id);
+      for (const f of keysOf(sliceObject(block, id + ": {"))) {
+        if (!TAB_FIELDS.has(f)) badFields.push(`${id}.${f}`);
+      }
+    }
+  }
+  assert.deepEqual(badIds, [], "补丁的标签页 id 不在场景里：tabsFor 就地抛错，一个形状都量不到");
+  assert.deepEqual(badFields, [], "补丁字段不在 popup 读的字段里：那一格量的还是原来的短标题");
+});
+
+/* 那一格的存在意义是"文字超出可用宽度、由 ellipsis 截断"。所以脚本必须有一条要求
+   它真的截断过——否则把标题改回 "MDN Web Docs" 也全绿，而报告还写着在验长中文站点名 */
+test("改标题的那一格带着确实溢出过的见证，不是只报一个行数", () => {
+  const body = sliceObject(SHOT_SRC, "function domFactProblems(");
+  assert.match(body, /probe\?\.tabsPatch|probe && probe\.tabsPatch/,
+    "domFactProblems 不再按形状区分：截断见证要么没了，要么变成对所有形状都要求（二级视图那一趟没有标题行，会假红）");
+  assert.match(body, /clipped/, "截断那条判据不再读 clipped：见证退回'只看行数'，而行数对没溢出的文字同样是 1");
+  assert.match(SHOT_SRC, /scrollWidth\s*>\s*el\.clientWidth/,
+    "clipped 不再由 scrollWidth 与 clientWidth 相比推出：溢出这一件事就没有别的量法了");
+});
+
+/* 行数必须按 Range 的行矩形量。元素的 getClientRects() 量的是盒碎片：一个 div 内部
+   换成三行它照样只报一个矩形。2026-09-20 第一版就是这么写的，对照"删掉 .task-title 的
+   nowrap"当场零红——那一格等于没有判据 */
+test("按行数量的是 Range 的行矩形，不是元素的盒碎片", () => {
+  assert.match(SHOT_SRC, /document\.createRange\(\)/, "不再用 Range 量行高：盒碎片永远只报一个矩形");
+  assert.match(SHOT_SRC, /selectNodeContents/, "Range 没有选内容：取到的是元素自己的矩形，与 getClientRects 等价");
+  assert.match(SHOT_SRC, /lines:\s*lineCount\(/, "rows.lines 不再取 lineCount 的返回值：行数判据回到盒碎片");
+  assert.doesNotMatch(SHOT_SRC, /lines:\s*el\.getClientRects\(\)\.length/,
+    "lines 又改成元素矩形数：这一格会恒为 1，对照跑出来是绿的而它什么都没量");
+  /* 同一行的几块矩形顶边会差一两像素（字高不同），不聚类就会报出假的多行 */
+  assert.match(SHOT_SRC, /Math\.abs\(t - q\.top\)\s*<=\s*\d+/, "行顶边不再聚类：一行里的两段文字会被数成两行");
+});
+
+/* 当前标签页只有一个来源。两处各写一个数字时的表现不是红，是"回填断言对着一个没有任务的
+   标签页跑"——populateTaskFields 本来就该早退，于是三个控件全空而判据以为一切正常 */
+test("mock 的当前标签页与回填期望值共用同一个 id 来源", () => {
+  const decl = /const CURRENT_TAB_ID = (\d+);/.exec(SHOT_SRC);
+  assert.ok(decl, "脚本里找不到 const CURRENT_TAB_ID 这一处声明：两头又要各写一个字面量");
+  const id = decl[1];
+  assert.match(SHOT_SRC, /currentTabId:\s*CURRENT_TAB_ID/, "声明没传进页面 mock：tabs.query 用的是别的页");
+  assert.match(SHOT_SRC, /scenario\.tasks\[CURRENT_TAB_ID\]/, "期望值没按这个 id 取任务：回填那三条对的是别的任务");
+  assert.match(SHOT_SRC, /query:\s*async\s*\(\)\s*=>\s*\[tabs\[currentTabId\]\]/,
+    "tabs.query 不再回 currentTabId：改成回一个写死的页，这一处就又是两处真相");
+  assert.doesNotMatch(SHOT_SRC, new RegExp(`tabs\\[${id}\\]`),
+    `tabs.query 里出现写死的标签页 ${id}：改了 CURRENT_TAB_ID 之后 mock 与期望值会分叉`);
+});
+
+/* DOM 事实与页面报错同权重：量到的高度在限内，不代表那三个控件真被填上、那行解释真带着悬停时刻。
+   与 A29 那两条同形——先要求攒进清单，再要求清单决定退出码 */
+test("DOM 事实清单非空时改退出码，且逐形状往里推", () => {
+  const decl = SHOT_SRC.match(/const (factProblems|\w*Problems) = \[\]/);
+  assert.ok(decl, "找不到界面事实那份清单：不符的条目只打在终端，等于没有门禁");
+  const name = decl[1];
+  assert.ok(SHOT_SRC.includes(`${name}.push(`), `${name} 只声明不收集`);
+  const verdict = SHOT_SRC.match(new RegExp(`if\\s*\\(\\s*${name}\\.length\\s*\\)`));
+  assert.ok(verdict, `没有任何判据读这份 ${name} 清单：攒了等于没攒`);
+  const body = SHOT_SRC.slice(SHOT_SRC.indexOf("{", verdict.index), closeBrace(SHOT_SRC, SHOT_SRC.indexOf("{", verdict.index)) + 1);
+  assert.match(body, /process\.exitCode\s*=\s*1/, "清单非空却不改退出码：这脚本本机手工跑，没人会去读那行红字");
+});
+
+/* 单行判据只管 .task-title。`.task-sub` 在 shipped 那张 README 图里本来就是两行（列表封顶
+   108px 会滚，多出来的行高不撑破整页），把它一并纳入判据会让这条通道常年红、然后被人关掉 */
+test("单行判据只管标题那一格，说明行只报数不判红", () => {
+  const body = sliceObject(SHOT_SRC, "function domFactProblems(");
+  const guarded = [...body.matchAll(/row\.lines\s*>\s*1/g)];
+  assert.equal(guarded.length, 1, "判红处不止一处出现 row.lines > 1：说明行大概也被纳进来了");
+  const at = body.indexOf("row.lines > 1");
+  assert.ok(body.slice(Math.max(0, at - 90), at).includes('.task-title'),
+    "单行判据不再限定 .task-title：README 那张图里 .task-sub 就是两行，这条会常年红");
 });
 
 /* 截出 `page.on("<事件>", (…) => { … })` 的回调体。用现成的花括号配对，别按 "});" 找收尾：
@@ -436,8 +528,8 @@ test("favicon 由服务器回 204，所以报错清单不必按文本放行任�
    - 形状清单与测量在同一条命令里：`--measure` 没跑过不等于形状没变，改了 UI 要回来重跑一次
    - 探针只覆盖 PROBES 列的那几种"多出一行"的形状。任务数不逐一样量，`#taskList` 那 108px
      是硬封顶加内部滚动，多开任务不会拉长整页——那是 CSS 保证的，不是这条判据保证的
-   - 量的是 mock 数据下的形状：真系统的字体回退、浏览器 zoom、更长的中文站点名仍只能真机看
-     （`BACKLOG.md` V1 (h) 因此收窄成这三样） */
+   - 量的是 mock 数据下的形状：真系统的字体回退与浏览器 zoom 仍只能真机看。长中文站点名
+     那一格 2026-09-20 起已经在本地量掉了（见下面 V1 那一段），剩下的两样是这台机器给不了的 */
 
 /* ---------- A29 加的那两条（第十一轮）：对照与边界，2026-09-19 实跑 ----------
 
@@ -471,3 +563,46 @@ test("favicon 由服务器回 204，所以报错清单不必按文本放行任�
      那种情况红是红，但报的是超时不是那 N 条错
    - favicon 那条判据认的是 writeHead(204) 这一种解法。换别的安静法（比如真放一个图标文件）
      要连着改判据，别只改脚本 */
+
+/* ---------- V1 三面降级为本地验：对照与边界，2026-09-20 实跑 ----------
+
+   脚本 `D:/Github/_tar_ctl_v1/ctl.mjs`（整仓副本 `D:/Github/_tar_ctl_v1/repo`，不带 .git）。
+   这一轮的对照跑的不是本文件，而是 `--measure` 本身：新那三面（回填、悬停时刻、单行）由它
+   判，所以对照就是把产品源码逐处改坏、看它 exit 1 并且点名。基线：本文件 13 条全绿，
+   `--measure` 七个形状全在 600px 内（最深 571px）、事实零不符、页面零报错。
+
+     P1 删掉 popup.js 里关键词那一行回填 → 红 4 条，点名 关键词框是 ""
+     P2 盯守那条判据写反（checked 恒 false）→ 红 4 条，点名 "命中后继续盯守"是 false
+     P3 间隔回填不写预设下拉（sel.value = ""）→ 红 7 条，点名 间隔是 预设=""
+     P4 跳过解释不再写 title → 红 4 条，点名 悬停提示没有时刻
+     P5 正文里也带上时刻（A12 那个决定的反面）→ 红 4 条，点名 正文里出现了时刻
+     P6 删掉 .task-title 的 nowrap → 红 2 条，点名 被挤成 3 行
+     P7 把 CURRENT_TAB_ID 改成场景里没有任务的 3 → 红 7 条，点名 回填断言没有期望值可对
+     P8 长标题夹具改回短标题（形状还在、高度还在限内）→ 红 1 条，点名 截断那一本账是空跑
+
+   P1~P3 那三面就是 V1 (d) 原先只能真机看的那一句："控件真的被填上了"这一步 `popup-repopulate`
+   给不了（它切的是源码形状）。P4/P5 是 V1 (j)① 的正文与悬停两半。P6/P8 是 V1 (h)。
+   红 4 条而不是 7 条是对的：只有引用 popup.png 那四种形状带关键词任务，微信那两种形状
+   的底座场景没填关键词，期望值就是空串。
+
+   两处第一次不合格（都是"对照跑出来是绿的、其实判据什么都没量"，写下来免得当成正常）：
+
+   1. 行数第一版取 `el.getClientRects().length`。那是盒碎片的个数，不是行数——一个 div 内部
+      换成三行它照样报 1。P6 当场零红暴露了它。改成 Range 选内容、按行矩形顶边聚类。
+      如果只看"改前改后都绿"，这一处会一直留在里面：判据的形状看着完全正确。
+   2. 长中文站点名第一版用 23 字与 32 字，在 400px 里本来就放得下，于是那一格从头到尾没进入
+      溢出这条路径（P6 零红的另一半原因）。现在两条标题都被截断，最宽一条超出可用宽度 252px，
+      并且由 P8 那条截断见证钉住"必须真的溢出"。
+   3. 附带一条工具层的：对照脚本按 `\n` 写多行 needle，而仓库里所有源码是 CRLF，于是 P1/P6
+      第一版报的是"needle 不在源码里"。这不是判据问题，但报错了方向——看着像"那一行代码没了"。
+      对照脚本现在按文件真实行尾换算 needle。
+
+   已知边界（别当成已覆盖）：
+   - 三面里 (d) 还剩一小半：回填之后再点"开始"（先停后起）会不会把关键词弄丢，那是写盘路径，
+     截图通道不点按钮。`BACKLOG.md` V1 (d) 因此没有整条删掉，只删掉"重开弹窗要显示实际值"那一半
+   - 浏览器 zoom 与系统字体回退量不到：这台机器的 Chrome 用默认字体，缩放恒 100%。
+     zoom 那一半其实不会新增换行（CSS 像素与 zoom 无关），但字体回退会改每字宽度，仍只能真机看
+   - chip 的压制两态（全局暂停、autoPaused）这里刻意不判：判据住在 popup 的 skipEntry，
+     由 `skip-trace.test.mjs` 切源码跑，场景里两种都不出现
+   - P6 红的是"CSS 那行 nowrap 没了"，不是"用户会看到两行"。真机上标题过长仍然是截断，
+     这一格买的是"那行 CSS 与它的效果之间有一条链"，不是"版面一定不挤" */

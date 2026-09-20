@@ -1,8 +1,7 @@
 # AGENTS.md
 
 项目记忆：给在本仓库工作的 AI 助手和协作者。版本历史看 `CHANGELOG.md`，
-还没修的账看 `BACKLOG.md`（只记活着的账；结案经过记在 `CHANGELOG.md` 和对应门禁文件末尾），
-审核过程与回归脚本清单看 `_code-review/README.md`（本地目录，见下）。
+还没修的账看 `BACKLOG.md`（只记活着的账；结案经过记在 `CHANGELOG.md` 和对应门禁文件末尾）。
 
 ## 仓库
 
@@ -10,8 +9,7 @@
 - 本仓库只放这一个插件。插件源码在 `tab-auto-refresh/`，测试与工具在仓库根；插件文件夹内不放独立 README，功能、安装、使用边界、技术栈统一写在根 `README.md`
 - `.github/workflows/ci.yml`：push 与 PR 时用 Node 24 跑仓库校验与单元测试
 - `.github/workflows/release.yml`：tag 驱动发布，先跑校验与单测，再比对 tag 版本与 manifest 版本，任一失败即不发布
-- `tests/` 单元测试放在仓库根，避免被打进插件 zip；`docs/` 是 README 用的截图；`_code-review/` 被
-  `.gitignore` 忽略，不入库、不进 Release、新 clone 里不存在，所以本文件引用 `_code-review/...` 的路径只在本地有效；
+- `tests/` 单元测试放在仓库根，避免被打进插件 zip；`docs/` 是 README 用的截图；
   根 `package.json` 只是仓库工具配置（`type: module`、脚本、repository 元数据），没有依赖，不影响打包
 - `scripts/validate.mjs` 做仓库级校验（JSON、manifest、语言包、JS 语法、引用完整性、插件目录无未跟踪文件）。
   "引用完整性"的判据全在 `scripts/validate-refs.mjs` 的八个纯提取器里（`manifestMsgKeys` 深走整份 manifest 收
@@ -21,8 +19,8 @@
   能判的那一半必须能单独 import。门禁 `tests/tab-auto-refresh/validate-refs.test.mjs`，
   末尾记着一处真实假报警的成因（三元条件里的 `"captcha"` 是拿去比值的、不是键，故先切分支）
 - `scripts/screenshot-popup.mjs` 一次渲染 README 那两张弹窗截图，需要 playwright，CI 不跑；加 `--measure`
-  只量整页高度、一个字节图都不写。它那份 chrome mock 是弹窗用面的手抄副本，对齐由
-  `tests/tab-auto-refresh/screenshot-mock.test.mjs` 守着（见验证清单第 4 条）
+  只量整页高度与界面事实、一个字节图都不写。它那份 chrome mock 是弹窗用面的手抄副本，对齐由
+  `tests/tab-auto-refresh/screenshot-mock.test.mjs` 守着（见验证清单第 3 条）
 - 两份 workflow 自己的账在 `tests/tab-auto-refresh/pipeline-ledger.test.mjs`：测试 glob（三处齐平并且每一处真吃到
   现遍历出来的全部测试文件）、校验命令、`node-version` 与 `setup-node` 版本、一个名字在十一处的写法
   （tag 模式的名字段 ↔ `package.json` 的 `name` ↔ 插件目录真名 ↔ 三处剥前缀 ↔ 清理那一步的 URL 编码前缀 ↔
@@ -276,13 +274,14 @@
 ### 弹窗
 
 - Chrome 弹窗外框上限 800×600，整页高度必须留在 600px 内。宽度 400px，10 个开关用 `repeat(2, minmax(0,1fr))` 双列网格（不能写成 `1fr`，`1fr` 的隐含下限是 `min-content`，长标签会把列撑成不等宽），所以标签必须短且一律单行
-- 这条 600px 上限怎么量：`node scripts/screenshot-popup.mjs --measure` 把弹窗按六个形状各真渲染一遍，打印**最深一条底边**并跟 600 比，任一超出就 exit 1。之所以量底边而不是"有没有滚动条"：`body` 是 `overflow: hidden`，超出部分不折叠也不出滚动条，**直接裁掉**，所以"弹窗不出滚动条"这句话判不了任何事。2026-09-19 实测六个形状 541 / 571 / 561 / 510 / 540 / 380px，最紧的是"填了合法 webhook 地址"那一种，预算 29px。**新增一条会显示的行就要回来加一个形状**（形状清单在脚本里的 `PROBES`，它引用哪个场景、补丁键真不真实由 `screenshot-mock.test.mjs` 钉住）
+- 这条 600px 上限怎么量：`node scripts/screenshot-popup.mjs --measure` 把弹窗按七个形状各真渲染一遍，打印**最深一条底边**并跟 600 比，任一超出就 exit 1。之所以量底边而不是"有没有滚动条"：`body` 是 `overflow: hidden`，超出部分不折叠也不出滚动条，**直接裁掉**，所以"弹窗不出滚动条"这句话判不了任何事。2026-09-20 实测七个形状 541 / 571 / 561 / 510 / 540 / 380 / 541px，最紧的是"填了合法 webhook 地址"那一种，预算 29px。**新增一条会显示的行就要回来加一个形状**（形状清单在脚本里的 `PROBES`，它引用哪个场景、补丁键真不真实由 `screenshot-mock.test.mjs` 钉住）
+- 同一趟渲染还顺手把界面事实读回去判（`domFactProblems`）：回填的三个控件（关键词、命中后继续盯守、间隔）取值、跳过解释的正文与悬停时刻、长中文站点名那一格的溢出见证，任一不符就 exit 1。期望值只从场景数据与 DOM 自己的选项列表推，脚本里不抄第二份期望值。这一面把 V1 的 (d)(h)(j)① 三面从"只能真机看图"改成了本地验，红→绿对照表在 `screenshot-mock.test.mjs` 末尾
 - 渲染那条通道（截图与 `--measure` 同一套）遇到页面报错一律判红：pageerror 与 console error 攒进同一份清单，末尾非空就 exit 1。临时服务器对 `/favicon.ico` 直接回 204，所以出现的每一条 404 都是"该在而不在"
 - `body` 用 `flex` 加 `max-height: 600px` 兜底，唯一的弹性块是任务列表，列表封顶 108px，第 3 行露头当"下面还有"的提示。任务再多也不会拉长整页——那 108px 是硬封顶，所以 `--measure` 不逐任务数一样量
 - 微信配置走二级视图整页切换（`body.wx-mode`），四行输入框直接铺在主视图里必然顶破上限
 - `[hidden]` 会被作者样式里的 `display` 压过（`.row` 是 `display:flex`），已全局声明 `[hidden] { display: none !important }`
 - 弹窗每秒重新拉 alarm 列表再重绘倒计时，因为 alarm 周期触发不会触发 `storage.onChanged`；同一个循环里读一次跳过痕迹（`syncSkipTraces`，只点名读在场任务的 `rt:skip:<tabId>`）
-- 任务行末的 `.skip` 是"上一次到点为什么没刷"。它由 `renderCountdowns` 每秒重绘，`span` 在 `buildTaskItem` 里就挂好、平时 `hidden`。**正文只放短理由，时间戳进 `title`**：400px 宽的行内多一段时分秒会把 `task-sub` 挤到换行，行高一换整页就破 600px。显示还要过 `skipEntry` 的压制：全局暂停与 `task.autoPaused` 两种情形不显示（这两件事行内本来就有角标和状态文字），所以"采集四条、显示两条"是刻意的，别按显示的口径去改采集
+- 任务行末的 `.skip` 是"上一次到点为什么没刷"。它由 `renderCountdowns` 每秒重绘，`span` 在 `buildTaskItem` 里就挂好、平时 `hidden`。**正文只放短理由，时间戳进 `title`**：那一行本来就会被倒计时加关键词 chip 挤到换行（README 那张图里它就是两行），列表封顶 108px 会滚，所以多几个字不会撑破整页，但每多一行就少露一条任务，而这句解释是给扫一眼用的。显示还要过 `skipEntry` 的压制：全局暂停与 `task.autoPaused` 两种情形不显示（这两件事行内本来就有角标和状态文字），所以"采集四条、显示两条"是刻意的，别按显示的口径去改采集
 - 保存设置时要合并既有 `settings`，否则只改复选框会丢掉 `lastIntervalSec`
 - 走 `settings` 的文本框一律绑两条：`input`（去抖 500ms 写盘，同时重算状态行）与 `change`（回车、失焦即时写）。新增这样的框必须同时进 `popup.js` 的 `TEXT_SETTING_INPUT_IDS`，只写进 `saveSettings` 就等于让它退回"只有失焦才保存"。为什么不逐字符立即写：一笔 `sync.set` 会回流成 `storage.onChanged`，弹窗每敲一个字就重读一遍存储、整体重绘一次，后台那份 settings 快照也跟着每次失效。弹窗一失去焦点就整体销毁，`change` 常常根本不触发，所以 `visibilitychange → hidden` 与 `pagehide` 各补一次 `flushPendingSave()`（没有待写就一笔都不写）；那是补救不是保证，真机检查记在 `BACKLOG.md` V1 (e)。两个「发送测试」都必须先 `await saveNow()` 再 `send`，且都要 `try/finally` 复位按钮。以上由 `tests/tab-auto-refresh/popup-save-timing.test.mjs` 钉住
 - 当前标签页已有任务时，`init` 要把该任务的 `keywords`（走 `getTaskKeywords`，旧单串也认）、`onHit === "continue"`、实际间隔回填进输入控件（`populateTaskFields`）。不回填的后果是数据丢失而不是显示缺失：用户只能停掉再重开，而重开读的是空框，原来的关键词监控静默消失。回填只在 init 做一次、排在 `initPresetSelect()` 之后（要盖掉它按 `lastIntervalSec` 的预填），**不得挂到 `storage.onChanged` 的重绘回流上**——回流反复发生，挂上去会抹掉用户正在输入的字；没有任务时早退，一个字都不动。判据与顺序由 `tests/tab-auto-refresh/popup-repopulate.test.mjs` 钉住（切源码跑，popup 没有 DOM 库可测）
@@ -296,11 +295,11 @@
 
 ## 验证清单
 
-1. `node scripts/validate.mjs`。它会遍历整个仓库根做 JS 语法检查，所以 `_code-review/` 里的脚本语法错也会让它 exit=1；同一条理由适用于变异对照——**整仓副本必须放在仓库之外**，放在仓库里会被这次遍历当成待检文件（它还会报未跟踪文件）。
+1. `node scripts/validate.mjs`。它会遍历整个仓库根做 JS 语法检查，所以变异对照的整仓副本必须放在仓库之外：
+   放在仓库里会被这次遍历当成待检文件（它还会报未跟踪文件）。
 2. `node --test "tests/**/*.test.mjs"`（引号必需）
-3. 改了对应功能后跑 `_code-review/` 里的回归脚本，清单与用法见 `_code-review/README.md`。这些脚本不在 CI 里跑，要手动跑；判退出码时别接管道（`| tail` 会把退出码换成 tail 的），需要看尾部输出就用 `${PIPESTATUS[0]}` 或先重定向到文件
-4. UI 改动后用 `scripts/screenshot-popup.mjs` 重新生成 README 那两张图（`docs/tab-auto-refresh/popup.png` 与 `popup-wechat.png`，脚本一次写两张，两张都必须由它产出——手工截的那张没有再生成路径，必然漂移）。它的 chrome mock 是弹窗用面的手抄副本：抄漏一面的表现不是报错，是"截图看着挺好、其实那一块根本没渲染"（真实事故：mock 没有 `storage.session`，于是那句"上次跳过：你在操作"在图上永远出不来）。`viewport.width` 必须与 `popup.css` 的 `body width` 一致，否则截图被裁。**重跑之后 diff 里出现图片不等于 UI 变了**：这两张图不是幂等产物，同一份源码隔一段时间再跑字节就会变（连跑两次则相同），要不要提交看的是产品源码自上次生成以来有没有过提交，没有就把图片 checkout 回去。改完 UI 顺手跑 `--measure`（见 `### 弹窗` 那条）
-5. 手工验证项全在 `BACKLOG.md` 的 V1 那一节（含启动恢复、设置回流的双机验、验证墙的两个面、通知跳转）。本地能自动化的那几面已经全在 `tests/` 里，不要在真机上重复清单第 1、2、4 条
+3. UI 改动后用 `scripts/screenshot-popup.mjs` 重新生成 README 那两张图（`docs/tab-auto-refresh/popup.png` 与 `popup-wechat.png`，脚本一次写两张，两张都必须由它产出——手工截的那张没有再生成路径，必然漂移）。它的 chrome mock 是弹窗用面的手抄副本：抄漏一面的表现不是报错，是"截图看着挺好、其实那一块根本没渲染"（真实事故：mock 没有 `storage.session`，于是那句"上次跳过：你在操作"在图上永远出不来）。`viewport.width` 必须与 `popup.css` 的 `body width` 一致，否则截图被裁。**重跑之后 diff 里出现图片不等于 UI 变了**：这两张图不是幂等产物，同一份源码隔一段时间再跑字节就会变（连跑两次则相同），要不要提交看的是产品源码自上次生成以来有没有过提交，没有就把图片 checkout 回去。改完 UI 顺手跑 `--measure`（见 `### 弹窗` 那条）。判退出码时别接管道（`| tail` 会把退出码换成 tail 的），需要看尾部输出就用 `${PIPESTATUS[0]}` 或先重定向到文件
+4. 手工验证项全在 `BACKLOG.md` 的 V1 那一节（含启动恢复、设置回流的双机验、验证墙的两个面、通知跳转）。本地能自动化的那几面已经全在 `tests/` 与 `--measure` 里，不要在真机上重复清单第 1、2、3 条
 
 ## 环境备注
 
@@ -322,5 +321,4 @@
 1. 别再试 `winget install OpenJS.NodeJS.LTS --disable-interactivity`：实测它一个字节都不输出、几十分钟不结束、也不装出任何东西——它在等一个非交互环境给不出的提权确认。换官方压缩包：`https://nodejs.org/dist/` 下取 `node-vX.Y.Z-win-x64.zip`（本机默认代理能直连 nodejs.org），解压到 `%LOCALAPPDATA%\node-tools\`，全程不需要管理员权限
 2. `node --version`（按绝对路径）要是 24.x，与 CI 的 `setup-node@v4 / node-version: 24` 对齐。22.x 也跑得起来，但那不等于 CI 的结果
 3. 验证清单第 1、2 条这两步**不需要 `npm install`**——`scripts/` 与 `tests/` 里除了 `node:` 内置模块没有任何第三方 import，根 `package.json` 也没有 dependencies。压缩包里确实带 npm，但 `node.exe npm` 直接调不行，要用 npm 得先把解压目录加进 PATH
-4. 只有截图与量高度（清单第 4 条）才需要 playwright，它是脚本运行时用 `createRequire` 现找的、不在仓库依赖里：`npm install -g playwright`，再在 PowerShell 里 `$env:NODE_PATH=(npm root -g)`，然后 `node scripts/screenshot-popup.mjs`（加 `--measure` 就只量高度）。bash 那一头写成 `NODE_PATH="<解压目录>\\node_modules" node scripts/screenshot-popup.mjs --measure`——本机 2026-09-19 实测过一遍，六个形状最深 571px。脚本里 Chrome 路径写死 `C:\Program Files\Google\Chrome\Application\chrome.exe`，换机器要连着改
-5. 清单第 3 条不在这次恢复范围内：`_code-review/` 不入库，这台机器上从未存在，只能从原来那台拷过来，或按 CHANGELOG 里的描述重写门禁
+4. 只有截图与量高度（清单第 3 条）才需要 playwright，它是脚本运行时用 `createRequire` 现找的、不在仓库依赖里：`npm install -g playwright`，再在 PowerShell 里 `$env:NODE_PATH=(npm root -g)`，然后 `node scripts/screenshot-popup.mjs`（加 `--measure` 就只量高度与界面事实）。bash 那一头写成 `NODE_PATH="<解压目录>\\node_modules" node scripts/screenshot-popup.mjs --measure`——本机 2026-09-20 实测过一遍，七个形状最深 571px。脚本里 Chrome 路径写死 `C:\Program Files\Google\Chrome\Application\chrome.exe`，换机器要连着改
