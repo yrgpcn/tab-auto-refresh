@@ -6,7 +6,8 @@
    曾被某段文字按行号引用，行号早已挪走）。
 
    三条判据，每条都配正反两面：
-   1. 反引号里的**符号名**必须在仓库源码/测试/脚本里还存在（改名、删函数会立刻红）
+   1. 反引号里的**符号名**必须在仓库源码/测试/脚本里以**整词**还存在（改名、删函数会立刻红；
+      第二十一轮之前这里是子串判据，把名字少写一个字母反而算"存在"，见下面判据 1 那段注释）
    2. 反引号里的**路径**必须在仓库里存在（文件或目录；插件内相对写法与裸文件名也认）
    3. **行号锚点**（`file.ext:NNN` 与"第 N 行"）不许出现在还会改动的文档里——行号是会被
       下一次插入式改动冲掉的坐标，冲掉时零症状，只会静默指到别处。文档要锚在名字上：
@@ -77,6 +78,9 @@ const NOT_A_SYMBOL = new Set([
   "changes.newValue", "permissions.onAdded", "http.proxy", "viewport.width",
   "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
   "try/finally",
+  /* `node:` 是 import 说明符的前缀，不是谁的名字——源码里它后面永远接着 `fs`、`path`
+     这一串，按整词判据必然认不出（第二十一轮的实测：全部 312 个符号名里只有它一个误伤） */
+  "node:",
 ]);
 const NOT_A_PATH = new Set(["tab-auto-refresh/vX.Y.Z", "node-vX.Y.Z-win-x64.zip"]);
 
@@ -116,8 +120,59 @@ function unresolvedPaths(paths, tree) {
   });
 }
 
-function unresolvedIdents(idents, corpus) {
-  return idents.filter((t) => !corpus.includes(t));
+/* 判据 1 的强弱全在"整词"这两个字上（第二十一轮，`BACKLOG.md` A39）。原先是
+   `corpus.includes(t)`——子串判据是**单向**的：少写一个字母、多写一个字母，只要结果仍落在
+   某个真名字之内，就一律算"存在"。实测：`AGENTS.md` 把 `aggregateBadgeFacts` 写成
+   `aggregateBadgeFact`，全套 570 条全绿。而这条门禁立起来的理由正是"名字变了要有人追"，
+   改名之后文档留着旧名（或反过来）就是它要抓的那一类，偏偏子串判据对它最没辙：
+   改名叫 `X` → `XV2` 之后，文档里的 `X` 仍是 `XV2` 的前缀，一个字都不红。
+   现在要求 token 前后不许再接标识符字符（`A-Za-z0-9_$`）。点、连字符、冒号**算**分隔符，
+   所以 `paused-all`、`rt:awake`、`settings.lastIntervalSec` 这些在源码里以字面量出现的
+   键名照旧整串比对，不拆段——拆段等于把判据放宽回"每一段各自在别处出现过也算数"。
+   21 轮实跑：AGENTS.md 与 README.md 那 312 个符号名在整词判据下全部命中（`node:` 除外，
+   它是 import 前缀，见上面那张豁免表），逐段兜底一条都不需要 */
+const WORD_CHAR = /[A-Za-z0-9_$]/;
+
+function hasWholeWord(text, token) {
+  let from = 0;
+  for (;;) {
+    const at = text.indexOf(token, from);
+    if (at < 0) return false;
+    const before = at === 0 ? "" : text[at - 1];
+    const after = at + token.length >= text.length ? "" : text[at + token.length];
+    if (!WORD_CHAR.test(before) && !WORD_CHAR.test(after)) return true;
+    from = at + 1;
+  }
+}
+
+/* 红的时候点名"最接近的真名字是哪个"：这一条判据抓的是手滑与改名，两种情况都期望有个
+   几乎一样的真名。候选从语料现推（同一份标识符词表），测试里不抄第二份名单 */
+function identVocabulary(text) {
+  const words = new Set();
+  for (const m of text.matchAll(/[A-Za-z_$][A-Za-z0-9_$]*/g)) words.add(m[0]);
+  return [...words];
+}
+function commonPrefix(a, b) {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+}
+function closestTo(token, words) {
+  const scored = [];
+  for (const w of words) {
+    const p = commonPrefix(token, w);
+    if (p < 4) continue;
+    scored.push([w, p * 2 - Math.abs(w.length - token.length)]);
+  }
+  scored.sort((x, y) => y[1] - x[1] || x[0].length - y[0].length);
+  return scored.slice(0, 2).map(([w]) => w);
+}
+
+function unresolvedIdents(idents, corpus, words = identVocabulary(corpus)) {
+  return idents.filter((t) => !hasWholeWord(corpus, t)).map((t) => {
+    const near = closestTo(t, words);
+    return near.length ? `${t}（最接近的是 ${near.join(" / ")}）` : t;
+  });
 }
 
 /* `file.ext:NNN`，含 `:1234-1250` 这种区间。冒号前必须是"点 + 字母"，所以
@@ -167,8 +222,15 @@ test("判据不是把所有 token 都当缺失：真在用的那批逐个认得"
   /* 与下一条反向。少这一条，unresolvedIdents 写成恒返回全表也能"绿"着把所有名字报缺失 */
   for (const name of ["planPrune", "decideAlarmAction", "patchSettings", "rtRoundKeys", "outboundUrl"]) {
     assert.ok(AG.idents.includes(name), `AGENTS.md 该列出 ${name}，认出的是另一批`);
-    assert.ok(CORPUS.includes(name), `${name} 在源码语料里找不到，语料没拼对`);
+    assert.ok(hasWholeWord(CORPUS, name), `${name} 在源码语料里不是整词，语料没拼对`);
   }
+  /* 整词判据比子串严，所以这一条要拿**真语料**验一面：文档里少写一个字母的那种写法，
+     在真语料上也必须认不出。只有正面无这一句，判据哪天退回 `includes` 也照样全绿 */
+  assert.equal(
+    unresolvedIdents(["aggregateBadgeFact"], CORPUS).length, 1,
+    "`aggregateBadgeFact`（真名少写一个 s）在真语料上被认成了存在——整词判据退化成子串了"
+  );
+  assert.ok(AG.idents.length + RD.idents.length >= 300, "两堆符号名的总量掉下来了，提取器或文档写法变了");
 });
 
 /* ---------- 二、判据 1：符号名必须还在 ---------- */
@@ -259,6 +321,52 @@ test("符号名判据抓得住：改了名的记忆会红", () => {
   assert.deepEqual(unresolvedIdents(idents, "function planPrune() {}"), ["decidePlanPruning"]);
 });
 
+test("整词才是存在：子串不算（第二十一轮补的那一半）", () => {
+  /* 这一条是本轮的立论本身。子串判据漏报的方向是**文档写短了**：真名在语料里，
+     文档那个 token 是它的一段，于是"存在"。下面两种写法都是这一类 */
+  const corpus = "export function aggregateBadgeFacts({ tasks }) { return Object.keys(tasks); }";
+  const words = identVocabulary(corpus);
+  for (const typo of ["aggregateBadgeFact", "aggregateBadge"]) {
+    assert.ok(corpus.includes(typo), `${typo} 在子串判据下本该"存在"，本用例的前提是它确实存在`);
+    assert.deepEqual(
+      unresolvedIdents([typo], corpus, words),
+      [`${typo}（最接近的是 aggregateBadgeFacts）`],
+      `${typo} 不是整词，判据却说它存在`
+    );
+  }
+  /* 反方向子串判据本来就抓得住：文档写长了不是语料的子串。记在这里是为了说清这一条
+     补的是**单向**的洞，不是"原来什么都不红" */
+  assert.ok(!corpus.includes("aggregateBadgeFactsEs"), "前提变了：长写在这一台里不是子串");
+  assert.deepEqual(unresolvedIdents(["aggregateBadgeFactsEs"], corpus, words),
+    ["aggregateBadgeFactsEs（最接近的是 aggregateBadgeFacts）"]);
+  /* 真名自己必须命中；而反向那种"代码改名成文档名的超集"（`X` → `XV2`、文档不动）
+     正是子串判据最没辙的一种，现在红 */
+  assert.deepEqual(unresolvedIdents(["aggregateBadgeFacts"], corpus, words), []);
+  assert.ok(!hasWholeWord("const badgeFactsV2 = 1;", "badgeFacts"));
+  /* 分隔符那一头：点、连字符、冒号都不接标识符字符，所以以字面量存在的键名整串认得 */
+  for (const [key, text] of [
+    ["paused-all", 'const r = "paused-all";'],
+    ["rt:awake", 'await rtSet("rt:awake", true);'],
+    ["settings.lastIntervalSec", "settings.lastIntervalSec = n;"],
+  ]) {
+    assert.ok(hasWholeWord(text, key), `${key} 在源码里就是那一串字面量，整词判据必须认`);
+  }
+});
+
+test("红的时候点名最接近的真名字（让人不用回头 grep）", () => {
+  const corpus = "function pruneStaleProbes() {} function prunePlan() {} const PRUNE_DONE = 1;";
+  const [msg] = unresolvedIdents(["pruneStaleProbe"], corpus);
+  assert.match(msg, /^pruneStaleProbe（最接近的是 /);
+  assert.match(msg, /pruneStaleProbes/, `提示里没有那个只差一个字母的真名：${msg}`);
+  /* 没有相近候选时要如实说"没有"，不许硬凑一个不相干的（凑出来的提示比没有更费时间） */
+  assert.deepEqual(unresolvedIdents(["zzzzNope"], corpus), ["zzzzNope"]);
+});
+
+test("`node:` 不成堆：import 前缀后面永远接着模块名，按整词必然认不出", () => {
+  assert.equal(classifyToken("node:"), null, "`node:` 被当成符号名了，正则会红在真文档那两条上");
+  assert.ok(!AG.idents.includes("node:"));
+});
+
 /* ---------- 五、对照与已知边界（实跑记录） ----------
 
    对照在仓库外**整仓**副本上跑（`_tar_ctl_r6/run.mjs`，判据吃 `TAR_DOC_ROOT`）。
@@ -287,12 +395,53 @@ test("符号名判据抓得住：改了名的记忆会红", () => {
    `manifest.json` 截成 `manifest.js`，判据立刻指错文件
 
    已知边界（写在这里，免得被当成已覆盖）：
-   - 符号名判据是**子串匹配**：`getSettings` 出现在任何地方都算存在，包括注释与别的名字的前缀
-     （`rt` 这类两三个字母的 token 基本必然命中）。它挡的是"整个仓库一个字都不剩"的改名与删除，
-     挡不了"名字还在、语义已经变了"。AGENTS.md 里的默认值、阈值、权限清单本轮是人核的，
-     不在这条判据的射程里
-   - 语料含测试与脚本，所以"只改产品代码、测试里那个字符串还在"不会红。这一条是从判据机制
-     （只问仓库里还有没有这个字面量）推出来的，没单独跑对照——C7/C9 两处都是连同测试一起改的
+   - ~~符号名判据是子串匹配~~ —— 这一条在第二十一轮被换掉了，见下面那一节。现在的边界是
+     "整词"这一层：它挡的是"名字在语料里不再以整词出现"，挡不了"名字还在、语义已经变了"。
+     AGENTS.md 里的默认值、阈值、权限清单由 `doc-numbers.test.mjs` 与人核，不在这条判据的射程里
+   - 语料含测试与脚本，所以"只改产品代码、测试里那个字符串还在"不会红。**这一条本轮实测过**
+     （T6），不再是推出来的
    - 只扫反引号里的 token：正文里裸写的英文标识符不看，`_code-review/...` 与 tag 模板整条豁免
    - 判据 2 认裸文件名，所以"文件还在但挪了目录"只有写成完整路径的那几处会红
-   - 已发布的 CHANGELOG 段落不设行号判据：那是当时的事实，回头改它等于篡改账 */
+   - 已发布的 CHANGELOG 段落不设行号判据：那是当时的事实，回头改它等于篡改账
+
+   ---------- 第二十一轮（`BACKLOG.md` A39）：判据 1 从子串换成整词 ----------
+
+   立论是上一轮顺手量出来的：`AGENTS.md` 把 `aggregateBadgeFacts` 少写一个 `s`，全套 570 条全绿。
+   那一处红不出来不是覆盖面小，是**判据方向**的问题——`corpus.includes(t)` 只问"文档那个 token
+   在语料里是不是某处的一段"，于是两个方向一起漏：文档写短了（是某个真名的一段）算存在，
+   代码改名成文档名的超集（`X` → `XV2`、文档不动）也算存在。而后者正是这条门禁立起来要抓的那一类。
+
+   7 台在仓库外**整仓**副本上跑 pre/post（脚本 `D:/Github/_tar_ctl_r21/ctl21.mjs`，日志
+   `ctl21.log`）。**这一轮的 pre 不是删掉门禁文件**——本文件本轮之前就存在，删掉它会把路径与行号
+   两条判据一起摘掉，pre 就成了"三条判据全瞎"而不是"判据 1 是子串"。所以 pre 换回上一版
+   （`doc-anchors.old.mjs`，`git show HEAD:` 取来的那份），post 留着本版；两侧 `validate.mjs` 全 OK，
+   两侧都恰好 17 条用例，pre 那一列的零红是**旧判据在同样的仓库上真的什么都不红**：
+
+   | 变异 | pre | post |
+   | --- | --- | --- |
+   | K0 pristine | 全绿 | 全绿（本文件不误伤） |
+   | T1 文档少写尾字母（`aggregateBadgeFacts` → `aggregateBadgeFact`） | 0 | 1：AGENTS 符号名，消息点名真名 |
+   | T2 文档写长名字**中间**那一段（→ `BadgeFacts`） | 0 | 1：同上，无提示（没有共享前缀的候选） |
+   | T3 代码改名成文档名的超集，**产品码与测试注释一起改**、只有记忆不动 | 0 | 1：同上，消息原文 `pruneStaleProbes（最接近的是 pruneStaleProbesV2 / pruneCookieBackups）` |
+   | T4 同一次改名连文档一起改（完整改名） | 0 | 0（不误伤的反面） |
+   | T5 拿掉本轮自己加的 `node:` 豁免 | 0 | 2：AGENTS 符号名 + 那条豁免自己的用例 |
+   | T6 改名只落产品码、测试注释里旧名还在 | 0 | 0（已知边界，见上） |
+
+   怎么读这张表：
+   - **pre 那一列六个"0"是本轮的账目本身**。T1/T2/T3 三台在旧判据下一个都不红，而它们是同一条
+     判据要抓的三种写法：抄短了、截中间、代码改了名文档没改
+   - T3 与 T6 是同一台改名的两种落地程度，落点相反：改到"整个仓库不再以整词出现"就红，
+     只改产品码就不红。差的那一步是测试文件注释里还留着旧名字——语料含测试，这是上面那条边界，
+     不是本轮新暴露的。两台一起跑是为了把这条边界的**形状**记下来（它以前只是推出来的）
+   - T2 没有提示：候选要求与文档那个 token 共享至少四个字符的前缀，`BadgeFacts` 与
+     `aggregateBadgeFacts` 前缀对不上（大小写敏感）。这是刻意的——凑一个不相干的名字进消息
+     比留空更费时间，规则写在"红的时候点名最接近的真名字"那条用例里
+   - T5 是本轮**自己加的那处豁免**的对照：`node:` 是 import 说明符前缀，源码里后面永远接着
+     `fs`、`test` 这些字，整词判据必然认不出。旧判据下它侥幸不红（`corpus.includes("node:")`
+     因为 `"node:test"` 而成立），所以那一列的 0 不是"旧判据更好"，是同一处侥幸
+   - 本轮把正向见证那一条改成拿真语料验反面（`aggregateBadgeFact` 在真语料上必须认不出）。
+     第一版把它写成"整份 AGENTS.md 全命中"，于是 T1 与 T3 各红两条——两条红的是同一件事。
+     现在一般判据管文档，见证管机制，任何一台都只红一条
+
+   改完判据之后重跑本文件：14 → **17** 条；全套 570 → **573** 条全绿。
+   312 个符号名（AGENTS.md 与 README.md 去重）在整词判据下全部命中，只有 `node:` 一处需要豁免 */
