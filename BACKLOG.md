@@ -61,6 +61,8 @@ A 系列第一批十二条至此清账；当天在其后又跑了两轮审计，
 | A39 | — | `doc-anchors` 判符号名存在用的是子串（`corpus.includes(t)`），文档里把符号少写一个字母反而是"存在"的，代码改名成文档那个名字的超集（真名加后缀）也算存在。本轮换成按标识符边界的**整词**判据、标识符集合从语料现推，红的时候点名最接近的真名字。7 台仓库外 pre/post：三种写法在旧判据下各红 0、新判据下各红 1，完整改名不误伤 | 结案（第二十一轮） |
 | A40 | — | 验证墙那两条正则的**清单本身**没有反向账：`WALL_TITLE_RE` 九条标题特征、`CHALLENGE_URL_RE` 三条挑战域名，此前只有正向账（整页挑战要能暂停、挂件小框不许暂停），每一条特征各自有没有用例喂它无人核。本轮新立 `tests/tab-auto-refresh/wall-list.test.mjs` 14 条：备选从 `.source` 现推、夹具登记在测试里、归属现算，每条夹具再经真 `decideWallFromFrames` 的三条通道判一遍。10 台仓库外 pre/post 实跑，7 台改前全套零红 | 结案（第二十二轮） |
 | A41 | — | 弹窗与微信教程页的 class 名字三本账从没对过：**CSS 定义了哪些** ↔ **HTML 用到位的是哪些** ↔ **JS 运行时写进去的是哪些**（四种写法）。此前这一格的全部判据只有两个颜色类在不在 CSS 里，`popup.css` 那 43 个类名里其余四十一条没人管。本轮新立 `tests/tab-auto-refresh/class-ledger.test.mjs` 13 条（页面清单与三本账全从真实源码现推，加 `FLOORS` 条数下限与三条通道各自有货的见证）。7 台仓库外 pre/post 实跑，6 台改前全套零红；正向一条当场点名一处真死类（`popup.html` 的 `wx-test`，本轮删掉） | 结案（第二十三轮） |
+| A42 | — | 人从弹窗之外起停任务的那几条通道，名字与数字写在五处而从没对过账：`manifest.json` 的 `commands` 键名与 `suggested_key` ↔ `background.js` 的 `onCommand` 字面量 ↔ `buildMenus()` 与 `onClicked` 两边的菜单 id（同一个前缀字面量在源码里写三遍）↔ README 与 `AGENTS.md` 那句"快捷键 `Alt+Shift+R`" ↔ `popup.html` 自定义间隔框的 `min`（`MIN_INTERVAL_SEC` 的第三份抄本）。`manifest.json` 的 `commands` 整块此前零判据。本轮新立 `tests/tab-auto-refresh/entry-names.test.mjs` 13 条（五处全从真实源码现切，认不出的形状一律抛；预设 → 菜单 id → 反解 → 真 `clampInterval` 跑整趟往返）。12 台仓库外 pre/post 实跑，六台改前全套零红 | 结案（第二十四轮） |
+| A43 | — | `.github/workflows/ci.yml` 与 `release.yml` 是仓库里唯一"改了不报错、只是不干活"的一批文件，实测 `tests/` 与 `scripts/` 里没有任何文件提到过它们（零判据）。要量的面：tag 前缀 `tab-auto-refresh/v*` ↔ `AGENTS.md` 与 `CHANGELOG.md` 写的发布前缀；两个 workflow 的测试 glob ↔ 测试文件真在哪一处（glob 漂了就是 CI 对着空集合绿过去、本轮新加的门禁从来没在 CI 上跑过）；`node-version` ↔ 文档那句"用 Node 24 跑"；`${GITHUB_REF_NAME#tab-auto-refresh/}` 与 `${VERSION#v}` 那两步剥前缀的算术 ↔ 实际 tag 形状；`git archive` 的 `--prefix` 与 `:tab-auto-refresh` ↔ 插件目录真名；`require('./tab-auto-refresh/manifest.json')` 的路径真实 | 待办（第二十五轮） |
 
 A1~A12 十二条全部移进 `CHANGELOG.md`。2026-09-19 当天在 A12 落地之后的代码上又跑了一轮审计（同样不采信文档、
 逐条对着源码确认，怀疑点用真 `background.js` + 共享桩件跑出来，或按红→绿对照做变异），新增 A13~A17 与 E3
@@ -247,7 +249,10 @@ continue 模式下停掉再以新关键词重开同一张页，旧链不许把�
 每一条特征各自有没有用例喂它、改坏了有没有人点名，全都没有账（本轮补 `wall-list.test.mjs` 14 条）。
 第二十三轮审弹窗与微信教程页的 class 名字：CSS 定义 / HTML 用处 / JS 写法三本账从没对过，
 正向那一条当场点名一处真死类（`popup.html` 的 `wx-test`，本轮删掉；删前后六个形状的高度一个数字都没变）。
-账记在下面二十段 A22 到 A41。二十段之后只剩待定项 E2，以及只能真机验的 V1
+第二十四轮审"人从弹窗之外起停任务"的那几条通道：命令名、快捷键组合、菜单 id 前缀、说明书那一句、
+弹窗那个 `min`，五处名字写在一起而从没对过账（`manifest.json` 的 `commands` 整块零判据）。
+账记在下面二十一段 A22 到 A42。二十一段之后待办只剩 A43（发布流水线那两份 workflow 零判据，
+已在上面登记要量的面），以及待定项 E2 与只能真机验的 V1
 （工程账 E3 已在同日结案，见下面"工程账"那一节）。
 
 A22 同日结案，**插件产品代码一个字没改**——这一轮审的不是插件，是当时全仓库仅剩的几面零门禁之一：
@@ -1134,6 +1139,45 @@ A41 结案（第二十三轮）：给弹窗与微信教程页的 class 名字立
   只认那四种写类通道且串必须是字面量，`classList.add(...arr)` 抽不到东西，响的是反向而不是这里静默；
   `className = "card " + kind` 只收到 `card`，`kind` 的取值不在账上（今天没有这一路，有了要回来登记）；
   也不核 CSS 属性值与选择器写得对不对，`FLOORS` 是下限，加类不红，删到地板以下才红
+
+A42 结案（第二十四轮）：给"人从弹窗之外起停任务"的那几条通道立**名字账**，**插件产品代码一个字没改**。
+
+- 账有五处，此前一处都没对过：**①** `manifest.json` 的 `commands` 键名与 `suggested_key`、**②** `background.js`
+  的 `onCommand` 比对的那个字符串、**③** `buildMenus()` 里 `create({ id, parentId })` 的菜单 id 与
+  `onClicked` 里比对的那几处（预设那一族的 id 是拼出来的，同一个前缀字面量在源码里写三遍：拼的那处、
+  `startsWith` 那处、`.slice("…".length)` 那处）、**④** README 与 `AGENTS.md` 里那句"快捷键 `Alt+Shift+R`"、
+  **⑤** `popup.html` 自定义间隔框的 `min`（`MIN_INTERVAL_SEC` 的第三份抄本，另两份是那个常量与它自己的注释）。
+  `manifest.json` 里 `commands` 这一整块是零判据：validate 与那几面读 manifest 的门禁吃的是 `__MSG_` 键、
+  图标路径与 `permissions`。新门禁 `tests/tab-auto-refresh/entry-names.test.mjs` 13 条
+- 五处的静默形状是同一个：**改一头另一头一个字都不报错，只是那条入口从此不工作**。B1 那台实测就是这件事
+  （只把 manifest 的命令名改成 camelCase，改前整套全绿）：Chrome 照旧把这条列在扩展的快捷键设置页里，
+  用户照说明书按，分发链在 `if (command !== …) return;` 早退。B3 同形（只改 `suggested_key`）。
+  前缀那三遍抄本里只改第三遍（B6）留下的痕迹最阴：菜单照常建、点下去照常"开始"，而秒数是 NaN，
+  一路传给 `startTask`
+- 五处一律从真实源码现切（manifest 走 `JSON.parse`，其余按花括号配对切监听器与 `buildMenus` 的函数体），
+  测试里不抄第二份名字清单；**认不出的形状一律抛**而不是静默跳过——这里"少切一条"的表现是判据安静地
+  少覆盖一条通道，所以另有一条用例喂七个坏样本要求它们各抛各的。比较全走五个纯函数
+  （`commandLedger` / `docLedger` / `prefixLedger` / `coverageLedger` / `floorLedger`），
+  文件里那三台**常驻对照**因此能拿改过的输入叫同一段代码再判一遍。有一条整趟往返不比字符串：
+  每条预设拼成菜单 id、按读侧那个偏移反解回来、再喂给真 `clampInterval`，要求"菜单上写的秒数"与
+  "真挂上的秒数"是同一个数（B12 那台把 30 秒档改成 10 秒，红在这一条与 `min` 那一条的第 4 句断言）
+- 12 台变异在仓库外整仓副本跑 pre/post（脚本与日志 `D:/Github/_tar_ctl_r24/ctl24.mjs` / `ctl24.log`），
+  pristine 两侧零红：**六台改前全套零红**（只改 manifest 的命令名 B1、只改 `suggested_key` B3、
+  把 HTML 的 `min` 改宽 B8 与改窄 B9、把那个框的 `type` 改成 `text` 让 `min` 根本不生效 B10、
+  只改 README 那一行 B11），改后本门禁各红 1~2 条；另六台改前就有行为用例先撞上（B2 红 3 条、
+  B4 红 2 条、B5/B6/B7 各红 1 条、B12 红 5 条，撞的是 `entry-points.test.mjs`、
+  `start-task-lock.test.mjs` 与 `doc-numbers.test.mjs`）。**这一层差别要分清**：行为用例红的是
+  "这条链路跑不通"，本门禁红的是"这几处写的不是同一个名字"并且点名到哪一处字面量。逐条表与
+  "怎么读这张表"记在门禁文件末尾，两处读数说明：B2/B4/B7/B11 各多带一条常驻对照的红，因为那三条
+  对照的参照物正是被改的那处真值本身，它们跟着红恰好证明不是空跑；B12 上本门禁的增量只有
+  "低于地板的那一档要红"半句
+- 现在的边界（六条，记在门禁文件末尾）：命令名只认 `onCommand` 里**比对形参**的字面量，
+  `chrome.commands.getAll()` 读到的运行时值与真机上用户自己改掉组合键都不在这根账上；
+  组合键只扫**提到"快捷键"的那一行**（README"忽略缓存"那行的 `Ctrl+F5` 是浏览器自带按键，
+  整篇扫会把那句正常话判成漂移，这条实测过）；`suggested_key` 那张平台后缀与"修饰键 + 单主键"的形状表
+  抄自官方文档，是本文件唯一的外部事实；菜单写侧按**三处 create 站点**记账而不是按"今天造出 9 个项"，
+  出现第四处站点时条数下限那条会红；HTML 那一头只认 `#customInput` 一个标签的三个属性；
+  预设**该不该是这七档**不在账上
 
 ## 工程账（E）
 

@@ -1432,6 +1432,40 @@
   - 门禁 +**13** 条（新文件），全套 587 → **600** 条全绿，`scripts/validate.mjs` 通过（JS 文件
     51 → **52**）；默认值、权限、存储键、语言包、消息面、`decideBadge` 一个都没动
 
+- 第二十四轮（`BACKLOG.md` A42 结案）：**插件产品代码一个字没改**，给"人从弹窗之外起停任务"那几条通道
+  立名字账——`manifest.json` 里 `commands` 这一块此前没有任何判据：validate 与那几面读 manifest 的门禁
+  吃的是 `__MSG_` 键、图标路径与 `permissions`，`commands` 整块（命令名加 `suggested_key`）没人看过一眼
+  - 账有五处，此前一处都没对过：**①** `manifest.json` 的 `commands` 键名与 `suggested_key`、
+    **②** `background.js` 的 `onCommand` 比对的那个字符串、**③** `buildMenus()` 里 `create({ id, parentId })`
+    的菜单 id（预设那一族的 id 是拼出来的，同一个前缀字面量在源码里写三遍：拼的那处、`startsWith` 那处、
+    `.slice("…".length)` 那处）、**④** README 与 `AGENTS.md` 里那句"快捷键 `Alt+Shift+R`"、
+    **⑤** `popup.html` 自定义间隔框的 `min`（`MIN_INTERVAL_SEC` 的第三份抄本）。五处两两不对齐时的症状
+    全一样：**不报错，只是那条入口不工作**——快捷键照常列在扩展的快捷键设置页里而按下去分发链早退；
+    前缀改一漏两之后 `Number()` 解出 NaN 并一路传给 `startTask`；`min` 与兜底地板分家就重新出现
+    "能填进去却被静默改写"（第十三轮为设置立的那本账同一形状）
+  - 新门禁 `tests/tab-auto-refresh/entry-names.test.mjs` 13 条。五处一律从真实源码现切（manifest 走
+    `JSON.parse`，其余按花括号配对切监听器与 `buildMenus` 的函数体），测试里不抄第二份名字清单；
+    **认不出的形状一律抛**而不是静默跳过（另有一条用例专门喂七个坏样本要求它们各抛各的）。
+    比较全走五个纯函数（`commandLedger` / `docLedger` / `prefixLedger` / `coverageLedger` / `floorLedger`），
+    所以文件里那三台**常驻对照**是拿改过的输入叫同一段代码再判一遍，而不是把判据抄第二遍。
+    另一条整趟往返不比字符串：每条预设拼成菜单 id、按读侧那个偏移反解回来、再喂给真 `clampInterval`，
+    要求"菜单上写的秒数"与"真挂上的秒数"是同一个数
+  - 12 台变异在仓库外整仓副本跑 pre/post（脚本 `D:/Github/_tar_ctl_r24/ctl24.mjs`，日志 `ctl24.log`），
+    pristine 两侧零红：**六台改前全套零红**——只改 manifest 的命令名（B1）、只改 `suggested_key`（B3）、
+    只把 HTML 的 `min` 改宽（B8）或改窄（B9）、只把那个框的 `type` 从 `number` 改成 `text`（B10，
+    `min` 从此根本不生效）、只改 README 那一行而 manifest 不动（B11）；另六台改前就有行为用例先撞上
+    （B2 与 B4~B7 撞 `entry-points.test.mjs` 与 `start-task-lock.test.mjs`，B12 撞五条）。
+    这一层差别要分清：行为用例红的是"这条链路跑不通"，本门禁红的是"这几处写的不是同一个名字"并点名到哪一处，
+    其中 B6（只改第三份前缀抄本）最干净——链路上只留下一个 NaN。逐条表与"怎么读这张表"记在门禁文件末尾，
+    两处读数说明：B2/B4/B7/B11 各多带一条**常驻对照**的红，因为那三条对照的参照物就是被改的那处真值本身，
+    它们跟着红恰好证明不是空跑；B12 那一台上本门禁的增量只有"低于地板的那一档要红"半句
+  - 六条边界记在门禁文件末尾，两条是要人知道的：命令名只认 `onCommand` 里**比对形参**的字面量，
+    真机上用户自己改掉组合键不在账上；`suggested_key` 那张平台后缀与"修饰键 + 单主键"的形状表抄自官方
+    文档，是本文件唯一的外部事实。另外组合键只扫**提到"快捷键"的那一行**——README"忽略缓存"那一行的
+    `Ctrl+F5` 是浏览器自带按键，整篇扫会把那句正常话判成漂移（实测过一遍，写法因此收窄）
+  - 门禁 +**13** 条（新文件），全套 600 → **613** 条全绿，`scripts/validate.mjs` 通过（JS 文件
+    52 → **53**）；默认值、权限、存储键、语言包、消息面、class 名一个都没动
+
 ## [tab-auto-refresh 2.1.0] - 2026-09-18
 
 ### Added

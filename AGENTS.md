@@ -190,6 +190,18 @@
 - 后台对 `tasks` 的读改写必须走 `withTaskLock` 串行队列。锁的**作用域**与串行同样要紧：锁内只碰存储与内存快照，绝不排队等网络——`withTaskLock` 是全站共享的一把锁，压在锁上等外发时别的标签页连「开始/停止」都要排队。`startTask` 的首次 `backupCookies` 因此排在整条锁内流程之后（它会一路 `await` 到 `notifyOut` 的两笔 fetch，15 秒超时、微信还要先取令牌），但**仍然 `await`**，不改成裸甩。门禁 `tests/tab-auto-refresh/start-task-lock.test.mjs`
 - 快捷键 `toggle-refresh`（Alt+Shift+R）复用 `settings.lastIntervalSec`，没有记录时回退 5 分钟；右键菜单 contexts 是 `["tab", "page"]`
 - 手动开始任务（弹窗、右键、快捷键）会解除 `pausedAll`；暂停期间 alarm 跳过触发，恢复后按原周期继续
+- 人从弹窗之外起停任务的通道，名字与数字一共写在**五处**，此前一处都没对过账（第二十四轮 A42）：
+  `manifest.json` 的 `commands` 键名与 `suggested_key` ↔ `background.js` 里 `onCommand` 比对的那个字符串 ↔
+  `buildMenus()` 的 `create({ id, parentId })`（预设那一族的 id 是拼出来的，同一个前缀字面量在源码里出现**三次**：
+  拼的那处、`startsWith` 那处、`.slice("…".length)` 那处）↔ README 与上面那条快捷键说明里写的组合键 ↔
+  `popup.html` 自定义间隔框的 `min`（`MIN_INTERVAL_SEC` 的第三份抄本，另两份是那个常量和它自己的注释）。
+  任一处对不上都不报错：菜单照常建出来、快捷键照常列在扩展的快捷键设置页里、弹窗照常能填数，
+  只是那一条入口从此不工作，或者静默改写用户填的秒数。判据在
+  `tests/tab-auto-refresh/entry-names.test.mjs`（13 条，五处全从真实源码现切，认不出的形状一律抛而不是跳过；
+  预设 → 菜单 id → 反解 → 兜底那一趟跑真 `clampInterval`）。**改命令名要一次改齐 manifest 与 `onCommand`
+  再回来看说明书那句；改菜单前缀要一次改齐三处；改 `MIN_INTERVAL_SEC` 要连着改 `popup.html` 的 `min`**——
+  实测过：只改 manifest 的命令名、只改 `suggested_key`、只把那个 `min` 改宽或改窄、只改 README 那一行，
+  四种改法在补上门禁之前都是全套零红
 - 角标五态的**优先级与取值全在 `shared/logic.js` 的 `decideBadge`**（纯函数，纪律 1 的又一处兑现），
   四件事实怎么从 `tasks` 与 `sessionProbe` 推出来也在同一侧的 `aggregateBadgeFacts`，
   `background.js` 的 `updateBadge` 只读盘、递事实、再写盘。
