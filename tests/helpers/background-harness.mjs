@@ -104,11 +104,11 @@ export function makeEnv() {
      吞掉，主体分支从来没被执行过，用例照样全绿（A6 第 9 条）。
      建模的规矩，每条都决定某段代码是"看着对"还是"真对"：
        - ok 由 status 推出来，绝不恒真：心跳侧的错误页暂停、掉线信号、静默自愈全看状态码
-       - url 是**跟随重定向之后**的最终地址（looksLikeLoginPage 判的就是它），
+       - url 是跟随重定向之后的最终地址（looksLikeLoginPage 判的就是它），
          用例用 { url: "..." } 表达"心跳被踢到登录页"
        - 网络失败与超时是 reject：把 Error 当作应答值即可
        - 应答可以是数组：按调用次序逐条给，用完之后重复最后一条（416 重试、令牌重取都靠它）
-       - 应答可以是**一个由用例握着的 promise**（E3 补的）：await 它，这段挂起就是
+       - 应答可以是一个由用例握着的 promise（E3 补的）：await 它，这段挂起就是
          "外发还没回来时后台在做什么"的现场本身。A15 结案时是靠每条用例自己覆写
          globalThis.fetch 绕过去的，那是一次性的局部绕法，现在收回桩件
        - init.signal 要真兑现：后台三处外发各自上着 15 秒 AbortController，桩件不认 signal
@@ -464,7 +464,7 @@ export function makeEnv() {
     /* 交给 bootBackground 装到 globalThis 上（后台是裸调 fetch 的） */
     fetch: fetchStub,
     /* 改 fetch 的应答：{status,url,json} 一个对象、一组按次序的对象（最后一条重复用）、
-       一个 Error（reject）、一个**由用例握着的 promise**（挂住不回，直到用例自己放开或
+       一个 Error（reject）、一个由用例握着的 promise（挂住不回，直到用例自己放开或
        从 env.pendingFetch() 打断），或 (url, init, 第几笔) => 上述任意一种 */
     reply(spec) {
       responder = spec;

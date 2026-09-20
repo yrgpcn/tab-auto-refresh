@@ -709,7 +709,7 @@ async function reloadTab(tabId) {
 const detectChains = new Map();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/* 多框架注入的检测脚本。allFrames 的失败方式是**整次调用 reject**：一个够不着的子框架
+/* 多框架注入的检测脚本。allFrames 的失败方式是整次调用 reject：一个够不着的子框架
    （沙箱框架、view-source）就能把整页的检测结果一起带走，所以拒了之后退回顶层再试一次
    （frameIds:[0] 就是顶层框架）。加多框架只该增加覆盖面，不该因为某个子框架进不去
    反而丢掉原来单框架能成的场景。两次都失败才抛给调用方 */
@@ -1758,7 +1758,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 /* 页内验证墙探测（executeScript 按 toString 注入，函数必须自包含，约束同 matchInPage）。
-   与关键词那条的分工不一样：这里只回**原始事实**，两条正则一个都不下页面，
+   与关键词那条的分工不一样：这里只回原始事实，两条正则一个都不下页面，
    判定全在 logic.js 的 decideWallFromFrames 里做——页内没有判断，就没有"两份实现分叉"，
    整条决策链也就直接被单测断言到了（纪律 1）。具名是为了让门禁能按花括号配对
    从源码里切出这个函数体并真的执行它，不手抄复刻。

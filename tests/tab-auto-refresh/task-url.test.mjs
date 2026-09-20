@@ -1,5 +1,5 @@
 /* A14 的门禁：task.url 到底是"用户指定的监控对象"还是"这一页此刻的地址"。
-   改之前两个都要，于是出现自指——站点把"会话过期"表现成**同主机**跳到 /login
+   改之前两个都要，于是出现自指——站点把"会话过期"表现成同主机跳到 /login
    （很常见，也正因同主机，站点锁定不介入）时，第一拍 reportSessionSignal 记 sus:1，
    紧接着 refreshTaskUrl 因 sameHost 成立把 task.url 改写成 …/login；第二拍起
    `!looksLikeLoginPage(task.url)` 恒假 → 信号永远报"正常" → sus 被清零 → lost 到不了。

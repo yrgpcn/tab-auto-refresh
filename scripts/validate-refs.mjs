@@ -4,7 +4,7 @@
    而不是靠读 validate.mjs 的执行器推断（AGENTS.md 改法纪律第 1 条对工具脚本同样适用）。
    validate.mjs 自己从前没有任何门禁，正则写坏一处就静默变成"什么都没引用、什么都没缺"。
    五条通道各自独立：manifest 的 __MSG_、HTML 的本地 src/href、HTML 的 data-i18n*、
-   JS 里 getMessage 的第一个实参、以及 JS 里**别名包装**的第一个实参（弹窗与微信教程页
+   JS 里 getMessage 的第一个实参、以及 JS 里别名包装的第一个实参（弹窗与微信教程页
    各有一个 msg(key)，键是从这里递给 getMessage 的——第四条看不见它，A26 补的就是这一条）。
    后两条只认字面量与三元里的字面量；写成变量的键由
    validate.mjs 那头"每个语言包键都得有人引用"的反向判据兜住——两头一夹，拼错键名
@@ -87,7 +87,7 @@ export function htmlI18nKeys(src) {
   return out;
 }
 
-/* 一次调用被传进去的**实参文本清单**（按顶层逗号切开，括号与方括号与花括号都算一层）。
+/* 一次调用被传进去的实参文本清单（按顶层逗号切开，括号与方括号与花括号都算一层）。
    前一个字符是标识符字符（含 $）的不算命中——那叫 anotherMsg( 与 setMsg(，
    是别的名字，把它们当成 msg( 会把无关字面量报成键名（假报警）。
    `chrome.i18n.getMessage(` 的前一个字符是点，那是真调用，要收。
@@ -141,7 +141,7 @@ export function jsMessageKeys(src, fnName = "getMessage") {
 
 /* 一个实参文本里有几个替换值：数组字面量数顶层逗号（空数组 0 个），
    非空的其它写法在 Chrome 里就是"一个替换值"（getMessage(key, "x") 合法），
-   但**变量与展开**给不了保证——数组还是字符串静态不知道，这种一律回 null 表示判不了。
+   但变量与展开给不了保证——数组还是字符串静态不知道，这种一律回 null 表示判不了。
    判不了不报错是可以的，判不了却被当成"对得上"不行，所以调用方要把 null 单独算一类 */
 function substitutionCount(argText) {
   const arg = String(argText || "").trim();
@@ -211,7 +211,7 @@ export function localePlaceholderFacts(messages) {
 /* 本文件里的"别名包装"：谁把自己的入参原样递给 getMessage，谁就是 getMessage 的别名。
    名字从源码现推，不写死一张别名表——写死就是第二份真相来源：弹窗那个 `function msg`
    改天叫 `lbl`，或者第三个页面又抄一个包装，表不会跟着动，那条通道静默回到零覆盖，
-   而"扫不到键"在这套判据里的表现是**不报错**。
+   而"扫不到键"在这套判据里的表现是不报错。
    两种写法都要认，因为它们在本仓库各存在一处：
      popup.js        `function msg(key, subs) { return chrome.i18n.getMessage(key, subs) || key; }`
      wechat-setup.js `const msg = (key) => chrome.i18n.getMessage(key) || key;`
@@ -250,7 +250,7 @@ function blockBody(src, open) {
   return src.slice(open);
 }
 
-/* 箭头函数那种**没有花括号**的函数体：走到本层深度的第一个分号或闭合括号 */
+/* 箭头函数那种没有花括号的函数体：走到本层深度的第一个分号或闭合括号 */
 function exprBody(src, from) {
   let depth = 0;
   for (let i = from; i < src.length; i++) {

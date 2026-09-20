@@ -461,7 +461,7 @@ test("后台发给页面侧的消息类型与页面侧监听的同集合", () =>
    页面侧六处（TAR_KEEPALIVE）：
      P1 off 的类型名改掉 → 红 3（含集合守卫）
      P2 重复注入的守卫只判不叫 → 红 1「重复注入可重启」
-     P3 heartbeat 为 false 时顺手 stopActivityWatch() → **零红**，但不是门禁缺口而是**等价变异**：
+     P3 heartbeat 为 false 时顺手 stopActivityWatch() → 零红，但不是门禁缺口而是等价变异：
         紧接着一行 `if (cfg.activityWatch) startActivityWatch();` 又把它原样起回来，净结果与原文
         一致，没有可观察的行为差别。换成非等价的 P3b（删掉 `else stopActivityWatch();`）即红 1
         「逐项起停」。记下来是因为这类"看着像连坐、其实被下一行抵消"的改法在这段两行代码上很多，
@@ -470,6 +470,6 @@ test("后台发给页面侧的消息类型与页面侧监听的同集合", () =>
      P5 真人活动监听面少一种事件 → 红 2
      P6 config 的类型名改掉 → 红 4
    一处反向绿：R1 删掉 stopTask 的 `detectChains.delete(tabId);` → 本文件零红，符合预期
-   （关键词链不归这条通道管）。但顺手拿同一份变体跑了 detect-chain.test.mjs，**那头也零红**：
+   （关键词链不归这条通道管）。但顺手拿同一份变体跑了 detect-chain.test.mjs，那头也零红：
    停任务时在飞的检测链没有被任何用例钉住。已另记 BACKLOG A21，含可用的测法
    （executeScript 挂起期间停任务，放开后断言不发 keyword-hit）。 */

@@ -115,7 +115,7 @@ test("地址非法一笔都不发", async () => {
 /* ---------- A8：webhook 投递结果要留痕 ----------
    改之前 fetch 回来连状态码都不看：接收端删了 hook、把频道踢了，这一侧记的都是"没发生任何事"，
    比记成失败更难查。下面这些用例钉的就是"每一次真发出去的投递都留下一笔"，
-   以及刻意**不**留痕的那两种"本该不发"（没配地址、事件没勾上）。 */
+   以及刻意不留痕的那两种"本该不发"（没配地址、事件没勾上）。 */
 
 const last = (env) => env.store.local.webhookLastResult;
 const whEnv = async () =>
@@ -433,7 +433,7 @@ const replyFor = (hb) => (url) => {
 /* 两个出口一起开：它们读的是同一份 payload.url，只测一个等于放过另一个 */
 const bothOutlets = (event) => Object.assign({}, WX, { webhookUrl: HOOK, notifyEvents: [event] });
 
-/* 只取通知类请求的**原始 body 文本**：解析过的对象会漏掉嵌套字段，
+/* 只取通知类请求的原始 body 文本：解析过的对象会漏掉嵌套字段，
    而"不得出现 query"要钉的正是序列化之后真正离开本机的那串字节。
    心跳自己那笔 GET 不算：那是站点页面的地址，本来就该带 query，也不发给第三方 */
 const notifyBodies = (env) =>
@@ -522,7 +522,7 @@ for (const [event, spec] of Object.entries(TRIGGERS)) {
 /* 红→绿对照（首轮 2026-09-19 实跑：整份插件目录复制到仓库外，每处只改坏 postWebhook /
    postWechat / getWechatToken 函数体内的一处——needle 在区段内断言正好命中一次——
    TAR_BG 指过去跑本文件。当时本文件 11 条，E3 之后 27 条）：
-   规模变了，逐条重跑的成本不低，所以本轮只把**唯一有风险的那一处**（11，它改的是 catch
+   规模变了，逐条重跑的成本不低，所以本轮只把唯一有风险的那一处（11，它改的是 catch
    里 network/api 的归桶，而 E3 新增的两条超时用例正好也断言 kind:"network"）在 27 条之下
    重跑了一次：由 红 1 变 红 2，已按实际写下。其余 12 处逐条比对过新用例的断言面——
    两条新用例只断言 kind / status:null / event / code / 留痕键，不碰载荷字段、方法、
@@ -563,7 +563,7 @@ for (const [event, spec] of Object.entries(TRIGGERS)) {
    没配地址与事件没勾不留痕、凭据没填全、事件清单共用）——fetch 根本不存在时它们照样绿，
    单看这五条，它们证明不了任何一条链路跑过。但这五条本身是被钉住的：改坏对应的闸
    （1/3/6/7 那几处）各红一条，红的是"闸没了就多发出一笔"，而不是"这条用例压根没跑"。
-   **第六条绿得是假的，单独记一笔**："网络被拒：记 network 且状态码为 null"。fetch 不存在时
+   第六条绿得是假的，单独记一笔："网络被拒：记 network 且状态码为 null"。fetch 不存在时
    那一句 ReferenceError 恰好也被 postWebhook 的 catch 归成 kind:"network"，于是它断言的形状全对、
    链路却一步没跑。它测的就是 catch 那一支的归类，写法上无可补救，但别把它当成"外发确实发出去了"
    的见证——见证由那 21 条里的正向用例提供。这是"只断言失败形状的用例证明不了链路被执行"的
@@ -577,7 +577,7 @@ for (const [event, spec] of Object.entries(TRIGGERS)) {
      1) notifyOut 整段不剪（`const out = payload;`）
         → 红 4：既有那条"配了地址又勾了这个事件" + 三条带 url 的新用例
      2) 只剪 webhook、微信那一侧漏掉（`postWechat(event, out)` 改回 payload）
-        → 红 3：三条新用例。**既有那 11 条一条都不红**——它们没开微信凭据。
+        → 红 3：三条新用例。既有那 11 条一条都不红——它们没开微信凭据。
            这就是"逐处改"当初会漏掉的形状，也是这一节存在的理由
      3) outboundUrl 剪过头，pathname 也没了（只回 origin）
         → 红 4：与第 1 处同一批，红的是"载荷没带上剪过的网址"那半边的断言
@@ -615,7 +615,7 @@ for (const [event, spec] of Object.entries(TRIGGERS)) {
         （"没走到那笔外发，本用例是空跑" / "没把令牌请求挂住，本用例是空跑"）。
         promise 被当成空应答，当场就 200 落定，pendingFetch 永远是空的——
         红在"挂起这件事不可表示"这一句上，而不是红在最后的判据上，正是想要的形状
-     H4 桩件不监听 init.signal      → 红 0：**本文件没有用例走 signal 那扇门**，
+     H4 桩件不监听 init.signal      → 红 0：本文件没有用例走 signal 那扇门，
         两条都走 env.pendingFetch() 的句柄。这不是覆盖缺口，是分工：signal 那一半由
         heartbeat.test.mjs 的"超时是从 init.signal 兑现的"钉住（那边同一处变体红 1）。
         两处出口各有一笔自己的 15 秒计时器（postWebhook / wxFetch），但"计时器真的接在

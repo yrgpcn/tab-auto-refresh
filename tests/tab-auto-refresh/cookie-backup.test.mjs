@@ -377,7 +377,7 @@ test("备份只有一个读法：全量扫，从不按清单定向读", async ()
 
 /* 红→绿对照（2026-09-19 本机实跑，A2 那五处）
    跑法与以往不同：siteRoot / domainChain / planBackupConvergence 住在 shared/logic.js，
-   而 logic.test.mjs 是**直接 import 真源码**的，TAR_BG 只换 background.js、够不着那条路。
+   而 logic.test.mjs 是直接 import 真源码的，TAR_BG 只换 background.js、够不着那条路。
    所以这次复制的是整仓（不含 .git 与 _code-review）到仓库外，在副本里分别改坏
    tab-auto-refresh/shared/logic.js 与 background.js，再在副本里跑
    logic.test.mjs + cookie-backup.test.mjs + alarm-gate.test.mjs（60 + 13 + 24 条）。

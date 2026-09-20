@@ -140,7 +140,7 @@ const SCENARIOS = [
 const POPUP_MAX_H = 600;
 
 /* --measure 用的形状：在某个截图场景之上叠一小撮设置补丁，再按 id 点开二级视图。
-   补丁走的是**增量**，合并进完整场景之后才要求齐备，所以它不进那条"每个场景给全
+   补丁走的是增量，合并进完整场景之后才要求齐备，所以它不进那条"每个场景给全
    DEFAULT_SETTINGS 的键"的门禁——那条只扫 SCENARIOS 那一段（测试文件里注明了为什么） */
 const PROBES = [
   { name: "主视图：两张任务，其中一行带跳过解释", shot: "popup.png" },

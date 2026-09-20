@@ -240,7 +240,7 @@ test("间隔没变就不写 sync：这条判断仍在设置锁内", async () => 
                            源码上照旧绿，且不是空跑：改前的 rememberLastInterval 已有"没变不写"
                            与读前失效，只是这两步锁在函数外、互相之间没有串行关系
      withSettingsLock 退化成直接执行 → 只红「两个并发的 save-settings」
-     去读之前那次失效 → 只红「onChanged 还没回流时」。这处第一次跑是**绿的**：那时唯一的失效类
+     去读之前那次失效 → 只红「onChanged 还没回流时」。这处第一次跑是绿的：那时唯一的失效类
                        用例喂的是 onChanged 已到达的情况，管不到回流还在路上的窗口。补了那条
                        用例（直接改 store 不派发事件，再 save-settings）才判得动
      去写盘后那次失效 → 只红「save-settings invalidates before merging and again after writing」

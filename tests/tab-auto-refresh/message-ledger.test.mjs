@@ -14,8 +14,8 @@
 
    实测这套机器是瞎的（对照 V1 到 V6 见文件末尾）：从弹窗那一头删掉 keepWatching、
    把 resume-task 打成 resume、把整条 prune-now 删掉、把 res.intervalSec 改成一个不存在
-   的字段、把 tabId 打成 tab —— 五样叠起来 510 条一条不红。第六个更难看：从**背景**那一头
-   把 msg.keepWatching 改名，全套照样全绿。原因是测试侧那一份是**第三份抄本**：
+   的字段、把 tabId 打成 tab —— 五样叠起来 510 条一条不红。第六个更难看：从背景那一头
+   把 msg.keepWatching 改名，全套照样全绿。原因是测试侧那一份是第三份抄本：
    唯一发过 keepWatching: true 的那条用例（detect-chain）发完从没回头看 tasks[7].onHit，
    所以它既没钉住发送侧也没钉住接收侧。"start 这条消息有测试覆盖"是错觉。
 
@@ -79,7 +79,7 @@ function matchBraces(src, openIdx, what) {
   throw new Error(`${what} 的花括号没闭合`);
 }
 
-/* 对象字面量的**根级**键：嵌套对象、数组、函数体里的逗号一概不算分句。
+/* 对象字面量的根级键：嵌套对象、数组、函数体里的逗号一概不算分句。
    必须真配对——save-settings 那一笔里嵌着 15 个设置键，不配对就是把账本读歪 */
 function objKeys(src, openIdx, what) {
   const body = matchBraces(src, openIdx, what);
@@ -390,7 +390,7 @@ test("FROM_PAGE_TYPES 的反方向：表里的每一条都真有人发", () => {
    V3 的"红 2"里有一条是空跑守卫——它对 send 调用数写的是精确值 10，删掉一处就响。
    这不是巧合而是同一条决断：调用点数变了必须有人回来看一眼，否则这张表改了也没痕迹。
    V6 值得单独记：测试侧唯一发过 keepWatching: true 的是 detect-chain，它发完只看
-   keywords 与 notifiedKeys，从没回头看 onHit。那一份是**第三份抄本**——两份真源码
+   keywords 与 notifiedKeys，从没回头看 onHit。那一份是第三份抄本——两份真源码
    之间的账没人对，抄本自己多齐都对不上任何东西。这也是 ②正向 只认 popup.js 与
    keepalive.js 这两份真源码、不认测试侧的原因。
 
@@ -404,7 +404,7 @@ test("FROM_PAGE_TYPES 的反方向：表里的每一条都真有人发", () => {
         门同时按字面用着——这更说明它该进名字账，而不该靠"别人顺带撞红"。
    V10  页面监听器把 "keepalive-off" 改名   pre 3 → post 4（多红空跑守卫）
    V11  applyConfig 读成 cfg.hbOn           pre 4 → post 6（多红空跑守卫、T7）
-   V12  页面把 "keepalive-query" 改名       pre 2 → post 红在**整个文件**：那三处模块级
+   V12  页面把 "keepalive-query" 改名       pre 2 → post 红在整个文件：那三处模块级
         前置断言（发送正则、"query 应答原样喂给 applyConfig"）抛在 test 之外，文件名
         代替用例名。切片前提塌了就该这样响——下面七条一次都不跑，比让它们拿着半截
         数据比出个绿要好

@@ -2,12 +2,12 @@
    `wechat-budget.test.mjs` 管内容，`storage-map.test.mjs` 管存储调用点，
    `cookie-schema.test.mjs` 管存档对象的字段清单）。
 
-   为什么单独一个文件而不是各写一份：这几段切取认的是本仓库常量表的**形状**
+   为什么单独一个文件而不是各写一份：这几段切取认的是本仓库常量表的形状
    （`const NAME = { k: "v" }` / 数组表每行最后一个字面量 / `PRESETS` 那种 `{key, seconds}`）。
    写第二份就会漂移，而"漂移"在这里的表现是不报错——切少了几条，判据安静地少覆盖几条。
    同一仓库里 `scripts/validate-refs.mjs` 是另一个方向的同一件事：引用通道那批正则也只能有一份。
 
-   一律**只读文本、不执行函数体**，也不 import 常量表：`WECHAT_EVENT_TITLE_KEYS` 这类表住在
+   一律只读文本、不执行函数体，也不 import 常量表：`WECHAT_EVENT_TITLE_KEYS` 这类表住在
    `background.js`，import 它要先造一整套 chrome 桩件，而桩件喂进去的键集合本身就是抄本。
    每个切取函数都返回 `slots`（源码里的槽数），调用方拿它和条目数比对，形状一改就红。 */
 
@@ -139,7 +139,7 @@ export function functionBody(src, name) {
 /* 取出每一处 `getMessage(` 的实参源码（括号配平到右括号为止，双引号串整段跳过）。
    与 `scripts/validate-refs.mjs` 的 `jsMessageKeys` 不是同一件事的第二份定义：
    那个只认"整个第一个实参是字面量"的调用（三元里的比较值会被切成假键），
-   这里要的是**实参位置上出现过哪些字面量**，所以 `a ? "x" : "y"` 与 `tbl[e] || "z"`
+   这里要的是实参位置上出现过哪些字面量，所以 `a ? "x" : "y"` 与 `tbl[e] || "z"`
    都算数——预算账要覆盖的正是这些"值从哪儿来"的分支 */
 export function getMessageArgs(src) {
   const stripped = stripComments(src);
@@ -215,7 +215,7 @@ export function splitTop(text, sep) {
   return parts;
 }
 
-/* 一个对象字面量**内部**的键名清单（调用方负责先按配对把外层花括号切掉，传进来的是不含
+/* 一个对象字面量内部的键名清单（调用方负责先按配对把外层花括号切掉，传进来的是不含
    `{}` 的原文）。返回四样东西，够判据分清"这个键叫什么"与"这里没法知道键叫什么"：
      keys      —— 裸标识符与引号名，以及简写（`{ tasks }` 的键就是 tasks）
      computed  —— `[expr]:` 形式的计算键，把 expr 原文交回调用方自己解析

@@ -3,7 +3,7 @@
    就一路走到 notifyOut 的两笔 fetch（15 秒超时，微信还要先取一次令牌，最坏几十秒）。
    于是开了"cookie 备份 + webhook/微信"、又正好这一拍确认掉线的用户点「开始」之后：
    `tasks` 里已经有这条任务，`refresh-<id>` 与 `hb-<id>` 一条都没建（arm 排在备份后面），
-   而**其它标签页的起停全排在同一把锁后面**。MV3 的 SW 若在等待中被回收，
+   而其它标签页的起停全排在同一把锁后面。MV3 的 SW 若在等待中被回收，
    留下的就是 AGENTS.md 里那句"任务在、永不刷新"的僵尸。
 
    为什么之前测不出来：桩件的 fetch 从不当场返回，也不认 promise 型应答（见 BACKLOG E3），
@@ -55,7 +55,7 @@ const hangUp = (env) => env.pendingFetch().forEach((h) => h.abort());
 
 const alarmsOf = (env) => env.calls.alarmsCreated.map(([name]) => name);
 const notifIds = (env) => env.calls.notifCreated.map(([id]) => id);
-/* 那笔外发是否**已经发出且仍未回来**：calls.fetch 只说明发过，
+/* 那笔外发是否已经发出且仍未回来：calls.fetch 只说明发过，
    pendingFetch 才说明锁正压着它——A15 的现场要的是后者 */
 const hungCount = (env) => env.calls.fetch.length;
 const hungNow = (env) => env.pendingFetch().length;
@@ -145,7 +145,7 @@ test("建任务失败时不备份、不外发", async () => {
           既有的「右键开始 1 分钟」（ensureHeartbeat 读不到任务，把 hb- 清掉了）
      N5 先挂表再验现场（拿不到标签页也照样建闹钟）→ 红 1：只红在「建任务失败时不备份、不外发」
      R1 对照：删掉 stopTask 里的 stopKeepAlive(tabId)
-        → 全套**一条都不红**（当时 333 条）。这不是本文件的失败，是另一处覆盖缺口：
+        → 全套一条都不红（当时 333 条）。这不是本文件的失败，是另一处覆盖缺口：
           "停任务要让页面内的保活脚本自停"至今没有门禁，已记进 `BACKLOG.md` A20（后来由 A20 补上）。
           留在这里而不是抹掉，是因为它同时说明本文件四条用例没有被"任何改动都红"的噪声牵着走
 
@@ -154,7 +154,7 @@ test("建任务失败时不备份、不外发", async () => {
    覆写出来的——桩件因此看不见它：不进 calls.fetch、拿不到 init.signal、也没法问"还挂着吗"。
    现在挂起是桩件的一种应答形状（env.reply(new Promise(() => {}))），于是本文件的现场变清楚了：
    哨兵从"我自己的计数器"换成 hungNow(env) = env.pendingFetch().length，
-   即"发出去了且**还压着**"；"发过几笔"另有 hungCount(env) = calls.fetch.length。
+   即"发出去了且还压着"；"发过几笔"另有 hungCount(env) = calls.fetch.length。
    两者分开是有意的：A15 的病因是锁压在网络等待上，只有 pendingFetch 能表示"正压着"，
    而 calls.fetch 只说明"发过"。
      H3 桩件不 await promise 型应答 → 红 2：正是那两条挂起用例，且红在哨兵那句上

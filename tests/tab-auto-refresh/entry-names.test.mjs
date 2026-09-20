@@ -1,4 +1,4 @@
-/* 第二十四轮审计（`BACKLOG.md` A42）的门禁：**人从弹窗之外起停任务**的那几条通道上，
+/* 第二十四轮审计（`BACKLOG.md` A42）的门禁：人从弹窗之外起停任务的那几条通道上，
    名字与数字被分在五处写，此前一处都没对过账：
 
    1. `manifest.json` 的 `commands` 键名与 `suggested_key`
@@ -10,12 +10,12 @@
    5. `popup.html` 里那个 `min="30"`（`MIN_INTERVAL_SEC` 的第三份抄本：另两份是 `logic.js`
       的常量与它自己那句注释）
 
-   这一片的静默形状全都一样：**改一头另一头一个字都不报错，只是那条入口从此不工作**。
+   这一片的静默形状全都一样：改一头另一头一个字都不报错，只是那条入口从此不工作。
    命令名两边对不上时 Chrome 照样把快捷键列在 `chrome://extensions/shortcuts` 里，按下去
    分发链早退；菜单前缀改一处，另一处解析出 NaN，`startTask` 收到一个 NaN 秒数；`min` 与
    兜底地板对不上时，"能填进去却被静默改写"就重新出现了（第十三轮为设置立的那本账同一形状）。
 
-   五处一律**从真实源码现切**（manifest 走 `JSON.parse`，其余按花括号配对切监听器与
+   五处一律从真实源码现切（manifest 走 `JSON.parse`，其余按花括号配对切监听器与
    `buildMenus` 的函数体），测试里不抄第二份名字清单。认不出的形状一律抛而不是跳过：
    这里"少切一条"的表现是判据安静地少覆盖一条通道。
    每条判据的比较都走一个纯函数（`commandLedger` / `docLedger` / `prefixLedger` /
@@ -179,7 +179,7 @@ function commandLedger(declared, handled) {
 }
 
 /* 说明书与注释里写出的组合键 ↔ manifest 的 suggested_key。
-   只认**提到"快捷键"那一行**里的组合键形状：README 里另有 `Ctrl+F5` 那种浏览器自带的按键
+   只认提到"快捷键"那一行里的组合键形状：README 里另有 `Ctrl+F5` 那种浏览器自带的按键
    （"忽略缓存"那一行），它不归 manifest 管，整篇扫会把正常句子判成漂移 */
 function docLedger(declaredKeys, texts, proseTexts = []) {
   const problems = [];
@@ -259,7 +259,7 @@ test("抽取形状：五处各自的条数下限，且切出来的东西像个�
   assert.ok(COMMANDS.length >= 1, "manifest 里一条命令都没切到");
   assert.equal(PRESETS.slots, PRESETS.entries.length, "PRESETS 有行没被切成条目");
   assert.ok(PRESETS.entries.length >= 5, `预设只剩 ${PRESETS.entries.length} 条，抽取退化了`);
-  /* 三处 create 站点：根、预设那一族、停止。造出来的**项数**是另一本账——那一族在
+  /* 三处 create 站点：根、预设那一族、停止。造出来的项数是另一本账——那一族在
      `for (const p of PRESETS)` 里，一项变 N 项。今天三处站点造出 1 + 7 + 1 = 9 项；
      出现第四处站点时本文件要回来看一遍它归谁覆盖 */
   assert.equal(WRITES.length, 3, `菜单写侧有 ${WRITES.length} 处 create，本文件按"根 + 预设那一族 + 停止"三处写`);
@@ -435,20 +435,20 @@ test("对照常驻：min 改宽改窄都要红，且红的是一句说得出后�
    | 台 | 改法（只改一处） | pre（没有本门禁） | post 本门禁红 |
    | --- | --- | --- | --- |
    | K0 | 不改 | 全套零红 | 零（判据不恒红） |
-   | B1 | manifest 的 `commands` 键名改成 `toggleRefresh` | **全套零红** | 命令名两头齐平 |
+   | B1 | manifest 的 `commands` 键名改成 `toggleRefresh` | 全套零红 | 命令名两头齐平 |
    | B2 | `background.js` 比对的那个字符串改成 `toggleRefresh` | 红 3 条：快捷键那三条行为用例 | 命令名两头齐平、对照常驻：只改 manifest |
-   | B3 | manifest 的 `suggested_key.default` 改成 `Ctrl+Alt+Q` | **全套零红** | 说明书与注释里的组合键 |
+   | B3 | manifest 的 `suggested_key.default` 改成 `Ctrl+Alt+Q` | 全套零红 | 说明书与注释里的组合键 |
    | B4 | 读侧 `id.startsWith("start-")` 改成 `"start_"` | 红 2 条：右键「开始 1 分钟」、持锁必经点 | 菜单 id 两头、前缀三处齐平、对照常驻：读侧前缀 |
    | B5 | 写侧 `"start-" + p.seconds` 改成 `"start_"` | 红 1 条：安装时建出预设菜单 | 菜单 id 两头、前缀三处齐平、对照常驻：读侧前缀 |
    | B6 | 只改第三份抄本：`id.slice("start-".length)` → `slice("start".length)` | 红 1 条：右键「开始 1 分钟」（秒数成了 NaN） | 前缀三处齐平、每条预设往返 |
    | B7 | 根项 `id: "root"` 改成 `"roots"`（子项的 `parentId` 悬空） | 红 1 条：安装时建出预设菜单 | 菜单 id 两头、parentId 悬空、对照常驻：读侧前缀 |
-   | B8 | `popup.html` 的 `min="30"` 改成 `"60"` | **全套零红** | 弹窗 min 那条（红在"填不进去"那句） |
-   | B9 | 同上改成 `"10"` | **全套零红** | 同一条（红在"静默改写"那句） |
-   | B10 | 同上把 `type="number"` 改成 `"text"`（min 从此不生效） | **全套零红** | 同一条（红在 `INPUT.type` 那句） |
-   | B11 | 只有 README 那一行改成 `Ctrl+Alt+Q`（manifest 不动） | **全套零红** | 说明书与注释里的组合键、对照常驻：只改 manifest |
+   | B8 | `popup.html` 的 `min="30"` 改成 `"60"` | 全套零红 | 弹窗 min 那条（红在"填不进去"那句） |
+   | B9 | 同上改成 `"10"` | 全套零红 | 同一条（红在"静默改写"那句） |
+   | B10 | 同上把 `type="number"` 改成 `"text"`（min 从此不生效） | 全套零红 | 同一条（红在 `INPUT.type` 那句） |
+   | B11 | 只有 README 那一行改成 `Ctrl+Alt+Q`（manifest 不动） | 全套零红 | 说明书与注释里的组合键、对照常驻：只改 manifest |
    | B12 | 预设表里 30 秒那一档改成 10 | 红 5 条（README 档位序列、菜单条数、i18n 名字关系、config 顺序与地板、弹窗下拉） | 每条预设往返、弹窗 min 那条 |
 
-   怎么读这张表：**六台改前全套零红**（B1、B3、B8、B9、B10、B11），六台改前已有行为用例先撞上
+   怎么读这张表：六台改前全套零红（B1、B3、B8、B9、B10、B11），六台改前已有行为用例先撞上
    （B2、B4、B5、B6、B7、B12）。前六台就是本轮的净账：改完之后菜单照常建出来、快捷键照常列在
    `chrome://extensions/shortcuts` 里、弹窗照常能填数，只是那一条入口从此不工作或静默改写用户填的值。
    后六台不是"本轮白做"：行为用例红的是"这条链路跑不通"，本门禁红的是"这几处写的不是同一个名字"——
@@ -456,7 +456,7 @@ test("对照常驻：min 改宽改窄都要红，且红的是一句说得出后�
    三处抄本里只改第三处，链路上只留下一个 NaN。
 
    两处要说明，别当成噪声：
-   - B2、B4、B7、B11 各带一条**常驻对照**的红。那三条对照的参照物是真源码现切的那份现场
+   - B2、B4、B7、B11 各带一条常驻对照的红。那三条对照的参照物是真源码现切的那份现场
      （`assert.deepEqual(coverageLedger(WRITES, READS).deadPrefixes, [], "对照恒红")` 那一类），
      所以改到它参照的那处真值时对照自己会跟着红。这恰好证明三条对照不是空跑：K0 那一行两侧零红
      是它们成立的时候，这几行红是它们不成立的时候
@@ -464,18 +464,18 @@ test("对照常驻：min 改宽改窄都要红，且红的是一句说得出后�
      顺序与地板由 config 自己的用例钉）。本门禁在这台上的增量只有"低于地板的那一档要红"这半句
 
    刻意留下的边界：
-   1. 命令名那本账只认 `onCommand` 里**比对形参**的字面量（`command !== "…"` 这种形状）。
+   1. 命令名那本账只认 `onCommand` 里比对形参的字面量（`command !== "…"` 这种形状）。
       `chrome.commands.getAll()` 读到的运行时值、以及真机上用户自己把组合键改掉，都不在这根账上——
       这里量的是"仓库里这几处写的是不是同一个"
-   2. 组合键只扫**提到"快捷键"的那一行**。README"忽略缓存"那一行写的是浏览器自带的 `Ctrl+F5`，
+   2. 组合键只扫提到"快捷键"的那一行。README"忽略缓存"那一行写的是浏览器自带的 `Ctrl+F5`，
       整篇扫会把那句正常的话判成漂移（这条实测过，写法就收窄在这里）。因此别处提一句
       "按 Ctrl+Shift+X"之类不归 manifest 管的话，本文件看不见
    3. `suggested_key` 的平台后缀表与"修饰键 + 一个主键"的形状抄自官方 commands 文档，
       是本文件唯一的外部事实；Chrome 加新后缀要回来改那张小表。真机上这个组合键会不会与浏览器
       或系统撞键，是 V1 那一头的事
-   4. 菜单写侧按**三处 create 站点**记账，不是按"今天造出 9 个项"。预设那一族在 `for` 循环里，
+   4. 菜单写侧按三处 create 站点记账，不是按"今天造出 9 个项"。预设那一族在 `for` 循环里，
       一项变 N 项不影响站点数；出现第四处站点时条数下限那条会红，红完要回来判它归谁覆盖
    5. HTML 那一头只认 `#customInput` 一个标签的 `type`/`min`/`step`。别的控件是 `settings-map`
       与 `popup-repopulate` 的账，版面尺寸是 `screenshot-popup.mjs --measure` 的账
    6. 预设 → 菜单 id → 反解 → 兜底这一趟跑的是真 `clampInterval`，量的是"菜单上写的秒数与真挂上的
-      是不是同一个"；这七档**该不该是这七档**不在账上 */
+      是不是同一个"；这七档该不该是这七档不在账上 */

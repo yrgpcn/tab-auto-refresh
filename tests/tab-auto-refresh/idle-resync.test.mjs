@@ -121,7 +121,7 @@ test("state 不是 active 时什么都不做", async () => {
      1) 删掉 `if (!a.scheduledTime || a.scheduledTime >= now) continue;`
         → 红在"还没到期的闹钟一个都不动"（没过期也被重挂）
      2) 心跳的 `Math.round(Math.random() * 60000)` 改成常量 0
-        → 红在"心跳 alarm 打散在 0~60 秒重建"。第一版只判"落在 0~60 秒里"时这条**不红**，
+        → 红在"心跳 alarm 打散在 0~60 秒重建"。第一版只判"落在 0~60 秒里"时这条不红，
            是照着这个结果把断言改成喂确定的 Math.random 钉两端，才变红的
      3) `else await chrome.alarms.clear(a.name);` 换成空操作
         → 红在"没有对应任务的过期 alarm 直接清掉"

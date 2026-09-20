@@ -817,7 +817,7 @@ test("clipHostTail drops subdomains, never the registrable part", () => {
   /* 省略号放不下时（预算刚好等于域名长度）就不再前缀，只给域名本身 */
   assert.equal(clipHostTail("shop.example.com", 11), "example.com");
   assert.equal(clipHostTail("a.b.c.example.com", 12), "…example.com");
-  /* 注册域本身就超预算（长域名）：**返回 null，由调用方整段丢掉站点**（20 报告 §2）。
+  /* 注册域本身就超预算（长域名）：返回 null，由调用方整段丢掉站点（20 报告 §2）。
      旧实现会硬截出 "…domain.com" ——那不是这个站点的域名，看着像另一个站 */
   assert.equal(clipHostTail("www.some-very-long-domain.com", 12), null);
   assert.equal(clipHostTail("shop.example.com", 6), null);
@@ -892,7 +892,7 @@ test("buildWechatMessage never emits a newline or an over-long field", () => {
 /* 红→绿对照（A2 那四条：siteRoot 不退化成公共后缀、domainChain 的注册域地板不变式、
    withinRoot 边界、planBackupConvergence）
    本文件直接 import 真源码，而 harness 的 TAR_BG 只换 background.js，所以对照必须
-   把**整仓**复制到仓库外、在副本里改坏 tab-auto-refresh/shared/logic.js，再在副本里跑。
+   把整仓复制到仓库外、在副本里改坏 tab-auto-refresh/shared/logic.js，再在副本里跑。
    五处改坏的完整红名单与两条"第一次跑是绿的"的教训记在 cookie-backup.test.mjs 末尾，
    那里同时跑的是同一份副本，一份证据覆盖两个文件。
 

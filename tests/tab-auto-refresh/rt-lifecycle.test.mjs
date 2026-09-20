@@ -198,7 +198,7 @@ test("清单是唯一来源：两份清单跑出来的键，与用例里那四�
      不会想到停任务/重开标签页那两处——残留就又回到 A17 的形状。这条把"记得进清单"
      变成一次红而不是靠 review 时想起来。
      守卫第一版只按正则扫那一行有没有出现 RT_ACTIVITY，结果 rtTabKeys 把 :tabId 漏拼了
-     （删的是根本不存在的 "rt:activity"）它照样绿——所以这里是把清单**跑**一遍再对账 */
+     （删的是根本不存在的 "rt:activity"）它照样绿——所以这里是把清单跑一遍再对账 */
   const consts = {};
   for (const m of BG_SRC.matchAll(/^const (RT_[A-Z]+) = "([^"]+)";$/gm)) consts[m[1]] = m[2];
   for (const name of ["RT_ACTIVITY", "RT_ERROR", "RT_CAPTCHA"]) {

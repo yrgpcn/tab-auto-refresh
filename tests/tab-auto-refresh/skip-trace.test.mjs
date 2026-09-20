@@ -511,7 +511,7 @@ test("坏时刻不许抛：留痕缺 at 时这是 init 同步链上的一手", (
 /* 第 5 层（fmtClock 真身）的对照：同一天实跑，脚本与变体文件在仓库外 D:\Github\_tar_ctl_a19。
    跑法与上面这批不同——本轮变异全在 popup.js 的源码文本里，不必整仓复制，
    把改坏的 popup.js 写成变体文件、TAR_POPUP_SRC 指过去即可。每个用例对
-   skip-trace 与 popup-settings-sync 两个文件**分开各跑一遍**，混在一次 --test 里就看不出
+   skip-trace 与 popup-settings-sync 两个文件分开各跑一遍，混在一次 --test 里就看不出
    红在哪一层。基线（未改动的 popup.js 指过去）25/25 + 18/18 全绿。
 
      F1  2-digit 换成 numeric        → 红 1 条：小时与分钟各占两位

@@ -151,7 +151,7 @@ test("外发挂住时，全部该停的任务照样当场停完（A16 的两半�
 
 test("收尾标记活过 SW 回收：弹窗晚点开也轮得到这条网", async () => {
   /* 后台的 SW 回收判据（AGENTS.md：要活过 SW 回收才放会话态）在这条网上的落地形状：
-     prune 是在**上一个**实例里跑完的，新实例什么都不知道，只能从 storage.session 里读回来 */
+     prune 是在上一个实例里跑完的，新实例什么都不知道，只能从 storage.session 里读回来 */
   const env = await boot({ restoreSettled: true, reboot: true });
   await env.send({ type: "prune-now" });
 
