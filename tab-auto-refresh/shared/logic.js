@@ -410,7 +410,11 @@ export const CHALLENGE_URL_RE = /challenges\.cloudflare\.com|recaptcha|hcaptcha/
 /* 验证墙的标题特征。判据面刻意只取标题与挑战域名资产，不扫正文：正文里"验证码"
    "access denied"是日常词（登录框提示、帮助文案、页脚都会命中），误判成墙的代价是
    任务卡在暂停态且不自愈——页面不再加载，探测也就不再运行。标题才是墙页最稳定的特征。
-   401/403 的登录墙语义另走掉线通道，这里不重复判定 */
+   401/403 的登录墙语义另走掉线通道，这里不重复判定。
+   这两条正则（上面的 `CHALLENGE_URL_RE` 与本条）的**每一条备选**都要有一条真喂它的夹具，
+   登记面在 `tests/tab-auto-refresh/wall-list.test.mjs`：加一条特征不登记夹具，红在"这条特征零夹具"；
+   删一条特征不删夹具，红在"这条夹具谁都不命中"；改到同族另一条的拼写上（行为看着还是能命中），
+   红在归属不唯一。`/i` 同一本账——每条带拉丁字母的特征都要有一条只有靠 `/i` 才命中的夹具 */
 export const WALL_TITLE_RE =
   /(captcha|verify you are human|human verification|just a moment|attention required|pardon our interruption|安全验证|人机验证|验证码)/i;
 
