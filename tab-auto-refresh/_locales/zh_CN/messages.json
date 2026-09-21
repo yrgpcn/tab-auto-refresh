@@ -1,13 +1,13 @@
 {
   "extName": { "message": "标签页定时刷新" },
-  "extDesc": { "message": "为任意标签页设置定时自动刷新：30 秒起步、支持自定义间隔与强制刷新，浏览器重启后自动继续，还可在标签页右键快速设置。" },
+  "extDesc": { "message": "标签页定时自动刷新，30 秒起步：自定义间隔、强制刷新、多任务倒计时、右键菜单与快捷键，浏览器重启后任务自动继续。" },
   "commandToggleRefresh": { "message": "开关当前标签页的定时刷新" },
   "menuRoot": { "message": "标签页定时刷新" },
   "menuStop": { "message": "停止定时刷新" },
   "notifTitle": { "message": "标签页定时刷新" },
   "notifStopped": { "message": "一个定时刷新任务已自动取消（标签页已关闭或页面受限）" },
   "notifSessionLost": {
-    "message": "检测到 $SITE$ 的登录会话已失效，已暂停覆盖该站点备份以防污染，请在页面中重新登录",
+    "message": "检测到 $SITE$ 的登录会话已失效，请在该页面重新登录",
     "placeholders": { "site": { "content": "$1" } }
   },
   "preset30s": { "message": "每 30 秒" },
@@ -74,6 +74,7 @@
   "httpHeartbeatHint": { "message": "每 4 分钟向监控地址发一次带 cookie 的后台请求，不重载页面，续住「按最后请求计时」的会话" },
   "keywordLabel": { "message": "关键词（可选）" },
   "keywordPlaceholder": { "message": "逗号分隔，如：补货, 有票" },
+  "keywordHint": { "message": "逗号或换行分隔，最多 10 个、每个最长 100 字，重复与超出数量的会被丢掉" },
   "keepWatchingLabel": { "message": "命中后继续监控" },
   "keepWatchingHint": { "message": "默认命中即停任务；开启后持续盯守，仅新出现的关键词才再次通知" },
   "keywordChipWatch": {
@@ -81,15 +82,15 @@
     "placeholders": { "kw": { "content": "$1" } }
   },
   "skipOnActivityLabel": { "message": "操作时跳过刷新" },
-  "skipOnActivityHint": { "message": "60 秒内有真人操作即跳过本次刷新；保活注入的模拟活动不会被误判为真人" },
+  "skipOnActivityHint": { "message": "60 秒内有真人操作即跳过本次刷新；保活注入的模拟活动不会被误判为真人。第二条判据不看操作：这一页是你当前窗口里的活动标签页、且该窗口在前台时也跳过，所以盯着页面不动也会被记成「你在操作」" },
   "keepAwakeLabel": { "message": "阻止休眠（耗电）" },
   "keepAwakeHint": { "message": "有任务期间持续占用电源、阻止系统休眠；笔记本电池场景慎用" },
   "captchaGuardLabel": { "message": "验证墙保护" },
-  "captchaGuardHint": { "message": "页面标题或验证服务来源域名出现人机验证特征时自动暂停任务，避免对着验证墙空刷；只认这两样、不扫正文。iframe 里的整页挑战同样能检出，挂件大小的验证框不算墙。若正常页面被误暂停，点该任务的「恢复」按钮，或直接关掉此项" },
+  "captchaGuardHint": { "message": "页面标题或验证服务来源域名出现人机验证特征时自动暂停任务，避免对着验证墙空刷；只认这两样、不扫正文。iframe 里的整页挑战同样能检出，子框架里挂件大小的验证框有尺寸门槛挡掉；顶层页面没有这道门槛，挂着验证服务的脚本就判墙，正常站点因此可能被误暂停。误暂停时点该任务的「恢复」按钮；关掉本项只是不再探测，已经暂停的不会因此自动恢复" },
   "webhookLabel": { "message": "Webhook" },
   "webhookPlaceholder": { "message": "https://…（留空关闭）" },
-  "webhookHint": { "message": "以 POST JSON 推送到该地址：Discord / Slack / Telegram 直接出可读文案；ntfy 能送达，但正文是原始 JSON；留空关闭。这类地址通常内嵌 token，它本身就是凭据。填了地址后下面那一行会显示最近一次投递的结果，「发送测试」不必等事件真的发生就能验一次" },
-  "webhookInvalid": { "message": "地址无效：需以 http:// 或 https:// 开头，按当前设置不会发出任何通知" },
+  "webhookHint": { "message": "以 POST JSON 推送到该地址：Discord / Slack 直接出可读文案；ntfy 能送达，但正文是原始 JSON；Telegram 的机器人接口要求载荷里带 chat_id，这份没有，直连会被拒。留空关闭。这类地址通常内嵌 token，它本身就是凭据。填了地址后下面那一行会显示最近一次投递的结果，「发送测试」不必等事件真的发生就能验一次" },
+  "webhookInvalid": { "message": "地址无效：需以 http:// 或 https:// 开头，这样的地址不会通过 webhook 发出通知（微信直连若开着仍会推）" },
   "webhookTestBtn": { "message": "发送测试" },
   "webhookTestSending": { "message": "发送中…" },
   "webhookTestBody": { "message": "这是一条测试通知：收到即说明地址填对了" },
@@ -183,7 +184,7 @@
   "wechatBodyStopped": { "message": "标签页已关闭或受限" },
   "wechatBodyPausedCaptcha": { "message": "命中验证墙，请点卡片处理" },
   "wechatBodyPausedError": { "message": "页面持续 5xx/404" },
-  "wechatBodySessionLost": { "message": "登录态失效，备份已冻结" },
+  "wechatBodySessionLost": { "message": "登录态失效，请重新登录" },
   "wechatStateIdle": { "message": "已开启，等待首次推送" },
   "wechatStateOk": {
     "message": "上次推送成功 $TIME$",

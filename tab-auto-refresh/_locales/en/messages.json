@@ -1,13 +1,13 @@
 {
   "extName": { "message": "Tab Auto Refresh" },
-  "extDesc": { "message": "Set up automatic tab refresh with intervals from 30 seconds: custom intervals, force refresh, multiple tabs with countdown, right-click menus, and a keyboard shortcut." },
+  "extDesc": { "message": "Automatic tab refresh from 30 seconds: custom interval, force refresh, countdown for multiple tabs, right-click menu, keyboard shortcut, tasks that survive a browser restart." },
   "commandToggleRefresh": { "message": "Toggle auto refresh for the current tab" },
   "menuRoot": { "message": "Tab Auto Refresh" },
   "menuStop": { "message": "Stop auto refresh" },
   "notifTitle": { "message": "Tab Auto Refresh" },
   "notifStopped": { "message": "An auto refresh task was cancelled (the tab was closed or the page is restricted)" },
   "notifSessionLost": {
-    "message": "The login session for $SITE$ has expired. Backup for this site is paused to avoid overwriting good state; please sign in again",
+    "message": "The login session for $SITE$ has expired, please sign in again in that tab",
     "placeholders": { "site": { "content": "$1" } }
   },
   "preset30s": { "message": "Every 30 seconds" },
@@ -75,6 +75,7 @@
   "httpHeartbeatHint": { "message": "Sends a background request with cookies to the monitored URL every 4 minutes; holds sessions timed by the last request without reloading the page" },
   "keywordLabel": { "message": "Keyword (optional)" },
   "keywordPlaceholder": { "message": "comma-separated, e.g. in stock, available" },
+  "keywordHint": { "message": "Comma or newline separated, up to 10 keywords of 100 characters each; duplicates and anything past the count are dropped" },
   "keepWatchingLabel": { "message": "Keep watching after a hit" },
   "keepWatchingHint": { "message": "Default: the task stops on a hit. On: keep monitoring and notify only for newly appeared keywords" },
   "keywordChipWatch": {
@@ -82,15 +83,15 @@
     "placeholders": { "kw": { "content": "$1" } }
   },
   "skipOnActivityLabel": { "message": "Skip while in use" },
-  "skipOnActivityHint": { "message": "Skips this refresh if there was real user input within 60 seconds; keep-alive simulation is not mistaken for a human" },
+  "skipOnActivityHint": { "message": "Skips this refresh if there was real user input within 60 seconds; keep-alive simulation is not mistaken for a human. The second rule looks at no input at all: the refresh also skips when the tab is the active tab of the foreground window, so simply watching the page counts as being active" },
   "keepAwakeLabel": { "message": "Prevent sleep (power)" },
   "keepAwakeHint": { "message": "Holds a power lock and keeps the system awake while tasks run - be careful on laptop battery" },
   "captchaGuardLabel": { "message": "Captcha guard" },
-  "captchaGuardHint": { "message": "Pauses a task when the page title or a bot-check provider's domain looks like a verification wall, so it does not keep hammering the wall; those two signals only, no body scan. A full-page challenge inside an iframe is detected the same way, while widget-sized captcha boxes are not. If a normal page gets paused, use that task's Resume button or just turn this off" },
+  "captchaGuardHint": { "message": "Pauses a task when the page title or a bot-check provider's domain looks like a verification wall, so it does not keep hammering the wall; those two signals only, no body scan. A full-page challenge inside an iframe is detected the same way, and widget-sized boxes in a subframe are held out by a minimum size. The top frame has no such floor, so a normal page that merely loads a bot-check script can be misread as a wall - use that task's Resume button if it happens. Turning this off stops probing, and a task already paused will not resume by itself" },
   "webhookLabel": { "message": "Webhook" },
   "webhookPlaceholder": { "message": "https://… (empty = off)" },
-  "webhookHint": { "message": "POSTs JSON to this URL: Discord / Slack / Telegram render a readable message, while ntfy delivers the raw JSON; empty = off. Such URLs usually embed a token, so this address is itself a credential. With a URL filled in, the line below shows the last delivery outcome; \"Send test\" checks it without waiting for a real event" },
-  "webhookInvalid": { "message": "Invalid URL: it must start with http:// or https:// — with the current value nothing will be sent" },
+  "webhookHint": { "message": "POSTs JSON to this URL: Discord / Slack render a readable message, while ntfy delivers the raw JSON; Telegram's bot API wants a chat_id field this payload does not carry, so a direct bot URL is rejected. Empty = off. Such URLs usually embed a token, so this address is itself a credential. With a URL filled in, the line below shows the last delivery outcome; \"Send test\" checks it without waiting for a real event" },
+  "webhookInvalid": { "message": "Invalid URL: it must start with http:// or https:// — nothing goes out through this webhook (WeChat pushes still send if enabled)" },
   "webhookTestBtn": { "message": "Send test" },
   "webhookTestSending": { "message": "Sending…" },
   "webhookTestBody": { "message": "Test notification: if it arrived, the URL is right" },
@@ -183,7 +184,7 @@
   "wechatBodyStopped": { "message": "tab closed or gone" },
   "wechatBodyPausedCaptcha": { "message": "bot check, tap card" },
   "wechatBodyPausedError": { "message": "page keeps erroring" },
-  "wechatBodySessionLost": { "message": "session expired" },
+  "wechatBodySessionLost": { "message": "sign in again" },
   "wechatStateIdle": { "message": "On; waiting for the first push" },
   "wechatStateOk": {
     "message": "Last push succeeded at $TIME$",
