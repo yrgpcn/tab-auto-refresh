@@ -50,7 +50,7 @@
 | 消息三段名 | `message-ledger`、`message-gate` | 类型名、请求载荷键、应答字段三本账一起对；新增页面侧类型要进 `FROM_PAGE_TYPES`，新增弹窗专用分支要进 `POPUP_ONLY`；保活配置的推送载荷、`keepalive-query` 应答、`applyConfig` 读的字段三方齐平 |
 | 权限 | `permission-map` | 下面 `### 权限与版本` 那行清单、`manifest.json`、桩件暴露的 chrome 表面 |
 | 弹窗控件与样式名 | `popup-repopulate`、`class-ledger.test.mjs` | 改 id 要连着改 js；class 要连着改 CSS、HTML、JS 三处 |
-| 验证墙那两条正则 | `wall-list` | 加一条特征要登记一条唯一命中它的夹具，删特征要删夹具，特征名一律现推 |
+| 验证墙那两条正则 | `wall-list` | 加一条特征要登记一条唯一命中它的夹具，删特征要删夹具，特征名一律现推；判定链上"哪几条通道读这两条正则"也要跟着改——顶层资产通道在 C1 拿掉时漏改了这一头，那条判据一直红到人来 |
 | SKIP 理由 | `skip-trace` | `ALARM_SKIP_REASONS` 的表（真跑 `decideAlarmAction` 收集来比对，不是手抄清单） |
 | 会话态键族 | `rt-lifecycle` | `rtRoundKeys` / `rtTabKeys`，删除处不许再手写键数组 |
 | 角标那一格 | `badge-state`、`badge-facts` | `decideBadge` 的分支、下面那行顺序、门禁的态清单；新增一件事实还要改 `aggregateBadgeFacts` 的出口 |
