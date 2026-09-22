@@ -404,10 +404,10 @@ export function aggregateFrameHits(frames) {
   return { present: framesOk ? present : null, framesOk };
 }
 
-/* 挑战域名清单。只在顶层框架的资产列表与子框架自身网址上匹配 */
+/* 挑战域名清单。只在过了尺寸地板的子框架自身网址上匹配。 */
 export const CHALLENGE_URL_RE = /challenges\.cloudflare\.com|recaptcha|hcaptcha/i;
 
-/* 验证墙的标题特征。判据面刻意只取标题与挑战域名资产，不扫正文：正文里"验证码"
+/* 验证墙的标题特征。判据面刻意只取标题与挑战子框架的网址，不扫正文：正文里"验证码"
    "access denied"是日常词（登录框提示、帮助文案、页脚都会命中），误判成墙的代价是
    任务卡在暂停态且不自愈——页面不再加载，探测也就不再运行。标题才是墙页最稳定的特征。
    401/403 的登录墙语义另走掉线通道，这里不重复判定。
@@ -432,7 +432,9 @@ export const WALL_FRAME_MIN_H = 250;
 
 /* 逐框架的墙判定。页内函数只回原始事实（是否顶层、标题、自身网址、自身视口宽高、
    挂在文档里的 iframe/frame/script 网址），两条正则一个都不下页面，所以这条决策链
-   能被单测直接断言。顶层框架维持一贯的判据：标题命中，或文档里挂着挑战域名的资产；
+   能被单测直接断言。顶层只看标题：挑战域名的脚本是普通登录页常见依赖，把它当墙会
+   让正常页连续三次之后永久暂停。真正整页的挑战 iframe 会在子框架一支按自身视口尺寸
+   识别；顶层页面本身是挑战页时，标题是稳定且不把依赖脚本误当页面状态的信号。
    子框架要多过一道视口地板，理由见 WALL_FRAME_MIN_* */
 export function decideWallFromFrames(frames) {
   for (const f of Array.isArray(frames) ? frames : []) {
@@ -440,8 +442,7 @@ export function decideWallFromFrames(frames) {
     if (!r || typeof r !== "object") continue; /* 这个框架没注入进去 */
     const titled = WALL_TITLE_RE.test(String(r.title == null ? "" : r.title));
     if (r.top) {
-      const asset = Array.isArray(r.assets) && r.assets.some(isChallengeUrl);
-      if (titled || asset) return true;
+      if (titled) return true;
       continue;
     }
     const sized = Number(r.w) >= WALL_FRAME_MIN_W && Number(r.h) >= WALL_FRAME_MIN_H;

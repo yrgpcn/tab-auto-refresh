@@ -234,6 +234,26 @@ test("接收端收了请求不回应：15 秒到点 abort 之后照样留痕，�
   assert.equal(last(env).event, "task-stopped");
 });
 
+test("webhook 挂住时微信仍并发取令牌并完成投递", async () => {
+  /* notifyOut 必须等待两个出口以保住 MV3 生命周期，但不能串行：前一个 webhook 挂住
+     时，微信应该立刻开始，而不是等 webhook 的 15 秒超时之后才动。 */
+  const env = await boot({ settings: Object.assign({}, WX, { webhookUrl: HOOK, notifyEvents: ["task-stopped"] }) });
+  env.reply((url) => {
+    if (url === HOOK) return new Promise(() => {});
+    if (tokenUrl(url)) return { json: { access_token: "T1", expires_in: 7200 } };
+    return { json: { errcode: 0 } };
+  });
+  const inflight = env.fire.alarm("refresh-7");
+  assert.ok(await until(() => sent(env).some((c) => tokenUrl(c.url))), "webhook 挂住时微信还没开始取令牌");
+  assert.ok(sent(env).some((c) => /\/message\/template\/send/.test(c.url)), "微信模板消息没有在 webhook 完成前发出");
+  const webhook = env.pendingFetch().find((p) => p.url === HOOK);
+  assert.ok(webhook, "挂住的 webhook 不在未决请求表里，用例空跑");
+  webhook.abort();
+  assert.ok(await settles(inflight), "叫停 webhook 后并发通知链没有落定");
+  assert.equal(env.store.local.wechatLastResult.ok, true, "webhook 超时不该阻断微信成功留痕");
+  assert.equal(env.store.local.webhookLastResult.kind, "network", "挂住的 webhook 没按网络失败留痕");
+});
+
 test("没配地址、事件没勾上：这两种「本该不发」一笔都不留痕", async () => {
   /* 留痕只针对真发出去的那一笔。关着的出口还去写"失败"，等于把"这是关的"说成"坏了" */
   const off = await sentHook(

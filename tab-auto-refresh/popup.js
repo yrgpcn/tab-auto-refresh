@@ -50,6 +50,8 @@ let webhookLast = null;
    没有痕迹就一句都不显示，所以"正常刷新"与"从没到过点"这两种情况长得一样，
    那是刻意的：只有真跳过才需要解释 */
 let skipMap = {};
+/* alarms.getAll 与 session.get 都是异步的；每秒另起一轮会让慢的一轮把较新的结果覆盖回去。 */
+let alarmPollInFlight = false;
 
 function msg(key, subs) {
   return chrome.i18n.getMessage(key, subs) || key;
@@ -112,6 +114,19 @@ async function syncAlarms() {
     }
   }
   await syncSkipTraces();
+}
+
+/* 倒计时可由已有的 scheduledTime 本地计算；只有弹窗可见时才需要向浏览器同步 alarm 的
+   新 scheduledTime。串行化避免网络/浏览器繁忙时多轮 getAll 交错回写 alarmsMap 与 skipMap。 */
+async function pollAlarms() {
+  if (alarmPollInFlight || document.visibilityState === "hidden") return;
+  alarmPollInFlight = true;
+  try {
+    await syncAlarms();
+    renderCountdowns();
+  } finally {
+    alarmPollInFlight = false;
+  }
 }
 
 /* 跳过痕迹只按在场任务读，所以后台漏清一个键也不会显示出来。跟着 alarm 列表每秒重拉：
@@ -771,12 +786,12 @@ async function init() {
     await renderAll();
   });
 
-  /* alarm 周期触发会更新 scheduledTime 但不触发 storage.onChanged，
-     每秒同步一次才能让倒计时在归零后继续滚动 */
-  setInterval(async () => {
-    await syncAlarms();
-    renderCountdowns();
-  }, 1000);
+  /* alarm 周期触发会更新 scheduledTime 但不触发 storage.onChanged。可见时每秒同步，
+     隐藏的 popup 不轮询；重新可见时立即补一次，避免倒计时停在旧的 scheduledTime。 */
+  setInterval(() => { void pollAlarms(); }, 1000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void pollAlarms();
+  });
 
   /* 只在任务 / 暂停 / 设置变化时重绘；cookie 备份等高频键的写入不触发全量刷新。
      设置这一路还要顺手把控件按新值铺一遍（A18）：不铺的话这台机器读到的是打开弹窗那一刻的

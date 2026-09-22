@@ -86,7 +86,7 @@
   "keepAwakeLabel": { "message": "阻止休眠（耗电）" },
   "keepAwakeHint": { "message": "有任务期间持续占用电源、阻止系统休眠；笔记本电池场景慎用" },
   "captchaGuardLabel": { "message": "验证墙保护" },
-  "captchaGuardHint": { "message": "页面标题或验证服务来源域名出现人机验证特征时自动暂停任务，避免对着验证墙空刷；只认这两样、不扫正文。iframe 里的整页挑战同样能检出，子框架里挂件大小的验证框有尺寸门槛挡掉；顶层页面没有这道门槛，挂着验证服务的脚本就判墙，正常站点因此可能被误暂停。误暂停时点该任务的「恢复」按钮；关掉本项只是不再探测，已经暂停的不会因此自动恢复" },
+  "captchaGuardHint": { "message": "页面标题或足够大的验证服务子框架出现人机验证特征时自动暂停任务，避免对着验证墙空刷；不扫正文。iframe 里的整页挑战同样能检出，挂件大小的验证框有尺寸门槛挡掉；普通页面加载验证服务脚本不会单独判墙。误暂停时点该任务的「恢复」按钮；关掉本项会停止探测并恢复因验证墙暂停的任务" },
   "webhookLabel": { "message": "Webhook" },
   "webhookPlaceholder": { "message": "https://…（留空关闭）" },
   "webhookHint": { "message": "以 POST JSON 推送到该地址：Discord / Slack 直接出可读文案；ntfy 能送达，但正文是原始 JSON；Telegram 的机器人接口要求载荷里带 chat_id，这份没有，直连会被拒。留空关闭。这类地址通常内嵌 token，它本身就是凭据。填了地址后下面那一行会显示最近一次投递的结果，「发送测试」不必等事件真的发生就能验一次" },

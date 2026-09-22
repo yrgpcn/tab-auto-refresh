@@ -39,6 +39,19 @@
     八处对照 P1~P8 全红且各自点名，表记在该文件末尾；其中两处是第一版实跑为零红、改对判据之后才红
 
 ### Fixed
+- 验证墙保护有两条会把任务卡在暂停态的路径（`BACKLOG.md` C1、C2）。顶层页面只要加载
+  reCAPTCHA 等挑战域脚本，原判据就把“依赖脚本”当成“页面正在展示验证墙”，连续三次加载后误暂停；
+  现在 `decideWallFromFrames` 只按顶层标题判定，整页挑战仍由过了 `WALL_FRAME_MIN_W` /
+  `WALL_FRAME_MIN_H` 地板的子框架识别。关闭 `captchaGuard` 时，新增的
+  `reconcileCaptchaGuard` 会立即恢复仅因 `captcha` 自动暂停的任务、清连击与通知，不影响
+  `error-page` 暂停。默认值没有变化；新增 `frame-scan.test.mjs` 与 `detect-chain.test.mjs` 门禁，
+  分别覆盖“挑战脚本不是墙”及关闭开关后的正反收敛。
+- 弹窗的 alarm 同步改为可见时串行轮询：`pollAlarms` 防止缓慢的 `alarms.getAll` / session 读取与
+  下一秒轮询交错回写旧状态，隐藏时不再轮询，重新显示立即补同步。倒计时仍按本地的
+  `scheduledTime` 每秒更新。
+- webhook 与微信通知从串行等待改为并发等待。`notifyOut` 仍等待两个出口，以免 MV3 Service Worker
+  回收截断请求；但 webhook 超时不再延迟微信取令牌和模板投递。`outbound.test.mjs` 增加一条挂住
+  webhook 时微信仍完成投递的端到端用例。
 - 「尊重你的操作」在用户离开浏览器之后朝着反方向静默失效：人去了别的程序，任务反而一次都不再刷新。
   `isTabOnScreen` 原先把两种状态压成一种——"这个 SW 实例还没收到过任何焦点事件"（确实不知道焦点在哪）
   与"最后一个事件是 `WINDOW_ID_NONE`"（已知浏览器不在前台）。后者被当成"未知"，于是回退去问

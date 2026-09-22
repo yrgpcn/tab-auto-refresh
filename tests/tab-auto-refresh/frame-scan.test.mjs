@@ -125,14 +125,13 @@ const fact = (o) =>
   Object.assign({ top: true, title: "", url: "https://a.test/board", w: 1280, h: 900, assets: [] }, o);
 const frames = (...rs) => rs.map((r, i) => ({ frameId: i, result: r }));
 
-test("顶层框架判据与 A3 之前逐条一致", () => {
-  /* 纪律 3：放开多框架不许顺手改变顶层的结论。三条输入分别对应旧实现的三条分支 */
+test("顶层框架只按标题判墙，挑战脚本本身不是页面状态", () => {
+  /* 顶层引入 reCAPTCHA api.js 是普通登录页的常见形状。此前把这份依赖当成墙，
+     连续三次加载后会把正常任务永久自动暂停。真正整页挑战 iframe 由子框架分支判。 */
   assert.equal(decideWallFromFrames(frames(fact({ title: "Attention Required! | Cloudflare" }))), true);
-  assert.equal(decideWallFromFrames(frames(fact({ assets: ["https://challenges.cloudflare.com/x.js"] }))), true);
+  assert.equal(decideWallFromFrames(frames(fact({ assets: ["https://challenges.cloudflare.com/x.js"] }))), false);
   assert.equal(decideWallFromFrames(frames(fact({ title: "正常页面", assets: ["https://a.test/app.js"] }))), false);
-  /* 顶层挂着 reCAPTCHA 挂件也算墙——这是旧行为，A3 原样保留。
-     要不要把它改成"挂件不算墙"是另一个决定，得连着改默认值语义，不在这一条里顺手做 */
-  assert.equal(decideWallFromFrames(frames(fact({ assets: ["https://www.google.com/recaptcha/api.js"] }))), true);
+  assert.equal(decideWallFromFrames(frames(fact({ assets: ["https://www.google.com/recaptcha/api.js"] }))), false);
 });
 
 test("标题正则吃的是标题，不吃正文", () => {
@@ -278,14 +277,13 @@ test("端到端接缝：真跑注入体 + 真判定，A3 要救的那种页面�
     }
   ];
   assert.equal(decideWallFromFrames(results), true);
-  /* 顶层挂着挑战域名 iframe 的那条判据，吃的是真跑注入体回传的那份 assets 列表：
-     键名一旦漂移，纯函数那几条照样绿而这条会红——两层接缝的另一半 */
+  /* 顶层挂着挑战域名的脚本只是依赖，不可单独把页面定成墙。 */
   assert.equal(
     decideWallFromFrames([
       { frameId: 0, result: runCaptchaProbe({ title: "页面加载失败", srcs: ["https://challenges.cloudflare.com/a.js"] }) }
     ]),
-    true,
-    "注入体回的资产列表没被判定读到"
+    false,
+    "挑战脚本被当成页面状态，正常页会被误暂停"
   );
   /* 正常页面带评价 iframe（同尺寸、标题正常、非挑战域名）不许被带下水 */
   assert.equal(

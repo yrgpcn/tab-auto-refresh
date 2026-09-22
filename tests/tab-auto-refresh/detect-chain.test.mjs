@@ -214,6 +214,37 @@ test("墙消失后自动解除暂停，暂停通知跟着收掉", async () => {
   assert.equal(Number(env.store.session["rt:captcha:7"]) || 0, 0, "解除后没清连击计数");
 });
 
+test("关闭验证墙保护立即恢复已因 captcha 暂停的任务", async () => {
+  /* 自动暂停后 alarm 只会 SKIP，页面不再加载；若只把开关关掉而不走设置回流收敛，
+     probeCaptcha 永远没有机会看到“墙消失”，任务会卡在暂停态。 */
+  const env = await bootDetect({
+    tasks: { 7: task({ autoPaused: { reason: "captcha", at: 1 } }) },
+    session: { "rt:captcha:7": 2 }
+  });
+  env.store.sync.settings = Object.assign({}, env.store.sync.settings, { captchaGuard: false });
+  await env.fire.onChanged(
+    { settings: { oldValue: { captchaGuard: true }, newValue: { captchaGuard: false } } },
+    "sync"
+  );
+  await flush();
+  assert.equal(env.store.local.tasks[7].autoPaused, undefined, "关掉守卫后 captcha 暂停仍卡住");
+  assert.ok(env.calls.notifCleared.includes("task-paused-7"), "任务恢复了，旧暂停通知却还留着");
+  assert.equal(Number(env.store.session["rt:captcha:7"]) || 0, 0, "恢复后没清验证码连击计数");
+});
+
+test("关闭验证墙保护不解除错误页暂停", async () => {
+  const env = await bootDetect({
+    tasks: { 7: task({ autoPaused: { reason: "error-page", at: 1 } }) }
+  });
+  env.store.sync.settings = Object.assign({}, env.store.sync.settings, { captchaGuard: false });
+  await env.fire.onChanged(
+    { settings: { oldValue: { captchaGuard: true }, newValue: { captchaGuard: false } } },
+    "sync"
+  );
+  await flush();
+  assert.equal(env.store.local.tasks[7].autoPaused.reason, "error-page", "关 captchaGuard 误恢复了错误页暂停");
+});
+
 test("关掉验证墙守卫时根本不注入探测脚本", async () => {
   const env = await bootDetect({
     tasks: { 7: task() },

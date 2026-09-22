@@ -670,6 +670,23 @@ async function reconcileKeepAlive() {
   }
 }
 
+/* 关闭验证墙保护时收敛已经被它暂停的存量任务。不能等 probeCaptcha：自动暂停的
+   refresh alarm 只会 SKIP，页面不再加载，探测链永远没有下一次机会自行解除。 */
+async function reconcileCaptchaGuard() {
+  try {
+    /* 回流是异步的：若用户在这项收敛排队期间又打开守卫，不能拿旧事件把新设置撤回。 */
+    if ((await getSettings()).captchaGuard) return;
+    const tasks = await getTasks();
+    await Promise.all(
+      Object.entries(tasks)
+        .filter(([, task]) => task && task.autoPaused && task.autoPaused.reason === "captcha")
+        .map(([tabId]) => resumeTaskAuto(Number(tabId)))
+    );
+  } catch (e) {
+    console.warn("reconcile captcha guard failed:", e);
+  }
+}
+
 
 /* 快捷键没有显式间隔，复用最近一次手动任务的实际间隔 */
 async function rememberLastInterval(seconds) {
@@ -1097,8 +1114,10 @@ async function notifyOut(event, payload) {
     payload && payload.url
       ? Object.assign({}, payload, { url: outboundUrl(payload.url) })
       : payload;
-  await postWebhook(event, out);
-  await postWechat(event, out);
+  /* 两个出口互不依赖。串行等待会让 webhook 的 15 秒超时把微信也堵住；两条仍须
+     await，不能裸甩，否则 MV3 Service Worker 回收会截断尚未完成的投递。各出口自己
+     把网络失败收敛成最近一次结果，所以其中一条失败不妨碍另一条完成。 */
+  await Promise.all([postWebhook(event, out), postWechat(event, out)]);
 }
 
 /* 备份该主机及全部父域的 cookie；按主机独立存储；仅在与监控目标同根域且开关开启时执行 */
@@ -1753,6 +1772,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
       }
     })();
   }
+  /* 已因 captcha 暂停的任务不会再触发页面加载，不能依赖 probeCaptcha 的自愈分支。 */
+  if (touched("captchaGuard") && !n.captchaGuard) void reconcileCaptchaGuard();
   if (!(["keepAlive", "httpHeartbeat", "skipOnActivity", "keepAwake"].some(touched))) return;
   reconcileKeepAlive();
 });

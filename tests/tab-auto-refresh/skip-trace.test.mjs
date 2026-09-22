@@ -404,8 +404,13 @@ test("renderCountdowns 每秒填 skip 节点，空文字时连 hidden 一起管"
 test("痕迹跟着倒计时每秒重读：alarm 触发不触发 storage.onChanged", () => {
   const src = slice("syncAlarms");
   assert.match(src, /await syncSkipTraces\(\);/, "只在打开弹窗时读一次，开着也看不到新解释");
+  const poll = slice("pollAlarms");
+  assert.match(poll, /alarmPollInFlight/, "慢轮询会与下一秒轮询交错回写");
+  assert.match(poll, /document\.visibilityState === "hidden"/, "隐藏的弹窗仍在无意义轮询");
+  assert.match(poll, /await syncAlarms\(\);\s*\n\s*renderCountdowns\(\);/);
   const tick = POPUP_SRC.slice(POPUP_SRC.indexOf("setInterval("));
-  assert.match(tick.slice(0, 400), /await syncAlarms\(\);\s*\n\s*renderCountdowns\(\);/);
+  assert.match(tick.slice(0, 400), /void pollAlarms\(\);/, "定时器没有走串行轮询入口");
+  assert.match(tick.slice(0, 600), /visibilityState === "visible"[\s\S]*void pollAlarms\(\);/, "重新显示时没立即补同步");
 });
 
 test(".skip 只上色不声明 display，全局 [hidden] 规则还在", () => {
