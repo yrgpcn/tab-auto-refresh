@@ -4,11 +4,11 @@
 
 ## 当前阶段
 
-- Project Orchestrator 基础迁移已完成并进入 `main`；当前通过 Issue #6 / `chore/orchestrator-v1.4` 升级到 **Project Orchestrator v1.4**。
-- v1.4 版本契约由根目录 `.project-orchestrator.yml` 声明，后续升级策略为 `manual-pr`。
+- tab-auto-refresh 已采用 **Project Orchestrator v1.4**。
+- v1.4 升级 Issue #6 已关闭；PR #7 已于 2026-09-29 squash merge，合并提交：`2503348f056581db6ede5d2ff2eb3a32abc47bd3`。
+- 版本契约由根目录 `.project-orchestrator.yml` 声明，后续升级策略为 `manual-pr`。
 - v1.4 按任务类型动态路由：Chat 负责规划/Review/授权，WorkBuddy 负责真实 Chrome/跨工具/发布环境执行，Codex 负责仓库实现，Runner/CI 独立负责自动验证。
-- 原迁移 Issue #2 已关闭；PR #5 已于 2026-09-29 squash merge，合并提交 `0548ac32adc0419bc656e4f13446030931fe1c29`。
-- 当前产品版本仍为 `2.1.0`；Orchestrator 升级不修改扩展产品代码、权限、manifest 行为、版本号或 release 语义。
+- 当前产品版本仍为 `2.1.0`；Orchestrator 升级没有修改扩展产品代码、权限、manifest 行为、版本号或 release 语义。
 - GitHub Issues / Pull Requests + `docs/STATE.md` 是当前状态、任务生命周期、执行与 Review 的权威体系。
 - `AGENTS.md` 保留被测试直接对账的技术契约与长期工程约束，但不承担当前状态、活跃任务或执行授权的权威职责。
 - `BACKLOG.md` 仅为迁移前历史参考，不再新增活跃任务。
@@ -35,18 +35,17 @@
 |---|---:|---|---|
 | V1 | #3 | `status:planning` / `agent:workbuddy` | Chrome 真机手工验证；不自动授权产品修改 |
 | 发版 | #4 | `status:planning` / `agent:chat` | 决定并执行 2.1.0 之后累计改动的下一版本；未授权自动发版、改版本或打/推 tag |
-| Orchestrator v1.4 | #6 | `status:planning` / `agent:chat` | 升级动态路由、Runner 验证语义与显式版本契约；不改产品行为 |
 
-原迁移 Issue #2 与 PR #5 均为 `status:done`。新任务直接创建 GitHub Issue，不再向 `BACKLOG.md` 增加活跃待办。
+Issue #6 与 PR #7 均为 `status:done`。新任务直接创建 GitHub Issue，不再向 `BACKLOG.md` 增加活跃待办。
 
 ## 自动化与 Runner
 
+- Runner / CI 在 v1.4 中是独立自动验证层，不使用 `agent:runner`；Codex 本地测试不能替代要求的 CI。
+- PR #7 的 GitHub-hosted CI **真实执行并成功**：Validate manifests/locales/JS syntax 与 Unit tests 两个主要步骤均成功；Orchestrator PR Check 也成功。
 - 现有 `.github/workflows/ci.yml` / `release.yml` 保持原行为；
-- Runner / CI 在 v1.4 中是独立自动验证层，不使用 `agent:runner`；Codex 本地测试不能替代要求的 CI；
 - CI 失败先分类：仓库代码/测试/build 逻辑 → Codex；runner/浏览器/网络/credential/真实环境 → WorkBuddy；期望行为或发布授权不清 → Chat；
 - 本仓库是 public，CI 与 Orchestrator 自动化继续使用 GitHub-hosted runner；不把公共 PR 任意代码接到个人 self-hosted runner；
 - `.github/workflows/orchestrator-state-router.yml` 使用 `pull_request_target` 只处理标签元数据，**不得 checkout、执行或 eval PR 提供的代码**；
-- PR #5 最终验证：`node scripts/validate.mjs` 成功；单测 `637 / 637` 通过；Orchestrator PR Check 成功；
 - Merge 时标签初始化竞态已由提交 `acea533cd333ad1f9cebfef4ef922126861cbe56` 修复。
 
 ## AGENTS 技术契约特例
@@ -69,7 +68,7 @@
 
 ## 下一动作
 
-完成 v1.4 升级 PR 后，由用户选择并明确授权下一项工作：优先可进入 Issue #3 的 V1 真机验证；Issue #4 的发版决定依赖用户明确确认发布时机与版本号。两者均不会因为 Orchestrator 升级而自动执行。
+由用户选择并明确授权下一项工作：优先可进入 Issue #3 的 V1 真机验证；Issue #4 的发版决定依赖用户明确确认发布时机与版本号。两者均不会因为 Orchestrator 升级而自动执行。
 
 ## 维护规则
 
