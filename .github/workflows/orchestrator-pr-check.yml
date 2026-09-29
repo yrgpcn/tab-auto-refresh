@@ -1,0 +1,32 @@
+name: Orchestrator PR Check
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate-pr-body:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检查必需章节
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request.body || '';
+            const required = [
+              '## 摘要',
+              '## 关联工作',
+              '## 验证',
+              '## 风险 / 回滚',
+              '## 后续事项'
+            ];
+            const missing = required.filter((heading) => !body.includes(heading));
+            if (missing.length) {
+              core.setFailed(`缺少必需 PR 章节: ${missing.join(', ')}`);
+            } else {
+              core.info('PR 正文结构符合 Project Orchestrator 要求。');
+            }
