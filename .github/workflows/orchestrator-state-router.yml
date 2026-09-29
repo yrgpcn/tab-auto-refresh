@@ -1,0 +1,122 @@
+name: Orchestrator State Router
+
+on:
+  issues:
+    types: [opened, edited, labeled, reopened, closed]
+  pull_request_target:
+    types: [opened, edited, reopened, ready_for_review, converted_to_draft, closed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+# SECURITY: This is a public repository. This workflow intentionally handles
+# metadata only. Never checkout, execute, source, import, or eval PR-provided code here.
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 同步状态与 Agent 标签
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const statuses = {
+              'status:planning': ['FBCA04', '需求、范围、授权或验收标准仍在澄清'],
+              'status:ready': ['0E8A16', '范围和验收标准已足够执行'],
+              'status:implementation': ['1D76DB', '实现、验证或执行正在进行'],
+              'status:review': ['5319E7', '已有可 Review 的结果'],
+              'status:blocked': ['D73A4A', '被权限、依赖、真机条件或未决问题阻塞'],
+              'status:done': ['6A737D', '工作生命周期已结束']
+            };
+            const agents = {
+              'agent:chat': ['C5DEF5', '下一步适合 Chat'],
+              'agent:workbuddy': ['BFDADC', '下一步适合 WorkBuddy'],
+              'agent:codex': ['D4C5F9', '下一步适合 Codex']
+            };
+            const statusNames = Object.keys(statuses);
+            const agentNames = Object.keys(agents);
+
+            async function ensureLabel(name, meta) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name });
+              } catch (e) {
+                if (e.status !== 404) throw e;
+                await github.rest.issues.createLabel({ owner, repo, name, color: meta[0], description: meta[1] });
+              }
+            }
+
+            for (const [name, meta] of Object.entries({ ...statuses, ...agents })) {
+              await ensureLabel(name, meta);
+            }
+            if (context.eventName === 'workflow_dispatch') return;
+
+            async function currentLabels(number) {
+              const r = await github.rest.issues.get({ owner, repo, issue_number: number });
+              return r.data.labels.map((x) => typeof x === 'string' ? x : x.name);
+            }
+
+            async function setExclusive(number, family, target) {
+              const current = await currentLabels(number);
+              const next = current.filter((x) => !family.includes(x));
+              if (target) next.push(target);
+              const deduped = [...new Set(next)];
+              if (JSON.stringify([...current].sort()) !== JSON.stringify([...deduped].sort())) {
+                await github.rest.issues.setLabels({ owner, repo, issue_number: number, labels: deduped });
+              }
+            }
+
+            function routeFromBody(body = '') {
+              const m = body.match(/###\s*建议的下一角色\s*\n+\s*(Chat|WorkBuddy|Codex)\b/i);
+              return m ? `agent:${m[1].toLowerCase()}` : null;
+            }
+
+            if (context.eventName === 'issues') {
+              const issue = context.payload.issue;
+              const n = issue.number;
+              const action = context.payload.action;
+
+              if (action === 'closed') {
+                await setExclusive(n, statusNames, 'status:done');
+                await setExclusive(n, agentNames, null);
+                return;
+              }
+
+              if (action === 'reopened') {
+                await setExclusive(n, statusNames, 'status:planning');
+              }
+
+              const current = await currentLabels(n);
+              if (!current.some((x) => statusNames.includes(x))) {
+                await setExclusive(n, statusNames, 'status:planning');
+              }
+
+              if (action === 'labeled') {
+                const added = context.payload.label?.name;
+                if (statusNames.includes(added)) await setExclusive(n, statusNames, added);
+                if (agentNames.includes(added)) await setExclusive(n, agentNames, added);
+              }
+
+              const route = routeFromBody(issue.body || '');
+              if (route && ['opened', 'edited', 'reopened'].includes(action)) {
+                await setExclusive(n, agentNames, route);
+              }
+              return;
+            }
+
+            if (context.eventName === 'pull_request_target') {
+              const pr = context.payload.pull_request;
+              const n = pr.number;
+              if (context.payload.action === 'closed') {
+                await setExclusive(n, statusNames, 'status:done');
+                await setExclusive(n, agentNames, null);
+              } else if (pr.draft) {
+                await setExclusive(n, statusNames, 'status:implementation');
+                await setExclusive(n, agentNames, 'agent:codex');
+              } else {
+                await setExclusive(n, statusNames, 'status:review');
+                await setExclusive(n, agentNames, 'agent:chat');
+              }
+            }

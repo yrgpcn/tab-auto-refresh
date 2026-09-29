@@ -1,0 +1,45 @@
+name: 工作项
+description: 记录功能、缺陷、调查、验证或发布工作
+title: "[Task]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题
+      description: 需要解决或确认什么？
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 期望结果
+      description: 完成后应该达到什么可验证状态？
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: 约束
+      description: 安全、兼容、许可证、i18n、发布、真机或授权边界。
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: Close / Merge 前必须验证什么？
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 依赖 / Blocker
+  - type: dropdown
+    id: next_role
+    attributes:
+      label: 建议的下一角色
+      options:
+        - Chat
+        - WorkBuddy
+        - Codex
+        - 不确定 / 需要 Triage
+    validations:
+      required: true

@@ -1,7 +1,8 @@
 # AGENTS.md
 
-项目记忆：给在本仓库工作的 AI 助手和协作者。版本历史看 `CHANGELOG.md`，
-还没修的账看 `BACKLOG.md`（只记活着的账；结案经过记在 `CHANGELOG.md` 和对应门禁文件末尾）。
+> Project Orchestrator 现在是项目当前状态、任务与 Review 的权威体系。接手先读 docs/STATE.md，再检查当前 GitHub Issues / Pull Requests。
+> 本文件从这里往下保留的是被测试直接对账的技术契约与长期工程约束，不再承担当前任务清单或项目状态记忆。
+> BACKLOG.md 仅作迁移前历史参考；活跃工作以 GitHub Issues 为准。历史审计记录也不等同于新的执行授权。
 
 ## 仓库
 
