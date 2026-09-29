@@ -42,9 +42,18 @@ jobs:
             async function ensureLabel(name, meta) {
               try {
                 await github.rest.issues.getLabel({ owner, repo, name });
+                return;
               } catch (e) {
                 if (e.status !== 404) throw e;
+              }
+
+              try {
                 await github.rest.issues.createLabel({ owner, repo, name, color: meta[0], description: meta[1] });
+              } catch (e) {
+                const alreadyExists = e.status === 422 &&
+                  e.response?.data?.errors?.some((x) => x.resource === 'Label' && x.code === 'already_exists');
+                if (!alreadyExists) throw e;
+                core.info(`Label ${name} was created concurrently; continuing.`);
               }
             }
 
