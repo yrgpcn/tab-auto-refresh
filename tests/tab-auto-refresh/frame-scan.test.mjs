@@ -334,7 +334,7 @@ const PAGE = "https://a.test/board";
 const task = (over) => Object.assign({ intervalSec: 300, createdAt: 1, url: PAGE }, over);
 
 async function boot({ tasks, settings } = {}) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.tasks = tasks || {};
   env.store.sync.settings = Object.assign(
     { keepAlive: false, httpHeartbeat: false, cookieBackup: false, captchaGuard: true },

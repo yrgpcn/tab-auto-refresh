@@ -32,8 +32,9 @@ const BG = process.env.TAR_BG
   : new URL("../../tab-auto-refresh/background.js", import.meta.url).href;
 let importSeq = 0;
 
-export function makeEnv() {
-  const store = { local: {}, sync: {}, session: {} };
+export function makeEnv({ startupComplete = false } = {}) {
+  // 运行中事件用例显式声明已恢复；冷启动用例保持空 session，不能默认绕过屏障。
+  const store = { local: {}, sync: {}, session: startupComplete ? { "rt:pruneDone": Date.now() } : {} };
   const calls = {
     syncGet: 0,
     localGet: 0,

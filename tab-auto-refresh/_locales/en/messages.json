@@ -68,7 +68,7 @@
   "restrictHint": { "message": "Browser internal pages (chrome:// etc.) cannot be auto-refreshed" },
   "errRestricted": { "message": "Browser internal pages (chrome:// etc.) cannot be auto-refreshed" },
   "cookieBackupLabel": { "message": "Restore login (plaintext)" },
-  "cookieBackupHint": { "message": "Plaintext local Cookie backup; attempts restoration after restart without guaranteeing login. Partitioned Cookies, other Cookie stores, site storage and cross-site SSO are unsupported. Disabling clears backups" },
+  "cookieBackupHint": { "message": "Plaintext local Cookie backup; attempts restoration without guaranteeing login. Conflicting live values or API failures protect old backups; after confirming login, disable to clear, then enable to rebuild. Partitioned Cookies, other stores, site storage and cross-site SSO are unsupported. Disabling clears backups" },
   "keepAliveLabel": { "message": "Keep alive" },
   "keepAliveHint": { "message": "Periodically injects simulated mouse/keyboard activity into the monitored page to delay server-side login expiry timed by user interaction" },
   "httpHeartbeatLabel": { "message": "Silent heartbeat" },

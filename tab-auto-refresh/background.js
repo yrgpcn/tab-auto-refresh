@@ -17,7 +17,7 @@ import {
   decideWallFromFrames,
   decideCookieRecovery,
   shouldReloadCookiePage,
-  hasLiveCookie,
+  decideCookieRestore,
   domainChain,
   hostOf,
   isErrorStatus,
@@ -435,8 +435,19 @@ async function pruneCookieBackups(remainingTasks) {
   }
   await pruneStaleProbes(roots);
   const entries = await readBackupEntries();
-  if (!(await getSettings()).cookieBackup) {
-    if (entries.length > 0) await chrome.storage.local.remove(entries.map((e) => e.key));
+  const enabled = (await getSettings()).cookieBackup;
+  /* 删除成功后才解除保护；清理失败不能让下一次开启覆盖仍在的旧票据。 */
+  if (!enabled && entries.length > 0) await chrome.storage.local.remove(entries.map((e) => e.key));
+  await rt(async () => {
+    const data = await chrome.storage.session.get(RT_COOKIE_STATUS);
+    const previous = data[RT_COOKIE_STATUS];
+    if (!previous) return;
+    const kept = Object.fromEntries(Object.entries(previous).filter(([root]) => enabled && roots.has(root)));
+    if (Object.keys(kept).length !== Object.keys(previous).length) {
+      await chrome.storage.session.set({ [RT_COOKIE_STATUS]: kept });
+    }
+  });
+  if (!enabled) {
     return;
   }
   const now = Date.now();
@@ -486,6 +497,8 @@ const RT_SKIP = SKIP_RT_PREFIX;
    很久才打开，那时这个实例是新的），随浏览器重启清零（下一轮恢复要重新等） */
 const RT_PRUNE_DONE = "rt:pruneDone";
 const RT_COOKIE_RELOAD = "rt:cookieReload";
+/* 根域 → 固定 kind/时间；没有 Cookie 名称、值或请求地址，跨 SW 保留档案保护状态。 */
+const RT_COOKIE_STATUS = "rt:cookieRecovery";
 const rtTab = (base, tabId) => base + ":" + tabId;
 /* 一个标签页在会话态里的键分两份清单（A17）。rtRoundKeys 是"上一轮的结论"：两条连击计数
    加上"上次到点为什么被跳过"。凡任务搬离一个 id、或在同一个 id 上重新开始，这几条就都不成立
@@ -521,6 +534,25 @@ async function rtSet(key, value) {
 
 async function rtRemove(key) {
   await rt(() => chrome.storage.session.remove(key));
+}
+
+async function protectCookieArchive(root, kind) {
+  let saved = false;
+  await rt(async () => {
+    const data = await chrome.storage.session.get(RT_COOKIE_STATUS);
+    const all = data[RT_COOKIE_STATUS] || {};
+    const previous = all[root];
+    all[root] = { kind: previous?.kind === "conflict-unverified" ? previous.kind : kind, at: Date.now() };
+    await chrome.storage.session.set({ [RT_COOKIE_STATUS]: all });
+    saved = true;
+  });
+  /* 无法持久化保护时恢复不能标记收尾，否则下一事件会覆写受保护档案。 */
+  if (!saved) throw new Error("Cookie archive protection unavailable");
+}
+
+async function cookieArchiveProtected(root) {
+  const data = await chrome.storage.session.get(RT_COOKIE_STATUS);
+  return !!data[RT_COOKIE_STATUS]?.[root];
 }
 
 /* 连击计数 +1 并返回新值（读改写整体入队） */
@@ -1157,6 +1189,9 @@ async function backupCookies(tabId) {
     const tasks = await getTasks();
     const task = tasks[tabId];
     if (!task || !sameSite(host, hostOf(task.url))) return;
+    const root = siteRoot(host);
+    if (await cookieArchiveProtected(root)) return;
+    if (looksLikeLoginPage(tab.url) && !looksLikeLoginPage(task.url)) return;
     const seen = new Map();
     let queried = 0;
     let queryFailed = false;
@@ -1198,8 +1233,10 @@ async function backupCookies(tabId) {
        采样就被污染。timestamp 保持最后有效备份时间，长期冻结的备份由 30 天 TTL 淘汰 */
     const prevEntry = (await chrome.storage.local.get(key))[key];
     /* 查询挂起期间可能开始恢复或关闭开关；旧采样绝不跨这两个边界落盘。 */
+    const enabled = (await getSettings()).cookieBackup;
+    const protectedArchive = await cookieArchiveProtected(root);
     if (epoch !== settingsEpoch || recoveryEpoch !== cookieRecoveryEpoch || pruneFlight ||
-        !(await getSettings()).cookieBackup) return;
+        !enabled || protectedArchive) return;
     /* 决策与写盘映射是同一个纯函数：write=null 表示冻结且处于通知节流期，什么都不写 */
     const act = applyBackupAction(prevEntry, capped, now);
     if (act.write) {
@@ -1228,12 +1265,13 @@ async function backupCookies(tabId) {
 /* 登录完成后地址通常离开登录页；保持任务里的网址最新，自动重开才会打开实际页面。
    判据是纯函数 shouldAdoptTaskUrl：同站、且新地址不是登录页（A14） */
 function refreshTaskUrl(tabId) {
+  const epoch = cookieRecoveryEpoch;
   return withTaskLock(async () => {
-    if (pruneFlight) return;
+    if (pruneFlight || epoch !== cookieRecoveryEpoch) return;
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     const tasks = await getTasks();
     const t = tasks[tabId];
-    if (pruneFlight) return;
+    if (pruneFlight || epoch !== cookieRecoveryEpoch) return;
     if (!tab || !tab.url || !t || !t.url) return;
     if (shouldAdoptTaskUrl(t.url, tab.url)) {
       tasks[tabId] = Object.assign({}, t, { url: tab.url });
@@ -1244,6 +1282,7 @@ function refreshTaskUrl(tabId) {
 
 /* 恢复某个主机备份的 cookie；返回是否至少恢复成功一条 */
 async function restoreCookies(host) {
+  const root = siteRoot(host);
   try {
     const key = COOKIE_BACKUP_PREFIX + host;
     const data = await chrome.storage.local.get(key);
@@ -1255,12 +1294,28 @@ async function restoreCookies(host) {
     }
     const nowSec = Date.now() / 1000;
     let restored = 0;
+    let conflicts = 0;
+    let failed = 0;
     for (const c of entry.cookies) {
       if (!(await getSettings()).cookieBackup) return false;
       if (c.expirationDate && c.expirationDate < nowSec) continue; /* 已过期的跳过 */
       /* 只查已收敛的条目域，不增加采集边界；读取失败时不贸然覆盖现场票据。 */
-      const live = await chrome.cookies.getAll({ domain: String(c.domain || "").replace(/^\./, "") });
-      if (hasLiveCookie(c, live, nowSec)) continue;
+      let live;
+      try {
+        live = await chrome.cookies.getAll({ domain: String(c.domain || "").replace(/^\./, "") });
+      } catch (e) {
+        failed++;
+        await protectCookieArchive(root, "read-failed");
+        continue; /* 单条查询失败隔离：不覆盖未知现场，也不丢其它条目的写入结果 */
+      }
+      const action = decideCookieRestore(c, live, nowSec);
+      if (!(await getSettings()).cookieBackup) return false;
+      if (action === "conflict-unverified") {
+        conflicts++;
+        await protectCookieArchive(root, action);
+        continue;
+      }
+      if (action === "same-value") continue;
       const url =
         (c.secure ? "https://" : "http://") +
         String(c.domain || "").replace(/^\./, "") + (c.path || "/");
@@ -1287,13 +1342,18 @@ async function restoreCookies(host) {
           result = await chrome.cookies.set(Object.assign({ domain: c.domain }, base));
         }
         if (result) restored += 1;
+        else failed++;
       } catch (e) {
-        /* 个别 cookie 不可写（公共后缀限制等）跳过 */
+        failed++;
       }
     }
+    if (failed) await protectCookieArchive(root, "api-failed");
+    if (conflicts) console.info("Cookie restore: conflict-unverified; existing cookies preserved; archive protected; authenticate then explicitly reset backup", "count", conflicts);
+    if (failed) console.info("Cookie restore: api-failed; archive protected; login unverified", "count", failed);
     console.info("Cookie restore:", restored > 0 ? "cookie-write-ok (login unverified)" : "no-cookie-written (existing or unusable; login unverified)", "count", restored);
     return restored > 0;
   } catch (e) {
+    await protectCookieArchive(root, "api-failed");
     console.warn("Cookie restore failed (login unverified)");
     return false;
   }
@@ -1464,9 +1524,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     return;
   }
   if (!alarm.name.startsWith(PREFIX)) return;
+  if (await cookieRecoveryPending()) return; /* 无备份也必须先认领，旧 ID 不可 STOP/reload/arm */
+  const epoch = cookieRecoveryEpoch;
   const tabId = Number(alarm.name.slice(PREFIX.length));
   const [tasks, pausedAll] = await Promise.all([getTasks(), isPausedAll()]);
   const task = tasks[tabId];
+  if (pruneFlight || epoch !== cookieRecoveryEpoch) return;
   if (!task) {
     await chrome.alarms.clear(alarm.name);
     return;
@@ -1490,6 +1553,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     /* 可见性只有 skipOnActivity 开着时才用得上，未开就别为每次触发多问两回窗口焦点 */
     tabIsVisible: settings.skipOnActivity ? await isTabOnScreen(tab) : false
   });
+  if (pruneFlight || epoch !== cookieRecoveryEpoch) return;
   if (verdict.action === ALARM_ACT.STOP) {
     await stopTaskWithNotice(tabId, verdict.reason);
     return;
@@ -1522,12 +1586,15 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   const task = tasks[tabId];
   if (!task) return; /* 快照与存储有竞态时以存储为准 */
   if (await cookieRecoveryPending()) return;
+  const epoch = cookieRecoveryEpoch;
   /* 掉线行为信号：任务页最终落在登录页 URL，说明服务器把你重定向去登录了。
      监控对象本身就是登录页时此信号不适用（会永远命中） */
   const cur = changeInfo.url || (await chrome.tabs.get(tabId).catch(() => null))?.url || "";
   const loginSuspect = looksLikeLoginPage(cur) && !looksLikeLoginPage(task.url);
   await reportSessionSignal(siteRoot(hostOf(task.url)), hostOf(task.url), loginSuspect);
+  if (pruneFlight || epoch !== cookieRecoveryEpoch) return;
   await backupCookies(tabId);
+  if (pruneFlight || epoch !== cookieRecoveryEpoch) return;
   await refreshTaskUrl(tabId);
   void startDetectChain(tabId); /* 关键词检测链（立即 + 3s + 10s 有界重采样） */
   /* 保活与活动监听：每次加载完成同步注入与配置 */
@@ -1636,8 +1703,7 @@ let restoringCookiePages = null;
 async function cookieRecoveryPending() {
   if (pruneFlight) return true;
   const pruneDone = await rtGet(RT_PRUNE_DONE);
-  const action = decideCookieRecovery({ inFlight: !!pruneFlight, pruneDone,
-    hasBackups: !pruneDone && (await readBackupEntries()).length > 0 });
+  const action = decideCookieRecovery({ inFlight: !!pruneFlight, pruneDone });
   if (action === "recover") await runPrune(false);
   return action !== "sample"; /* 恢复前产生的事件不是有效新样本 */
 }

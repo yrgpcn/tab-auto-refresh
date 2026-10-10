@@ -35,7 +35,7 @@ const SETTINGS = {
 
 async function boot({ url, tabUrl, tasks, settings, probe, backups, tabs } = {}) {
   const page = url || "https://shop.example.co.nz/board";
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.tasks =
     tasks === undefined ? { 7: { intervalSec: 300, createdAt: 1, url: page } } : tasks;
   if (probe) env.store.local.sessionProbe = probe;
@@ -214,7 +214,7 @@ test("hostOnly 三种取值各走各路：专属票省略 domain，域票照写�
     url: "https://shop.example.com/board",
     backups: { [ck(host)]: entry }
   });
-  await env.fire.startup();
+  delete env.store.session["rt:pruneDone"]; await env.fire.startup();
   const byName = Object.fromEntries(env.calls.cookieSet.map((c) => [c.name, c]));
   assert.deepEqual(Object.keys(byName).sort(), ["domain-scope", "hostonly", "v1-unknown"]);
   /* __Host- 这类专属票据带 domain 写入会失败或扩大作用域，必须靠 url 推导 */
@@ -241,7 +241,7 @@ test("历史越界备份先收敛再恢复：别家站点的票据一次都不�
       }
     }
   });
-  await env.fire.startup();
+  delete env.store.session["rt:pruneDone"]; await env.fire.startup();
   assert.deepEqual(
     env.calls.cookieSet.map((c) => c.name),
     ["mine"],
@@ -262,7 +262,7 @@ test("键本身是公共后缀的遗留备份整条删掉，不留空壳", async
       }
     }
   });
-  await env.fire.startup();
+  delete env.store.session["rt:pruneDone"]; await env.fire.startup();
   assert.equal(env.store.local[ck("co.nz")], undefined, "整条都属于别人的备份还留着");
   assert.deepEqual(env.calls.cookieSet, [], "后缀键里的条目被恢复了");
 });
@@ -277,7 +277,7 @@ test("备份开关关着时，遗留备份在启动恢复里被清空", async ()
       }
     }
   });
-  await env.fire.startup();
+  delete env.store.session["rt:pruneDone"]; await env.fire.startup();
   assert.equal(stored(env, "shop.example.co.nz"), undefined, "关着开关还留着明文票据");
   assert.deepEqual(env.calls.cookieSet, []);
 });
@@ -291,7 +291,7 @@ test("恢复只碰被监控的注册域，不替别的站点回灌 cookie", asyn
       }
     }
   });
-  await env.fire.startup();
+  delete env.store.session["rt:pruneDone"]; await env.fire.startup();
   assert.deepEqual(env.calls.cookieSet, []);
   /* 没被任何任务使用的备份由 pruneCookieBackups 收掉 */
   assert.equal(env.store.local[ck("quiet.example.com")], undefined);
@@ -332,14 +332,14 @@ const STRANDED = {
 
 test("没有任何任务时，清单上说没有的存档也要全部删掉", async () => {
   const env = await boot({ tasks: {}, backups: STRANDED });
-  await env.fire.startup();
+  delete env.store.session["rt:pruneDone"]; await env.fire.startup();
   /* 期望是空表：遗留的 cookieBackupHosts 键本身不带冒号，不算存档，但它也不该参与任何判断 */
   assert.deepEqual(allBackups(env), [], "清单之外的明文存档成了删不掉的死数据");
 });
 
 test("关掉备份开关时，清单之外的存档同样被清空", async () => {
   const env = await boot({ settings: { cookieBackup: false }, tasks: {}, backups: STRANDED });
-  await env.fire.startup();
+  delete env.store.session["rt:pruneDone"]; await env.fire.startup();
   assert.deepEqual(allBackups(env), [], "关着开关还留着明文票据");
   assert.deepEqual(env.calls.cookieSet, []);
 });
@@ -365,7 +365,7 @@ test("存档清单那个键不许回到后台源码里", () => {
 test("备份只有一个读法：全量扫，从不按清单定向读", async () => {
   const env = await boot({ backups: STRANDED });
   const seen = watchLocalGet(env);
-  await env.fire.startup();
+  delete env.store.session["rt:pruneDone"]; await env.fire.startup();
   assert.ok(
     seen.every((s) => !(Array.isArray(s) && s.some((k) => String(k).startsWith("cookieBackup")))),
     `出现了按键名清单的定向读：${JSON.stringify(seen)}`

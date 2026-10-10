@@ -26,20 +26,22 @@ function privateSuffixSize(parts) {
 export const MIN_INTERVAL_SEC = 30;
 export const DEFAULT_INTERVAL_SEC = 300;
 
-export function decideCookieRecovery({ inFlight, pruneDone, hasBackups }) {
-  return inFlight ? "defer" : pruneDone || !hasBackups ? "sample" : "recover";
+export function decideCookieRecovery({ inFlight, pruneDone }) {
+  return inFlight ? "defer" : pruneDone ? "sample" : "recover";
 }
 
 export function shouldReloadCookiePage({ restored, loadedBeforeRestore, reloaded }) {
   return !!restored && !!loadedBeforeRestore && !reloaded;
 }
 
-/* 已由 Chrome 保留/重新签发的同名票据优先，不把旧备份盖回活动会话。 */
-export function hasLiveCookie(cookie, live, nowSec) {
+/* 同名票据的存在不代表已认证。同值无需回写；异值身份不明，保护双方并留诊断。 */
+export function decideCookieRestore(cookie, live, nowSec) {
   const domain = (d) => String(d || "").replace(/^\./, "").toLowerCase();
-  return (live || []).some((item) => item.name === cookie.name &&
+  const matching = (live || []).filter((item) => item.name === cookie.name &&
     domain(item.domain) === domain(cookie.domain) && (item.path || "/") === (cookie.path || "/") &&
     (!item.expirationDate || item.expirationDate > nowSec));
+  if (matching.some((item) => item.value !== cookie.value)) return "conflict-unverified";
+  return matching.length ? "same-value" : "restore";
 }
 
 /* 外发通知的事件清单，webhook 与微信直连共用一份。

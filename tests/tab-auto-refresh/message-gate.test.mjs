@@ -39,7 +39,7 @@ const task = (over) => Object.assign({ intervalSec: 300, createdAt: 1, url: PAGE
 const pageSender = { id: "extension-self", tab: { id: 7, accountId: "" }, url: PAGE };
 
 async function boot({ tasks = {}, settings } = {}) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.tasks = tasks;
   env.store.sync.settings = settings || {
     keepAlive: false,

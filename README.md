@@ -64,7 +64,7 @@
 
 登录保持默认关闭。开启后，插件把监控站点的 cookie（含 HttpOnly 的登录票据）备份到本机的扩展存储 `chrome.storage.local`。这一层不加密：任何能读取浏览器配置目录的程序都能直接取走这些登录票据，安全性低于 Chrome 自身的加密 cookie 库。备份最多保留 20 个站点、30 天。请只在信任本机环境、且确有重启保登录需求时开启；不需要时保持关闭，关闭状态下不备份、不恢复，遗留备份也会被自动清除。
 
-恢复 Cookie 不等于服务端接受登录：已过期或被服务器作废的票据、MFA/风控、Chrome 退出清理策略都可能要求重新登录。仅支持当前执行上下文 Cookie store 的未分区 Cookie，不备份 LocalStorage、IndexedDB、分区 Cookie 或其他 store，不保证跨独立站点 SSO。扩展 Service Worker 控制台的 `Cookie restore` 只报告写入条数与 `login unverified` / `no-usable-backup` / `no-cookie-written`，不输出 Cookie 值、名称、URL 或 API 错误正文。Chrome 现存的同名票据优先保留。重启恢复期间暂缓页面/心跳采样，保留旧备份；恢复后已经加载的受影响任务页最多补刷新一次，新建页或仍在加载的页无需补刷新。未启用该开关时只恢复任务，不承诺恢复登录。Cookie API 的默认 store 与分区行为见 [Chrome 官方文档](https://developer.chrome.com/docs/extensions/reference/api/cookies)。
+恢复 Cookie 不等于服务端接受登录：已过期或被服务器作废的票据、MFA/风控、Chrome 退出清理策略都可能要求重新登录。仅支持当前执行上下文 Cookie store 的未分区 Cookie，不备份 LocalStorage、IndexedDB、分区 Cookie 或其他 store，不保证跨独立站点 SSO。扩展 Service Worker 控制台的 `Cookie restore` 只报告写入条数与 `login unverified` / `no-usable-backup` / `no-cookie-written`，不输出 Cookie 值、名称、URL 或 API 错误正文。同名、同域、同路径、未过期而值不同的现存票据无法区分游客会话与新登录：保留浏览器现值，报告 `conflict-unverified`，并冻结该注册域旧备份，防止游客/登录页采样覆盖旧登录票据。单条 Cookie 查询或写入失败同样保护备份，其它成功写入仍计数并补刷新。保护状态在本轮浏览器会话中跨 SW 保留；普通 2xx、离开登录页或现存会话 Cookie 都不能证明登录有效，也不会解除保护。用户确认重新登录后，可关闭开关等待旧备份清理完毕、再开启重新建立备份；该重置会删除旧存档。所有启动恢复（含默认关闭、没有备份）在任务认领完成前暂缓历史刷新 alarm、URL 跟随及页面/心跳采样，保留旧备份；恢复后已经加载的受影响任务页最多补刷新一次，新建页或仍在加载的页无需补刷新。未启用该开关时只恢复任务，不承诺恢复登录。Cookie API 的默认 store 与分区行为见 [Chrome 官方文档](https://developer.chrome.com/docs/extensions/reference/api/cookies)。
 
 PRIVATE 后缀边界来自随扩展打包的 [Public Suffix List](https://publicsuffix.org/list/) 快照（2026-10-10，MPL-2.0 数据）；没有运行时下载。快照更新应单独验证租户、wildcard 与 exception 边界。ICANN 域仍沿用现有保守形状规则，尚未宣称完整 PSL 覆盖。
 

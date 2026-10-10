@@ -43,7 +43,7 @@ const WX = {
 };
 
 async function boot({ tasks, settings } = {}) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   /* 默认不放标签页：refresh-7 到点时发现页不在了，才会走 stopTaskWithNotice → notifyOut */
   env.store.local.tasks = tasks === undefined ? { 7: task() } : tasks;
   env.store.sync.settings = Object.assign(

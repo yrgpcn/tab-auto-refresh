@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { makeEnv, bootBackground } from "../helpers/background-harness.mjs";
-import { siteRoot, domainChain, decideCookieRecovery, shouldReloadCookiePage, hasLiveCookie } from "../../tab-auto-refresh/shared/logic.js";
+import { siteRoot, domainChain, decideCookieRecovery, shouldReloadCookiePage, decideCookieRestore } from "../../tab-auto-refresh/shared/logic.js";
 
 const url = "https://shop.example.com/board";
 const key = "cookieBackup:shop.example.com";
@@ -100,20 +100,21 @@ test("PRIVATE suffix tenants are independent sites", () => {
 
 test("recovery decisions expose sequence and one-reload rules", () => {
   assert.equal(decideCookieRecovery({ inFlight: true, pruneDone: 1 }), "defer");
-  assert.equal(decideCookieRecovery({ hasBackups: true }), "recover");
-  assert.equal(decideCookieRecovery({ pruneDone: 1, hasBackups: true }), "sample");
+  assert.equal(decideCookieRecovery({}), "recover", "no backup still requires task reclamation");
+  assert.equal(decideCookieRecovery({ pruneDone: 1 }), "sample");
   assert.equal(shouldReloadCookiePage({ restored: true, loadedBeforeRestore: true }), true);
   assert.equal(shouldReloadCookiePage({ restored: true, loadedBeforeRestore: false }), false);
   assert.equal(shouldReloadCookiePage({ restored: true, loadedBeforeRestore: true, reloaded: true }), false);
-  assert.equal(hasLiveCookie({ name: "sid", domain: ".a.test" }, [{ name: "sid", domain: "a.test", value: "new" }], 1), true);
+  assert.equal(decideCookieRestore({ name: "sid", domain: ".a.test", value: "old" }, [{ name: "sid", domain: "a.test", value: "new" }], 1), "conflict-unverified");
 });
 
-test("loaded with live cookie or still loading needs no extra reload", async () => {
+test("unverified conflicting live cookie or still loading needs no extra reload", async () => {
   const env = await boot();
   env.setCookies([{ ...env.store.local[key].cookies[0], value: "browser-newer-ticket" }]);
   await env.fire.startup();
   assert.equal(env.calls.cookieSet.length, 0);
   assert.deepEqual(env.calls.reloaded, []);
+  assert.equal(env.store.session["rt:cookieRecovery"]?.["example.com"]?.kind, "conflict-unverified");
   const loading = await boot();
   loading.putTab(7, url, { status: "loading" });
   await loading.fire.startup();

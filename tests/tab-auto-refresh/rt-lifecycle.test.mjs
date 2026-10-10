@@ -52,7 +52,7 @@ const liveOf = (env, tabId) => {
 const survivors = (env, tabId) => Object.keys(liveOf(env, tabId)).filter((k) => env.store.session[k] !== undefined);
 
 async function boot({ tasks, tabs, settings, session } = {}) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.tasks = tasks || {};
   Object.assign(env.store.session, session || {});
   env.store.sync.settings = Object.assign(

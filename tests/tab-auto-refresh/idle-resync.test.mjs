@@ -17,7 +17,7 @@ const PAGE = "https://a.test/board";
 const HEARTBEAT_MINUTES = 4; /* 与 background.js 里那个常量同值，它没有导出 */
 
 async function bootTask7({ intervalSec = 300 } = {}) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.tasks = { 7: { intervalSec, createdAt: 1, url: PAGE } };
   env.store.sync.settings = { keepAlive: false, httpHeartbeat: true, cookieBackup: false };
   env.putTab(7, PAGE);

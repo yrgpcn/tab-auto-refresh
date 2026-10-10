@@ -46,7 +46,7 @@ function externalChange(env) {
 }
 
 async function boot(settings) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   if (settings) env.store.sync.settings = settings;
   await bootBackground(env);
   return env;
@@ -124,7 +124,7 @@ test("a read in flight across an invalidation must not refill the snapshot", asy
 });
 
 test("an empty sync store falls back to local and migrates", async () => {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.settings = { keepAlive: false, skipDiscarded: true };
   await bootBackground(env);
 

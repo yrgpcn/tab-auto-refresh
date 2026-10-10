@@ -35,6 +35,7 @@
 |---|---:|---|---|
 | V1 | #3 | `status:planning` / `agent:workbuddy` | Chrome 真机手工验证；不自动授权产品修改 |
 | 发版 | #4 | `status:planning` / `agent:chat` | 决定并执行 2.1.0 之后累计改动的下一版本；未授权自动发版、改版本或打/推 tag |
+| Chrome 重启恢复 | #8 / Draft PR #9 | `status:review` / `agent:chat` | 已补审查修复与回归，交 Chat 复审；真机重启证据仍由 #3 承接 |
 
 Issue #6 与 PR #7 均为 `status:done`。新任务直接创建 GitHub Issue，不再向 `BACKLOG.md` 增加活跃待办。
 
@@ -68,7 +69,7 @@ Issue #6 与 PR #7 均为 `status:done`。新任务直接创建 GitHub Issue，�
 
 ## 下一动作
 
-由用户选择并明确授权下一项工作：优先可进入 Issue #3 的 V1 真机验证；Issue #4 的发版决定依赖用户明确确认发布时机与版本号。两者均不会因为 Orchestrator 升级而自动执行。
+复审 Draft PR #9 的启动恢复门控、Cookie 冲突诊断降级与失败隔离，证据见 PR 最新 Handoff 和 `docs/ISSUE-8-VALIDATION.md`。Issue #3 的 V1 真机重启验证尚未完成；Issue #4 发版仍需明确授权时机与版本号。保持 Draft，不自动 merge、改版本、tag 或 Release。
 
 ## 维护规则
 

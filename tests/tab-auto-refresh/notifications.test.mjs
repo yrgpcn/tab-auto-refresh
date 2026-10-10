@@ -22,7 +22,7 @@ const BG_SRC = readFileSync(
 );
 
 async function boot({ tasks = {}, probes = null, settings = null } = {}) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.tasks = tasks;
   if (probes) env.store.local.sessionProbe = probes;
   if (settings) env.store.sync.settings = settings;

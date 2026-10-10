@@ -51,7 +51,7 @@ const BASE_SETTINGS = {
 };
 
 async function boot({ tasks = {}, tabs, settings } = {}) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.tasks = tasks;
   env.store.sync.settings = Object.assign({}, BASE_SETTINGS, settings);
   for (const t of tabs || []) env.putTab(t.id, t.url);

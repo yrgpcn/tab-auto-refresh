@@ -67,7 +67,7 @@
   "restrictHint": { "message": "浏览器内部页面（chrome:// 等）无法开启定时刷新" },
   "errRestricted": { "message": "浏览器内部页面（chrome:// 等）无法开启定时刷新" },
   "cookieBackupLabel": { "message": "重启恢复登录（明文）" },
-  "cookieBackupHint": { "message": "本机明文备份 Cookie，重启后尝试恢复；不保证登录成功，不恢复分区 Cookie、其他 Cookie store、站点存储或跨站 SSO。关闭即清理备份" },
+  "cookieBackupHint": { "message": "本机明文备份 Cookie，重启后尝试恢复，不保证登录。现存同名异值票据冲突或 API 失败时保护旧备份；确认登录后可关闭清理、再开启重建。不恢复分区 Cookie、其他 store、站点存储或跨站 SSO。关闭即清理备份" },
   "keepAliveLabel": { "message": "后台保活" },
   "keepAliveHint": { "message": "定期向监控页面注入模拟鼠标/键盘活动，延缓「按用户交互计时」的服务器端登录过期" },
   "httpHeartbeatLabel": { "message": "静默心跳" },
