@@ -136,6 +136,7 @@ test("行为通道已确认掉线时不再写备份，但采集确实跑到了",
 
 test("疑似掉线只并计数，不许覆盖上一次的好备份", async () => {
   const env = await boot();
+  env.store.session["rt:pruneDone"] = Date.now(); /* 本例测试运行期采样，非冷启动 */
   /* 第一份备份：一条持久票据 + 一条会话票据（无 expirationDate 才是会话票） */
   env.setCookies([
     {

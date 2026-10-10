@@ -15,6 +15,9 @@ import {
   decideAlarmAction,
   decideBadge,
   decideWallFromFrames,
+  decideCookieRecovery,
+  shouldReloadCookiePage,
+  hasLiveCookie,
   domainChain,
   hostOf,
   isErrorStatus,
@@ -223,7 +226,10 @@ function patchSettings(partial) {
 async function reportSessionSignal(root, host, suspect) {
   try {
     if (!root) return;
+    if (pruneFlight) return;
+    const epoch = cookieRecoveryEpoch;
     const data = await chrome.storage.local.get(PROBE_KEY);
+    if (pruneFlight || epoch !== cookieRecoveryEpoch) return;
     const all = data[PROBE_KEY] || {};
     const p = all[root] || { sus: 0, lost: false, lastNotifiedAt: 0 };
     const stamp = () => (p.sus || 0) + "|" + (p.lost ? 1 : 0) + "|" + (p.lastNotifiedAt || 0);
@@ -421,6 +427,7 @@ async function readBackupEntries() {
 /* 备份清理三条件：站点不再被任何任务使用、超过 30 天 TTL、超过 20 站上限（按时间留新）。
    备份功能关闭时不留死数据，直接清空全部备份 */
 async function pruneCookieBackups(remainingTasks) {
+  await cookieQueue; /* 清理必须排在已发出的备份写入之后 */
   const roots = new Set();
   for (const t of Object.values(remainingTasks || {})) {
     const r = siteRoot(hostOf(t.url));
@@ -478,6 +485,7 @@ const RT_SKIP = SKIP_RT_PREFIX;
    监控静默停掉。放会话态与它要回答的问题同寿命——活过 SW 回收（弹窗可能在 prune 跑完之后
    很久才打开，那时这个实例是新的），随浏览器重启清零（下一轮恢复要重新等） */
 const RT_PRUNE_DONE = "rt:pruneDone";
+const RT_COOKIE_RELOAD = "rt:cookieReload";
 const rtTab = (base, tabId) => base + ":" + tabId;
 /* 一个标签页在会话态里的键分两份清单（A17）。rtRoundKeys 是"上一轮的结论"：两条连击计数
    加上"上次到点为什么被跳过"。凡任务搬离一个 id、或在同一个 id 上重新开始，这几条就都不成立
@@ -486,7 +494,7 @@ const rtTab = (base, tabId) => base + ":" + tabId;
    并不改变这个事实，跟着清反而会让下一次到点立刻刷到用户眼前；它自己按 ACTIVITY_SKIP_MS 过期。
    两份清单是包含关系，新增一族按标签页存放的会话态键只要进 rtRoundKeys，
    停任务与重开标签页那两处就自动跟着清。由 tests/tab-auto-refresh/rt-lifecycle.test.mjs 扫源码钉住 */
-const rtRoundKeys = (tabId) => [RT_ERROR, RT_CAPTCHA, RT_SKIP].map((base) => rtTab(base, tabId));
+const rtRoundKeys = (tabId) => [RT_ERROR, RT_CAPTCHA, RT_SKIP, RT_COOKIE_RELOAD].map((base) => rtTab(base, tabId));
 const rtTabKeys = (tabId) => [rtTab(RT_ACTIVITY, tabId), ...rtRoundKeys(tabId)];
 
 /* 读写走独立串行队列：与 tasks 的 withTaskLock 无关（在锁内再入队会死锁），
@@ -599,6 +607,8 @@ async function ensureHeartbeat(tabId) {
 
 async function doHeartbeat(tabId) {
   try {
+    if (await cookieRecoveryPending()) return;
+    const epoch = cookieRecoveryEpoch;
     const task = (await getTasks())[tabId];
     if (!task || !(await getSettings()).httpHeartbeat) {
       await chrome.alarms.clear(hbName(tabId));
@@ -622,6 +632,7 @@ async function doHeartbeat(tabId) {
     /* 416 = 站点拒收这个 Range（实现不规范）：去掉 Range 重试一次，
        免得该站点的心跳通道静默失效 */
     if (res.status === 416) res = await send(false);
+    if (pruneFlight || epoch !== cookieRecoveryEpoch) return;
     const root = siteRoot(hostOf(task.url));
     const landed = res.url || task.url;
     /* 错误页通道：5xx/404 连续命中就暂停任务，回到 2xx 自动解除。
@@ -1121,9 +1132,18 @@ async function notifyOut(event, payload) {
 }
 
 /* 备份该主机及全部父域的 cookie；按主机独立存储；仅在与监控目标同根域且开关开启时执行 */
+let cookieQueue = Promise.resolve();
 async function backupCookies(tabId) {
+  let release;
   try {
     if (!(await getSettings()).cookieBackup) return;
+    if (await cookieRecoveryPending()) return;
+    const previous = cookieQueue;
+    cookieQueue = new Promise((resolve) => { release = resolve; });
+    await previous;
+    if (pruneFlight || !(await getSettings()).cookieBackup) return;
+    const epoch = settingsEpoch;
+    const recoveryEpoch = cookieRecoveryEpoch;
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (!tab || !tab.url) return;
     let host;
@@ -1138,17 +1158,21 @@ async function backupCookies(tabId) {
     const task = tasks[tabId];
     if (!task || !sameSite(host, hostOf(task.url))) return;
     const seen = new Map();
+    let queried = 0;
+    let queryFailed = false;
     for (const d of domainChain(host)) {
       let list = [];
       try {
         list = await chrome.cookies.getAll({ domain: d });
+        queried++;
       } catch (e) {
-        /* 单层查询失败（公共后缀等）不影响其余层 */
+        queryFailed = true;
       }
       for (const c of list) {
         seen.set(c.domain + "|" + c.name + "|" + c.path, c);
       }
     }
+    if (!queried || queryFailed) return; /* 不完整/API 失败样本不等于注销，保留完整好备份 */
     const cookies = [...seen.values()].map((c) => ({
       name: c.name,
       value: c.value,
@@ -1173,9 +1197,16 @@ async function backupCookies(tabId) {
        没有会话票据，streak 恒被清零，确认窗口永远到不了，最后一次好备份也会在第 2 次
        采样就被污染。timestamp 保持最后有效备份时间，长期冻结的备份由 30 天 TTL 淘汰 */
     const prevEntry = (await chrome.storage.local.get(key))[key];
+    /* 查询挂起期间可能开始恢复或关闭开关；旧采样绝不跨这两个边界落盘。 */
+    if (epoch !== settingsEpoch || recoveryEpoch !== cookieRecoveryEpoch || pruneFlight ||
+        !(await getSettings()).cookieBackup) return;
     /* 决策与写盘映射是同一个纯函数：write=null 表示冻结且处于通知节流期，什么都不写 */
     const act = applyBackupAction(prevEntry, capped, now);
-    if (act.write) await chrome.storage.local.set({ [key]: act.write });
+    if (act.write) {
+      await chrome.storage.local.set({ [key]: act.write });
+      if (!(await getSettings()).cookieBackup) await chrome.storage.local.remove(key);
+    }
+    release(); /* 外发绝不占住 Cookie 采样队列或任务锁 */
     /* 必须 await：notifySessionLost 里含 webhook 与微信的 fetch，裸甩会在 SW 回收时
        被截断，丢的正是"会话掉线"这条。行为通道里同一调用点本来就是 await */
     if (act.notify) await notifySessionLost(host);
@@ -1184,11 +1215,13 @@ async function backupCookies(tabId) {
       const flagged = (await chrome.storage.local.get(BACKUP_WARN_KEY))[BACKUP_WARN_KEY];
       if (!flagged) {
         await chrome.storage.local.set({ [BACKUP_WARN_KEY]: true });
-        console.warn("Cookie backup failed (further failures are silent):", e);
+        console.warn("Cookie backup failed (further failures are silent)");
       }
     } catch (e2) {
       /* 存储都写不了就只剩静默 */
     }
+  } finally {
+    if (release) release();
   }
 }
 
@@ -1196,9 +1229,11 @@ async function backupCookies(tabId) {
    判据是纯函数 shouldAdoptTaskUrl：同站、且新地址不是登录页（A14） */
 function refreshTaskUrl(tabId) {
   return withTaskLock(async () => {
+    if (pruneFlight) return;
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     const tasks = await getTasks();
     const t = tasks[tabId];
+    if (pruneFlight) return;
     if (!tab || !tab.url || !t || !t.url) return;
     if (shouldAdoptTaskUrl(t.url, tab.url)) {
       tasks[tabId] = Object.assign({}, t, { url: tab.url });
@@ -1213,11 +1248,19 @@ async function restoreCookies(host) {
     const key = COOKIE_BACKUP_PREFIX + host;
     const data = await chrome.storage.local.get(key);
     const entry = data[key];
-    if (!entry || !Array.isArray(entry.cookies) || entry.cookies.length === 0) return false;
+    if (!entry || !Array.isArray(entry.cookies) || entry.cookies.length === 0 ||
+        Date.now() - (entry.timestamp || 0) > COOKIE_BACKUP_TTL_MS) {
+      console.info("Cookie restore: no-usable-backup (login unverified)");
+      return false;
+    }
     const nowSec = Date.now() / 1000;
     let restored = 0;
     for (const c of entry.cookies) {
+      if (!(await getSettings()).cookieBackup) return false;
       if (c.expirationDate && c.expirationDate < nowSec) continue; /* 已过期的跳过 */
+      /* 只查已收敛的条目域，不增加采集边界；读取失败时不贸然覆盖现场票据。 */
+      const live = await chrome.cookies.getAll({ domain: String(c.domain || "").replace(/^\./, "") });
+      if (hasLiveCookie(c, live, nowSec)) continue;
       const url =
         (c.secure ? "https://" : "http://") +
         String(c.domain || "").replace(/^\./, "") + (c.path || "/");
@@ -1237,19 +1280,21 @@ async function restoreCookies(host) {
          缺失（v1 旧备份）：无法判定，保持旧行为统一传 domain，比直接丢弃更接近
          升级前的表现 */
       try {
+        let result;
         if (c.hostOnly === true) {
-          await chrome.cookies.set(base);
+          result = await chrome.cookies.set(base);
         } else {
-          await chrome.cookies.set(Object.assign({ domain: c.domain }, base));
+          result = await chrome.cookies.set(Object.assign({ domain: c.domain }, base));
         }
-        restored += 1;
+        if (result) restored += 1;
       } catch (e) {
         /* 个别 cookie 不可写（公共后缀限制等）跳过 */
       }
     }
+    console.info("Cookie restore:", restored > 0 ? "cookie-write-ok (login unverified)" : "no-cookie-written (existing or unusable; login unverified)", "count", restored);
     return restored > 0;
   } catch (e) {
-    console.warn("Cookie restore failed:", e);
+    console.warn("Cookie restore failed (login unverified)");
     return false;
   }
 }
@@ -1470,11 +1515,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 /* 任务内页面加载完成：补备份、跟随同站新址、掉线行为探测、关键词检查、保活补注入 */
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.status !== "complete") return;
+  if (restoringCookiePages) restoringCookiePages.add(tabId);
   const ids = await ensureTaskTabIds();
   if (!ids.has(tabId)) return; /* 非监控标签页：零 storage 读写 */
   const tasks = await getTasks();
   const task = tasks[tabId];
   if (!task) return; /* 快照与存储有竞态时以存储为准 */
+  if (await cookieRecoveryPending()) return;
   /* 掉线行为信号：任务页最终落在登录页 URL，说明服务器把你重定向去登录了。
      监控对象本身就是登录页时此信号不适用（会永远命中） */
   const cur = changeInfo.url || (await chrome.tabs.get(tabId).catch(() => null))?.url || "";
@@ -1580,6 +1627,35 @@ function waitForUrls(urls) {
    adoptLegacyUrls 仅在扩展安装/更新时为真：那时浏览器没重启、tabId 仍有效，
    可以给 v1.4.3 及更早（任务里只有间隔和创建时间、没有网址）的旧任务补记当前网址；
    浏览器重启后 tabId 已重新分配，旧 ID 会撞上无关标签页，无法辨认目标，只能淘汰 */
+let pruneFlight = null;
+let cookieRecoveryEpoch = 0;
+let restoringCookiePages = null;
+
+/* session 收尾标记跨 SW 存活；未收尾的新实例可以重试，失败不永久冻结备份。
+   in-flight 只用于同一实例去重，绝不作为跨实例判据。 */
+async function cookieRecoveryPending() {
+  if (pruneFlight) return true;
+  const pruneDone = await rtGet(RT_PRUNE_DONE);
+  const action = decideCookieRecovery({ inFlight: !!pruneFlight, pruneDone,
+    hasBackups: !pruneDone && (await readBackupEntries()).length > 0 });
+  if (action === "recover") await runPrune(false);
+  return action !== "sample"; /* 恢复前产生的事件不是有效新样本 */
+}
+
+function runPrune(adoptLegacyUrls = false) {
+  if (pruneFlight) return pruneFlight;
+  cookieRecoveryEpoch++;
+  pruneFlight = (async () => {
+    if (!adoptLegacyUrls && await rtGet(RT_PRUNE_DONE)) return;
+    await rtRemove(RT_PRUNE_DONE);
+    await cookieQueue; /* 等待旧采样收尾，再取恢复快照；通知已释放队列 */
+    await prune(adoptLegacyUrls);
+  })().catch(() => {
+    console.warn("Startup recovery incomplete; next event will retry (login unverified)");
+  }).finally(() => { pruneFlight = null; restoringCookiePages = null; });
+  return pruneFlight;
+}
+
 async function prune(adoptLegacyUrls = false) {
   /* 等待会话恢复的标签页出现，避免误判失效或重复打开 */
   await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -1598,6 +1674,9 @@ async function prune(adoptLegacyUrls = false) {
     if (r) taskRoots.add(r);
   }
   const restoredRoots = new Set();
+  const loadedCookiePages = new Set((await chrome.tabs.query({}))
+    .filter((tab) => tab.status !== "loading").map((tab) => tab.id));
+  restoringCookiePages = loadedCookiePages;
   if (settings.cookieBackup) {
     const backups = await readBackupEntries();
     /* 先收敛历史越界备份，再恢复。反过来不行：restoreCookies 按每条自己的 domain 写回浏览器，
@@ -1615,6 +1694,7 @@ async function prune(adoptLegacyUrls = false) {
       if (await restoreCookies(host)) restoredRoots.add(root);
     }
   }
+  restoringCookiePages = null;
 
   /* 会话恢复后 tabId 会重新分配：把任务重新挂接到正在打开的标签页，挂不上就先给页面一点
      时间到位，仍然挂不上才按记录的网址重开。顺序决策全部在 planPrune（shared/logic.js）
@@ -1640,7 +1720,11 @@ async function prune(adoptLegacyUrls = false) {
     /* 先落盘、后挂定时器。反过来会让 ensureHeartbeat 按新 id 读不到任务，
        以为"这个页面没任务了"而把心跳 alarm 清掉——重启后恢复的任务于是只剩刷新、
        没有静默心跳，直到下一次刷新完成才自愈。startTask 与 reopenTaskTab 都是先写后挂 */
-    const rearm = plan.remap.map(({ to }) => ({ id: to, restore: true }));
+    const alarmNames = new Set((await chrome.alarms.getAll()).map((a) => a.name));
+    const rearm = [
+      ...plan.keep.map((id) => ({ id, restore: true, arm: !alarmNames.has(alarmName(id)) })),
+      ...plan.remap.map(({ to }) => ({ id: to, restore: true, arm: true }))
+    ];
     for (const { url, task } of plan.watch) {
       /* 等过一轮还是不认：按记录的网址重开。任务原样搬过去，
          keywords / onHit / notifiedKeys / autoPaused 都不能在恢复时丢掉 */
@@ -1648,19 +1732,24 @@ async function prune(adoptLegacyUrls = false) {
       if (!newTab || typeof newTab.id !== "number") continue;
       tasks[newTab.id] = task;
       /* 新建的页面本来就带着恢复好的 cookie 加载，不需要再补一次刷新 */
-      rearm.push({ id: newTab.id, restore: false });
+      rearm.push({ id: newTab.id, restore: false, arm: true });
     }
     for (const { from } of plan.dropped) {
       /* 浏览器重启后的旧格式任务：目标页面无从辨认，只能淘汰 */
       console.warn("Dropped legacy task without url:", from);
     }
     if (plan.dirty) await setTasks(tasks);
-    for (const { id, restore } of rearm) {
-      await armRefresh(id, tasks[id].intervalSec);
+    for (const { id, restore, arm } of rearm) {
+      if (arm) await armRefresh(id, tasks[id].intervalSec);
       await ensureHeartbeat(id);
       /* 会话恢复的页面是在 cookie 恢复之前加载的，补一次刷新让登录态生效 */
-      if (restore && restoredRoots.has(siteRoot(hostOf(tasks[id].url)))) {
-        chrome.tabs.reload(id).catch(() => {});
+      const root = siteRoot(hostOf(tasks[id].url));
+      if (shouldReloadCookiePage({ restored: restore && restoredRoots.has(root),
+        loadedBeforeRestore: loadedCookiePages.has(id),
+        reloaded: (await rtGet(rtTab(RT_COOKIE_RELOAD, id))) === root })) {
+        /* 先持久化再重载：收尾前 SW 异常终止后重进也不会形成 reload 循环。 */
+        await chrome.storage.session.set({ [rtTab(RT_COOKIE_RELOAD, id)]: root });
+        await chrome.tabs.reload(id).catch(() => {});
       }
     }
     /* 未认领任务留下的 alarm 一律等写盘之后再清，且对照写盘后的最终键集合：
@@ -1685,8 +1774,8 @@ async function prune(adoptLegacyUrls = false) {
 
 /* 显式传参而不是直接 addListener(prune)：onInstalled 会把事件详情对象当第一个实参传进来，
    会被 adoptLegacyUrls 当成真值 */
-chrome.runtime.onStartup.addListener(async () => { await prune(false); await reconcileKeepAlive(); });
-chrome.runtime.onInstalled.addListener(async () => { await prune(true); await reconcileKeepAlive(); });
+chrome.runtime.onStartup.addListener(async () => { await runPrune(false); await reconcileKeepAlive(); });
+chrome.runtime.onInstalled.addListener(async () => { await runPrune(true); await reconcileKeepAlive(); });
 
 /* 标签页与网页上的右键菜单 */
 function buildMenus() {

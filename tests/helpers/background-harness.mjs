@@ -374,7 +374,8 @@ export function makeEnv() {
         /* 真实语义：domain 命中"等于该域或其子域"的 cookie。原先恒返回 []，
            于是备份采集、hostOnly 还原分支、200 条封顶全都在空数据上跑 */
         calls.cookieGet.push(q && q.domain !== undefined ? String(q.domain) : null);
-        const list = cookieJar;
+        /* 默认执行上下文 store 0、未分区；与 Chrome Cookies API 默认语义一致。 */
+        const list = cookieJar.filter((c) => !c.partitionKey && (!c.storeId || c.storeId === "0"));
         if (!q || q.domain === undefined) return clone(list);
         const d = String(q.domain).toLowerCase();
         return clone(
@@ -386,11 +387,13 @@ export function makeEnv() {
       },
       async set(c) {
         calls.cookieSet.push(clone(c));
-        const key = (c.domain || "") + "|" + c.name + "|" + c.path;
+        const restored = { ...clone(c), domain: c.domain || new URL(c.url).hostname,
+          hostOnly: !c.domain, session: c.expirationDate === undefined };
+        const key = restored.domain + "|" + c.name + "|" + c.path;
         const at = cookieJar.findIndex((x) => (x.domain || "") + "|" + x.name + "|" + x.path === key);
-        if (at >= 0) cookieJar[at] = c;
-        else cookieJar.push(c);
-        return clone(c);
+        if (at >= 0) cookieJar[at] = restored;
+        else cookieJar.push(restored);
+        return clone(restored);
       },
       async remove() {
         return {};

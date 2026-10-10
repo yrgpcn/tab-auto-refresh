@@ -565,7 +565,7 @@ test("参照物：只有间接通道才进得了账的键，实测还剩这些",
   }
   assert.equal(
     onlyIndirect.length,
-    10,
+    11,
     `只有间接通道能取到的键实测 ${onlyIndirect.length} 个（${onlyIndirect.join(" ")}）。涨上去说明又添了一族按变量拼的键、\`AGENTS.md\` 那一行更要写清楚；掉到 0 说明这根轴已经没什么可审的了，本文件的解析器可以删一半`
   );
   assert.ok(directCount >= 8, `字面量直达的键只剩 ${directCount} 个：正向判据已经退化到只需要扫字符串了，本文件的重型解析没人在用`);
