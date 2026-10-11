@@ -418,7 +418,7 @@ test("发布不允许删除历史 Release 或 Tag", () => {
   for (const pattern of forbidden) {
     assert.ok(!pattern.test(runs), "发现会删除旧版 Release 或 Tag 的命令：" + pattern);
   }
-  assert.match(runs, /gh\\s+release\\s+create/, "仍需创建新版本 Release");
+  assert.match(runs, /gh\s+release\s+create/, "仍需创建新版本 Release");
 });
 
 test("写操作与 contents: write 成对：要写的必须声明，不写的不许白要", () => {
