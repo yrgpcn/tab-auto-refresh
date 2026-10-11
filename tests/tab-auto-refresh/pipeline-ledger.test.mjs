@@ -409,11 +409,11 @@ test("release.yml 的步骤次序：闸门 → 版本比对 → 打包 → 建 R
 test("发布不允许删除历史 Release 或 Tag", () => {
   const runs = runText(REL_STEPS);
   const forbidden = [
-    /gh\\s+release\\s+delete/i,
-    /git\\s+push[^\\n]*--delete/i,
-    /git\\s+tag\\s+-d(?:\\s|$)/i,
-    /gh\\s+api[^\\n]*(?:-X|--method)\\s+DELETE/i,
-    /git\\s+push[^\\n]*:(?:refs\\/)?tags\\//i
+    /gh\s+release\s+delete/i,
+    /git\s+push[^\n]*--delete/i,
+    /git\s+tag\s+-d(?:\s|$)/i,
+    /gh\s+api[^\n]*(?:-X|--method)\s+DELETE/i,
+    /git\s+push[^\n]*:(?:refs[/])?tags[/]/i
   ];
   for (const pattern of forbidden) {
     assert.ok(!pattern.test(runs), "发现会删除旧版 Release 或 Tag 的命令：" + pattern);
