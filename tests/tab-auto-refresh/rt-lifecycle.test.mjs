@@ -35,12 +35,13 @@ const flush = () => new Promise((r) => setTimeout(r, 50));
 
 /* 四族键的字面量写在用例里，不 import 常量：常量拼错时两边会一起错，只有按字面量断言
    才让"后台清的是另一族键"这种失败露出来（与 skip-trace 同一条理由，对账见文件末尾那条） */
-const FAMILIES = ["rt:activity", "rt:error", "rt:captcha", "rt:skip"];
+const FAMILIES = ["rt:activity", "rt:error", "rt:captcha", "rt:skip", "rt:cookieReload"];
 const seed = (tabId) => ({
   [`rt:activity:${tabId}`]: Date.now() - 1000,
   [`rt:error:${tabId}`]: 1,
   [`rt:captcha:${tabId}`]: 2,
-  [`rt:skip:${tabId}`]: { reason: "user-active", at: 5 }
+  [`rt:skip:${tabId}`]: { reason: "user-active", at: 5 },
+  [`rt:cookieReload:${tabId}`]: "a.test"
 });
 /* 会话态里这张页剩下的键：{键: 值}，值是 undefined 表示这条已经没了 */
 const liveOf = (env, tabId) => {
@@ -51,7 +52,7 @@ const liveOf = (env, tabId) => {
 const survivors = (env, tabId) => Object.keys(liveOf(env, tabId)).filter((k) => env.store.session[k] !== undefined);
 
 async function boot({ tasks, tabs, settings, session } = {}) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.tasks = tasks || {};
   Object.assign(env.store.session, session || {});
   env.store.sync.settings = Object.assign(
@@ -200,7 +201,7 @@ test("清单是唯一来源：两份清单跑出来的键，与用例里那四�
      守卫第一版只按正则扫那一行有没有出现 RT_ACTIVITY，结果 rtTabKeys 把 :tabId 漏拼了
      （删的是根本不存在的 "rt:activity"）它照样绿——所以这里是把清单跑一遍再对账 */
   const consts = {};
-  for (const m of BG_SRC.matchAll(/^const (RT_[A-Z]+) = "([^"]+)";$/gm)) consts[m[1]] = m[2];
+  for (const m of BG_SRC.matchAll(/^const (RT_[A-Z_]+) = "([^"]+)";$/gm)) consts[m[1]] = m[2];
   for (const name of ["RT_ACTIVITY", "RT_ERROR", "RT_CAPTCHA"]) {
     assert.ok(consts[name], `源码里读不到 ${name} 的字面量，这条守卫已经在空跑`);
   }
@@ -216,10 +217,10 @@ test("清单是唯一来源：两份清单跑出来的键，与用例里那四�
   };
   const round = evalList("rtRoundKeys", {});
   const all = evalList("rtTabKeys", { rtRoundKeys: round });
-  assert.deepEqual(round(7).sort(), ["rt:captcha:7", "rt:error:7", "rt:skip:7"]);
+  assert.deepEqual(round(7).sort(), ["rt:captcha:7", "rt:cookieReload:7", "rt:error:7", "rt:skip:7"]);
   assert.deepEqual(all(7).sort(), Object.keys(seed(7)).sort(), "全量清单与用例种子对不上");
 
-  const used = new Set([...BG_SRC.matchAll(/rtTab\(\s*(RT_[A-Z]+)\s*,/g)].map((m) => m[1]));
+  const used = new Set([...BG_SRC.matchAll(/rtTab\(\s*(RT_[A-Z_]+)\s*,/g)].map((m) => m[1]));
   assert.ok(used.size >= 4, `只扫到 ${used.size} 族按标签页存的键，正则失效了（这条守卫本身在空跑）`);
   for (const name of used) {
     assert.ok(all(7).includes(`${consts[name]}:7`), `${name} 按标签页存却没进清单`);

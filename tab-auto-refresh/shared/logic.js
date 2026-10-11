@@ -1,7 +1,48 @@
 /* 与浏览器 API 无关的纯逻辑，可被 Node 单元测试直接导入 */
+import { PRIVATE_SUFFIX_RULES } from "./private-suffixes.js";
+
+const privateExact = new Set();
+const privateWild = new Set();
+const privateExceptions = new Set();
+for (const rule of PRIVATE_SUFFIX_RULES) {
+  const kind = rule.startsWith("!") ? "!" : rule.startsWith("*.") ? "*" : "";
+  const raw = rule.replace(/^!|^\*\./, "");
+  const ascii = new URL("https://" + raw).hostname;
+  (kind === "!" ? privateExceptions : kind === "*" ? privateWild : privateExact).add(ascii);
+}
+
+/* PRIVATE 租户边界取 PSL 最长匹配，支持 wildcard/exception；不扩大旧 ICANN 查询面。 */
+function privateSuffixSize(parts) {
+  let size = 0;
+  for (let i = 0; i < parts.length; i++) {
+    const suffix = parts.slice(i).join(".");
+    if (privateExceptions.has(suffix)) return parts.length - i - 1;
+    if (privateExact.has(suffix)) size = Math.max(size, parts.length - i);
+    if (i > 0 && privateWild.has(suffix)) size = Math.max(size, parts.length - i + 1);
+  }
+  return size;
+}
 
 export const MIN_INTERVAL_SEC = 30;
 export const DEFAULT_INTERVAL_SEC = 300;
+
+export function decideCookieRecovery({ inFlight, pruneDone }) {
+  return inFlight ? "defer" : pruneDone ? "sample" : "recover";
+}
+
+export function shouldReloadCookiePage({ restored, loadedBeforeRestore, reloaded }) {
+  return !!restored && !!loadedBeforeRestore && !reloaded;
+}
+
+/* 同名票据的存在不代表已认证。同值无需回写；异值身份不明，保护双方并留诊断。 */
+export function decideCookieRestore(cookie, live, nowSec) {
+  const domain = (d) => String(d || "").replace(/^\./, "").toLowerCase();
+  const matching = (live || []).filter((item) => item.name === cookie.name &&
+    domain(item.domain) === domain(cookie.domain) && (item.path || "/") === (cookie.path || "/") &&
+    (!item.expirationDate || item.expirationDate > nowSec));
+  if (matching.some((item) => item.value !== cookie.value)) return "conflict-unverified";
+  return matching.length ? "same-value" : "restore";
+}
 
 /* 外发通知的事件清单，webhook 与微信直连共用一份。
    1.7.0 只在 webhook 上用，键名是 webhookEvents；1.8.0 起叫 notifyEvents，
@@ -84,7 +125,7 @@ export function hostOf(u) {
    它一次覆盖整个 ccTLD × 品牌段组合，不依赖清单抄全。
    清单的边界要说清：一是品牌段没抄全的那条后缀仍会算宽（漏 "co" 之外的生僻段才会发生，
    新增条目只增不减即可），二是 github.io / blogspot.com 这类"私有后缀"任何形状规则都抓不到。
-   真正兜住这两条的是 domainChain 的下探地板（绝不查注册域以上）与启动时的备份收敛 */
+   PRIVATE 后缀另用随扩展打包的 PSL 快照判定，domainChain 与备份收敛共用这个边界 */
 const SLD_BRANDS = new Set([
   "co", "com", "net", "org", "gov", "mil", "ac", "or", "ne", "go", "ed", "edu",
   "sch", "res", "gen", "asn", "nic", "idv", "club", "biz", "info", "nom", "asso",
@@ -118,7 +159,8 @@ export function siteRoot(host) {
   const joined = parts.join(".");
   if (IPV4_HOST.test(joined)) return joined;
   if (parts.length === 1) return joined;
-  const cut = isSuffixPair(parts.slice(-2)) ? 3 : 2;
+  const privateSize = privateSuffixSize(parts);
+  const cut = privateSize ? privateSize + 1 : isSuffixPair(parts.slice(-2)) ? 3 : 2;
   /* 整串本身就是公共后缀（如主机就叫 co.nz）：切不出可信注册域 */
   if (parts.length < cut) return null;
   return parts.slice(-cut).join(".");

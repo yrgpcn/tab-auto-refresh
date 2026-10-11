@@ -91,7 +91,7 @@ test("休眠标签页只在开关开着时跳过", () => {
 /* ---------- 执行器：真实的 onAlarm ---------- */
 
 async function bootAlarm({ tasks, tabs, settings, pausedAll, session } = {}) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.tasks = tasks || {};
   if (pausedAll) env.store.local.pausedAll = true;
   Object.assign(env.store.session, session || {});

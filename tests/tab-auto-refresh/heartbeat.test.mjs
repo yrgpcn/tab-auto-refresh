@@ -18,7 +18,7 @@ const PAGE = "https://a.test/board";
 const task = (over) => Object.assign({ intervalSec: 300, createdAt: 1, url: PAGE }, over);
 
 async function boot({ tasks, settings, session } = {}) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.tasks = tasks || { 7: task() };
   Object.assign(env.store.session, session || {});
   env.store.sync.settings = Object.assign(

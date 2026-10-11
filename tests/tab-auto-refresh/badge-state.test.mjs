@@ -269,7 +269,7 @@ const PAGE = "https://app.a.test/board";
 const task = (over) => Object.assign({ intervalSec: 300, createdAt: 1, url: PAGE }, over);
 
 async function boot({ tasks, pausedAll, probes, settings } = {}) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.tasks = tasks || {};
   if (pausedAll) env.store.local.pausedAll = true;
   if (probes) env.store.local.sessionProbe = probes;

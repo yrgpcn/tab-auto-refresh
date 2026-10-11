@@ -18,7 +18,7 @@ const task = (over) => Object.assign({ intervalSec: 300, createdAt: 1, url: PAGE
 const flush = () => new Promise((r) => setTimeout(r, 30));
 
 async function boot({ tasks, tabs, settings } = {}) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.tasks = tasks || {};
   /* httpHeartbeat 保持默认开：重挂之后有没有心跳正是这里要断言的 */
   env.store.sync.settings = Object.assign({ keepAlive: false, cookieBackup: false }, settings);

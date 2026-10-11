@@ -131,7 +131,7 @@
 ### 存储
 
 - `chrome.storage.local`：`tasks`（tabId → `{intervalSec, createdAt, url, keywords?, onHit?, notifiedKeys?, autoPaused?}`，旧数据的单串 `keyword` 由 `getTaskKeywords` 兼容读取，后台与弹窗共用这一个入口）、`pausedAll`、`sessionProbe`（根域 → `{sus, lost, lastNotifiedAt}`）、`cookieBackup:<host>`、`cookieBackupWarnedOnce`、`wechatLastResult`、`webhookLastResult`（两个出口各一份最近一次投递结果，只存本机、不走 sync）、`settings`（1.1.0 及之前把设置存在 local，迁移读到就整份搬去 sync 再删掉这一份）、`cookieBackup`（v1.4.1 及之前的"单一对象"格式旧备份，`prune` 一进来就整条删）。这两项都只在旧数据上存在、读一次就没，但 local 里为什么会出现这两个名字，只有这一行说得出。
-- `chrome.storage.session`：跨 SW 回收要活下来的运行时计数与标记，即 `rt:error:<tabId>` / `rt:captcha:<tabId>` / `rt:activity:<tabId>` / `rt:skip:<tabId>` / `rt:awake` / `rt:pruneDone`（本轮浏览器会话的启动恢复是否收尾，给弹窗那条清理网看，A16）/ `wechatToken`。判断标准是要活过 SW 回收放这里，要活过浏览器重启才放 local
+- `chrome.storage.session`：跨 SW 回收要活下来的运行时计数与标记，即 `rt:error:<tabId>` / `rt:captcha:<tabId>` / `rt:activity:<tabId>` / `rt:skip:<tabId>` / `rt:cookieReload:<tabId>`（本轮 Cookie 恢复已补刷新，先记后刷避免重进循环）/ `rt:cookieRecovery`（按注册域记录冲突/读取或写入失败及时间，保护旧存档，跨 SW 保留，关闭备份或最后任务停止时清理）/ `rt:awake` / `rt:pruneDone`（本轮浏览器会话的启动恢复是否收尾，给弹窗清理网与 Cookie 采样屏障看）/ `wechatToken`。判断标准是要活过 SW 回收放这里，要活过浏览器重启才放 local
 - `chrome.storage.sync`：`settings`。默认值集中在 `shared/config.js` 的 `DEFAULT_SETTINGS`，弹窗与后台共用；sync 为空时会从 local 迁移旧设置
 - 上面那三行是**两头账的一头**：另一头是插件源码里每一个 `chrome.storage.<区>.<动作>` 调用点，由
   `tests/tab-auto-refresh/storage-map.test.mjs` 现切现比（正向：源码里出现的键要在那一区列名；反向：那行列出的键
@@ -214,7 +214,7 @@
 - 启动恢复里历史越界备份的收敛是纯函数 `planBackupConvergence`（只剔注册域之外的条目，键本身是后缀或筛完为空才整条删，timestamp 不动），**必须排在按注册域恢复之前**：`restoreCookies` 按每条自己的 domain 写回浏览器，先恢复等于已经替别家站点复活了一遍登录态
 - 条目带 `schemaVersion: 2` 与每条 cookie 的 `hostOnly`。还原时 `hostOnly === true` 省略 `domain`（否则 `__Host-` 票据写不进去，或作用域被扩大），`=== false` 传 `domain`，字段缺失的 v1 旧备份统一传 `domain`
 - 单站点封顶 200 条，超限时先按"像登录票据的程度"排序再截（httpOnly > 会话票 > `__Host-`/`__Secure-` > `path=/` > 域更短）。正常规模不排序，避免无谓的顺序变化
-- 启动恢复按注册域匹配，覆盖 SSO 登录所在的兄弟子域；恢复成功的根域记在 `restoredRoots`，据此决定认领的标签页要不要补刷新
+- 启动恢复按注册域匹配，覆盖 SSO 登录所在的兄弟子域；PRIVATE 后缀使用打包的 PSL 快照匹配（含 wildcard/exception），独立租户不得互相采集或恢复。`restoredRoots` 仅表示至少一条 Cookie 写入成功，不代表服务端接受登录。所有启动恢复（包括默认关闭、无备份）在 `rt:pruneDone` 缺失时先认领任务；恢复期间 defer 历史刷新 alarm、页面 URL 跟随及页面/心跳采样，不提前 STOP、重载或重挂旧 ID，异常可重试。Cookie 单条读取失败隔离，不丢其它成功写入与补刷新；同名同域同路径未过期且不同值的现存票据无法判别 guest/新登录，保留现值并记录 `conflict-unverified`，该注册域的旧存档跨 SW 冻结；仅相同值视为无需写入，绝不当作已登录。冲突或 API 失败后，用户确认登录并关闭开关完成清理、再开启才重新采样；普通 2xx 或离开登录页不解冻。门禁 `tests/tab-auto-refresh/review-recovery.test.mjs`。已加载的 keep/remap 页最多补刷新一次，watch 新页直接加载；keep 只补缺失的刷新 alarm，已有 alarm 不改期。
 - 淘汰三条件：站点不再被任何任务使用、超过 30 天、超过 20 站上限（按时间留新）。停止任务与启动恢复时统一执行
 - 存档只有一个读法：`readBackupEntries()` 一次 `get(null)` 全量读、按 `cookieBackup:` 前缀过滤。**不要引入主机名清单**：登记是清单自己的一次无锁读-改-写，漏一条，那条明文存档就对"按清单取数"的恢复与清理永久隐身——丢登录态且没有任何本地症状。全量读的代价止于慢（最坏 20 站 × 200 条明文反序列化进 SW），一趟启动至多两次，要再省只能共享这一次读，不能加第二份真相来源。门禁是"先造孤儿再证明它被删掉"那几条（启动 / 关开关 / 停任务三条路径），外加一条扫 `background.js` 里那个已回退的清单名样式的守卫
 

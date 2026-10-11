@@ -119,7 +119,7 @@ test("行内版面预算：理由文案短到挤得进 400px 宽的任务行", (
 /* ---------- 2. 执行器：真实的 onAlarm 写会话态 ---------- */
 
 async function boot({ tasks, tabs, settings, pausedAll, session } = {}) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.tasks = tasks || {};
   if (pausedAll) env.store.local.pausedAll = true;
   Object.assign(env.store.session, session || {});

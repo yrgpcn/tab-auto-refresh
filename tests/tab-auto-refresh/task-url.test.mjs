@@ -24,7 +24,7 @@ const LOGIN = "https://www.example.com/login?next=%2Fboard";
 const ROOT = "example.com";
 
 async function bootAt(url) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.tasks = { 7: { intervalSec: 300, createdAt: 1, url: BOARD } };
   env.store.sync.settings = { keepAlive: false, httpHeartbeat: false, cookieBackup: false, captchaGuard: false };
   env.putTab(7, url);

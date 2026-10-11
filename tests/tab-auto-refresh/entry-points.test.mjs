@@ -15,7 +15,7 @@ const PAGE = "https://a.test/board";
 const task = (over) => Object.assign({ intervalSec: 300, createdAt: 1, url: PAGE }, over);
 
 async function boot({ tasks = {}, tabs = [{ id: 7, url: PAGE, active: true, windowId: 1 }], settings, pausedAll, focused = 1 } = {}) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.tasks = tasks;
   if (pausedAll) env.store.local.pausedAll = true;
   env.store.sync.settings = Object.assign({ keepAlive: false, cookieBackup: false }, settings);

@@ -18,7 +18,7 @@ const task = (over) => Object.assign({ intervalSec: 300, createdAt: 1, url: PAGE
 const AWAKE = "rt:awake";
 
 async function bootAwake({ keepAwake = true, tasks, session } = {}) {
-  const env = makeEnv();
+  const env = makeEnv({ startupComplete: true });
   env.store.local.tasks = tasks || {};
   Object.assign(env.store.session, session || {});
   env.store.sync.settings = {

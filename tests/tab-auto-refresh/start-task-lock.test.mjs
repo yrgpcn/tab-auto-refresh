@@ -30,6 +30,7 @@ const PREV_LOSING = {
 
 async function boot({ hangs = false, cookies = [], backups = { [BACKUP_KEY]: PREV_LOSING } } = {}) {
   const env = makeEnv();
+  env.store.session["rt:pruneDone"] = Date.now(); /* 运行期的锁与外发现场 */
   env.store.sync.settings = {
     cookieBackup: true,
     keepAlive: false,
