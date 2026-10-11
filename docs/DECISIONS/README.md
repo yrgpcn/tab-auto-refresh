@@ -13,4 +13,8 @@ Project Orchestrator 迁移后的长期、跨任务决策写在本目录。
 
 普通实现细节、一次性修复和当前进度留在 Issue / PR，不需要 Decision。
 
+## 当前决策
+
+- [0002：恢复任务按完整 URL 身份认领](0002-full-url-task-reclaim.md)
+
 迁移前的大量设计理由原本散在 `AGENTS.md`，完整历史可从基线提交 `0a2b28873113451fe7f4d4b265049c89aa9aac8a` 追溯；未来新增决策不要再把 `AGENTS.md` 扩成项目记忆正文。

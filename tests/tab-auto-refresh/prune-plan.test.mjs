@@ -53,13 +53,41 @@ test("网址一致的活标签页原样认领，不重挂也不重开", () => {
   assert.equal(p.dirty, false, "什么都没动却标了脏，会白白写一次盘");
 });
 
-test("查询串与 hash 不算换页：按 origin+pathname 认址后跟随真实地址", () => {
+test("URL 标准化等价时可认领，但 remap 保留存储中的原始目标 URL", () => {
+  const original = "https://a.test:443/board/../board?id=1#route";
   const p = planPrune({
-    tasks: { 7: task("https://a.test/board?id=1") },
-    tabs: [{ id: 20, url: "https://a.test/board?id=2#frag" }]
+    tasks: { 7: task(original) },
+    tabs: [{ id: 20, url: "https://a.test/board?id=1#route" }]
   });
-  assert.deepEqual(p.remap, [{ from: 7, to: 20, url: "https://a.test/board?id=2#frag" }]);
-  assert.equal(p.next[20].url, "https://a.test/board?id=2#frag", "重挂后没跟到页面实际地址");
+  assert.deepEqual(p.remap, [{ from: 7, to: 20, url: original }]);
+  assert.equal(p.next[20].url, original, "认领页面不能改写用户原来监控的 URL");
+});
+
+test("不同 query 或 hash 的同路径页面不认领，进入 watch 并保留原目标 URL", () => {
+  const p = planPrune({
+    tasks: { 7: task("https://a.test/board?id=1#one") },
+    tabs: [{ id: 20, url: "https://a.test/board?id=2#two" }]
+  });
+  assert.deepEqual(p.remap, []);
+  assert.deepEqual(p.watch.map((w) => w.from), [7]);
+  assert.equal(p.watch[0].task.url, "https://a.test/board?id=1#one", "watch 候选必须保留完整原始目标");
+  assert.deepEqual(keys(p.next), []);
+  assert.deepEqual(p.staleIds, [7]);
+});
+
+test("同路径多个深链按完整 URL 分别认领，不受页面枚举顺序影响", () => {
+  const p = planPrune({
+    tasks: { 7: task("https://a.test/board?id=1#one"), 9: task("https://a.test/board?id=2#two") },
+    tabs: [
+      { id: 20, url: "https://a.test/board?id=2#two" },
+      { id: 21, url: "https://a.test/board?id=1#one" }
+    ]
+  });
+  assert.deepEqual(p.remap.map(({ from, to }) => [from, to]), [[7, 21], [9, 20]]);
+  assert.equal(p.next[21].url, "https://a.test/board?id=1#one");
+  assert.equal(p.next[20].url, "https://a.test/board?id=2#two");
+  assert.deepEqual(p.watch, []);
+  assert.deepEqual(keys(p.next), [20, 21]);
 });
 
 test("两个任务撞同一个页面时，认不到的那个走重开而不是被覆盖丢失", () => {
@@ -268,6 +296,35 @@ test("认领不到的页面在等待窗口里到位后不再重开", async () =>
   assert.deepEqual(keys(env.store.local.tasks), [3]);
 });
 
+test("等待期间同路径的另一个 query 不满足认领，按原始深链重开且任务不丢", async () => {
+  const target = "https://a.test/board?id=1#one";
+  const env = await bootPrune({
+    tasks: { 7: task(target, { keywords: ["stock"], onHit: "continue", autoPaused: { reason: "captcha", at: 9 } }) },
+    tabs: [{ id: 3, url: "https://nothing.test/" }]
+  });
+  const seen = stubCreates(env, [99]);
+  let wrongPathReady;
+  const wrongPathReadyPromise = new Promise((resolve) => { wrongPathReady = resolve; });
+  realSetTimeout(() => {
+    const changed = { id: 3, url: "https://a.test/board?id=2#two", status: "complete" };
+    env.putTab(changed.id, changed.url);
+    void env.fire.tabUpdated(changed.id, { status: changed.status }, changed);
+    wrongPathReady();
+  }, 100);
+  const pruning = runPrune(env);
+  await wrongPathReadyPromise;
+  await new Promise((resolve) => realSetTimeout(resolve, 20));
+  const createdBeforeWatchWindowExpired = seen.length;
+  await pruning;
+  assert.equal(createdBeforeWatchWindowExpired, 0, "同路径错误深链不能提前结束认领等待窗口");
+  assert.deepEqual(seen, [target], "不匹配的深链不能阻止按任务原 URL 兜底重开");
+  assert.deepEqual(keys(env.store.local.tasks), [99]);
+  assert.equal(env.store.local.tasks[99].url, target);
+  assert.deepEqual(env.store.local.tasks[99].keywords, ["stock"]);
+  assert.equal(env.store.local.tasks[99].onHit, "continue");
+  assert.deepEqual(env.store.local.tasks[99].autoPaused, { reason: "captcha", at: 9 });
+});
+
 test("什么都没要改时不写盘", async () => {
   const env = await bootPrune({
     tasks: { 7: task("https://a.test/board") },
@@ -333,6 +390,15 @@ test("三个认领不到的任务共享一个等待窗口，不是各等一遍",
      6) onStartup 的注册实参 `prune(false)` 改成 `prune(true)`
         → 红在"浏览器重启那回不补记，只能淘汰"
    （5、6 改的是 background.js，用 TAR_BG 指副本，不需要把整棵 tests/ 也拷出去）
+  2026-10-11 Issue #11 深链认领红→绿对照：
+    7) shared/logic.js 的 `urlKey` 改回只返回 `origin+pathname`
+       → 红在 logic.test 的完整 URL、tabShowsUrl query/hash 判据，以及 prune-plan 的深链不认领 / 分别认领。
+          这些断言逐条证明 query 与 hash 都进入身份判定，旧“同路径等价”行为不再被测试钉住。
+    8) planPrune remap 的 `Object.assign({}, task)` 改回覆盖 `{ url: match.url || task.url }`
+       → 红在“URL 标准化等价时可认领，但 remap 保留存储中的原始目标 URL”。
+    9) waitForUrls 的 `tabShowsUrl(tab, url)` 改成 pathname 比较
+       → 红在“等待期间同路径的另一个 query 不满足认领，按原始深链重开且任务不丢”。
+   对照操作均在工作树真实源码上逐处执行后重跑对应专项测试，再还原；目标用例红，其余目标用例绿。
    另外三条被本文件依赖的机制也各自红过：桩件 tabs.onUpdated 少了 removeListener 时，
    三条走等待窗口的用例整条红（这正是 removeListener 补进共用桩件的原因）。
    行尾这件事别凭印象：本机 core.autocrlf=true，工作区里所有 .js（含 background.js，

@@ -269,8 +269,8 @@ test("planBackupConvergence drops only what sits outside the registrable root", 
   assert.equal(plan.clean, 2);
 });
 
-test("urlKey keeps origin+pathname and drops query and hash", () => {
-  assert.equal(urlKey("https://example.com/page?a=1#frag"), "https://example.com/page");
+test("urlKey returns the complete normalized page URL", () => {
+  assert.equal(urlKey("https://example.com:443/a/../page?a=1#frag"), "https://example.com/page?a=1#frag");
   assert.equal(urlKey("not a url"), null);
 });
 
@@ -285,13 +285,15 @@ test("outboundUrl 剪掉 query 与 hash，坏输入回空串", () => {
   assert.equal(outboundUrl(null), "");
 });
 
-test("tabShowsUrl matches exact url or origin+pathname, rejects junk", () => {
-  const tab = { url: "https://example.com/page?x=1" };
-  assert.ok(tabShowsUrl(tab, "https://example.com/page"));
-  assert.ok(tabShowsUrl(tab, "https://example.com/page?x=1"));
-  assert.ok(!tabShowsUrl(tab, "https://example.com/other"));
-  assert.ok(!tabShowsUrl(tab, "https://another.com/page"));
-  assert.ok(!tabShowsUrl(null, "https://example.com/page"));
+test("tabShowsUrl requires the same complete normalized URL, including query and hash", () => {
+  const tab = { url: "https://example.com:443/a/../page?x=1#frag" };
+  assert.ok(tabShowsUrl(tab, "https://example.com/page?x=1#frag"), "URL standard normalization should match equivalent identities");
+  assert.ok(!tabShowsUrl(tab, "https://example.com/page?x=2#frag"), "different query is a different monitoring target");
+  assert.ok(!tabShowsUrl(tab, "https://example.com/page?x=1#other"), "different hash route is a different monitoring target");
+  assert.ok(!tabShowsUrl(tab, "https://example.com/page"), "missing query and hash are not equivalent");
+  assert.ok(!tabShowsUrl(tab, "https://example.com/other?x=1#frag"));
+  assert.ok(!tabShowsUrl(tab, "https://another.com/page?x=1#frag"));
+  assert.ok(!tabShowsUrl(null, "https://example.com/page?x=1#frag"));
   assert.ok(!tabShowsUrl(tab, null));
 });
 
