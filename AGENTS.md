@@ -202,7 +202,7 @@
 - `adoptLegacyUrls` 只在扩展安装或更新时为真，那时浏览器没重启、tabId 仍有效，可以给 v1.4.3 及更早（任务里只有间隔和创建时间、没有网址）的旧任务补记当前网址。浏览器重启后 tabId 已重新分配，只能淘汰
 - 注册必须写成 `() => prune(true/false)`。直接 `addListener(prune)` 会让 `onInstalled` 的事件详情对象被当成真值
 - 顺序决策全在 `shared/logic.js` 的 `planPrune({ tasks, tabs, adoptLegacyUrls })`，`prune` 只剩执行：`keep`/`adopt`/`remap`/`watch`/`dropped`/`staleIds`/`claims`/`dirty`。计划跑两遍——锁外一遍只为了判断要不要等待，等待结束后在锁内用最新的 tasks/tabs 再跑一遍再应用（套用等前的旧计划会把等待期间用户的起停算进去）
-- 认领规则：ID 被占用不代表挂接正确，要网址一致（精确或 `urlKey` 相等）才保留。重映射时跳过已被其他任务认领、或仍是其他未处理任务键的页面（`pending` 集合，防两个任务争抢同一页时后者被覆盖而静默丢失）。同一网址开在多个标签页时每页至多挂一个任务。现场认领不到的进 `watch`：候选**共享一个** `RECLAIM_WATCH_MS` 上限窗口（在任务锁之外等），等完仍认不到才按记录的网址重开。原先是按任务逐个等 20 秒且全程持锁，N 个未认领任务能让弹窗与刷新整体停摆
+- 认领规则：ID 被占用不代表挂接正确；恢复时按 `urlKey` 比较标准 URL 规范化后的完整地址（含 query 与 hash），只有完整目标相同才保留或重映射，且不得以现场页面地址覆盖任务记录的原始目标 URL。不同深链进入 `watch`，共享一个 `RECLAIM_WATCH_MS` 上限窗口（在任务锁之外等），等完仍认不到就按记录的网址重开。运行中的合法站内导航仍由 `shouldAdoptTaskUrl` 跟随。重映射时跳过已被其他任务认领、或仍是其他未处理任务键的页面（`pending` 集合，防两个任务争抢同一页时后者被覆盖而静默丢失）。同一完整网址开在多个标签页时每页至多挂一个任务。原先是按任务逐个等 20 秒且全程持锁，N 个未认领任务能让弹窗与刷新整体停摆
 - 应用阶段一律**先 `setTasks` 落盘、再 arm 刷新与心跳、最后清陈旧 alarm**。心跳排在写盘后面是硬要求：`ensureHeartbeat(新 id)` 要按落盘后的键读任务，先挂会让它读到"这个 id 没任务"而把心跳清掉，恢复后的任务只剩刷新、没有静默心跳。`startTask` 与 `reopenTaskTab` 同样是先写后挂，而且**写完就紧接着挂**：中间不夹任何可失败的等待（尤其不等外发），否则"任务已落盘、alarm 一条没有"的空档会被 SW 回收撞上（A15）
 - 未认领任务的旧 alarm 收集到 `plan.staleIds`，`setTasks` 写盘之后再清，清理时对照写盘后的最终键集合（`liveIds`）。被本轮重挂接或重开占用的 id 不能清，否则会造出"任务在、永不刷新"的僵尸。由 `tests/tab-auto-refresh/prune-plan.test.mjs` 钉住
 - 弹窗每次打开发一次 `prune-now`（`cleanupInvalidTasks`），它是"任务指向的标签页没了"的第二条网。**"取不到标签页"不等于"这条任务再也不会回来"**：浏览器重启后会话恢复晚到的那几秒里 `chrome.tabs.get` 就是失败的，而 `prune` 正因为知道这件事才先等 1500 毫秒、再给未认领任务一个共享的认领窗口——两个函数对同一件事的假设不能相反（A16）。所以这一条网在**本轮启动恢复收尾之前一条都不动**，收尾信号是 `prune` 整套动作跑完后写进会话态的 `rt:pruneDone`（要活过 SW 回收：弹窗通常晚到得多）；中途抛错就不写。真删时逐条 `stopTask` **全部停完**再统一发 `task-stopped` 通知（外发是 await 的，逐条串起来会让后面几条任务的停止一起被堵），并且一定发通知——任务在用户没碰任何东西时静默消失是最难被报告的一类 bug。门禁 `tests/tab-auto-refresh/prune-now.test.mjs`
@@ -248,7 +248,7 @@
 
 - `notifyOut(event, payload)` 是唯一入口，依次 `postWebhook` 与 `postWechat`。两者共用 `notifyEvents` 事件清单、各有独立开关。调用方必须 `await`，两条链路都是 fetch，裸甩异步会在 SW 回收时被截断
 - Webhook：`normalizeWebhookUrl` 只接受 http(s)，非法就静默不发（弹窗另有内联提示）。载荷填 `content` / `text` / `body` 三个别名，加 `type` / `url` / `host` / `ts`。ntfy 收到的是原始 JSON 文本，它只在根端点解析 JSON 而载荷里没有 topic 字段，别再说它开箱即用
-- 外发网址一律由 `notifyOut` 剪成 `origin + pathname`（`shared/logic.js` 的 `outboundUrl`）：被监控页的 query 常带一次性签名、会话令牌、邮箱手机号，而"跳回哪一页"不依赖它。**剪在总入口而不是各调用点**——两个出口读的是同一份 `payload.url`，逐处改必然出现"改了 webhook 忘了微信"；解析不出来就当没有网址可发（回空串），绝不回退成原样传出去。`outboundUrl` 与页面认领用的 `urlKey` 形状相同而刻意不共用（匹配键将来放宽是合理的，那类改动对外发就是漏令牌）。`session-lost` 本来只有 `host`，没有 url
+- 外发网址一律由 `notifyOut` 剪成 `origin + pathname`（`shared/logic.js` 的 `outboundUrl`）：被监控页的 query 常带一次性签名、会话令牌、邮箱手机号，而"跳回哪一页"不依赖它。**剪在总入口而不是各调用点**——两个出口读的是同一份 `payload.url`，逐处改必然出现"改了 webhook 忘了微信"；解析不出来就当没有网址可发（回空串），绝不回退成原样传出去。外发裁剪与恢复认领的完整 URL 身份是独立语义，修改一边不能改变另一边。`session-lost` 本来只有 `host`，没有 url
 - 你填的 `webhookUrl` 本身就是凭据（这类地址内嵌 token，拿到就能往里发），且与其它设置一起走 `sync` 明文漫游，README 有说明；载荷里的关键词 `text` 是用户自己填的监控词，刻意保留（不外发就等于功能不存在）
 - 微信直连（`wechatEnabled`，默认关）：扩展 SW 直接调 `api.weixin.qq.com` 推模板消息，不经中继。令牌走 `stable_token`（老的 `/cgi-bin/token` 每刷一次就作废上一个，多端并发会互相打掉），缓存在 `chrome.storage.session`，距过期 5 分钟提前重取，命中 40001/42001 清缓存重取并重试一次
 - 微信平台的两条硬限制写死在常量与注释里，别凭直觉给大值。一是模板消息单个字段不超过 20 个字、不支持换行，超长由平台去掉且不给任何提示；二是模板正文里变量前必须有关键词加中文冒号，裸写变量会被平台整行丢弃，而接口照旧返回 errcode=0，用户收到的是一张空白卡片

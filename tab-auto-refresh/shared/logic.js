@@ -560,20 +560,18 @@ export function jitteredDelayMs(seconds, pct = 15, rand = Math.random, minMs = 3
   return Math.max(minMs, Math.round(base * (1 + p * ratio)));
 }
 
-/* 取 origin+pathname 作为网址匹配键（忽略 hash 查询参数差异） */
+/* 页面认领身份使用标准 URL 解析后的完整地址，保留 query 与 hash。 */
 export function urlKey(u) {
   try {
-    const x = new URL(u);
-    return x.origin + x.pathname;
+    return new URL(u).href;
   } catch (e) {
     return null;
   }
 }
 
-/* 外发载荷里的网址：同样只留 origin+pathname，把 query 与 hash 剪掉。
-   形状与 urlKey 相同却故意不共用一个函数——urlKey 是页面认领的匹配键，为了匹配
-   它将来可能放宽（忽略尾部斜杠、把 hash 算进去都合理），而这类改动对匹配是修 bug、
-   对外发是把一次性令牌送出去。两个语义各自演化，各自的门禁各自红。
+/* 外发载荷里的网址：只留 origin+pathname，把 query 与 hash 剪掉。
+   这里故意不复用完整 URL 认领键 urlKey：页面认领需要参数与 hash 防止深链错绑，
+   外发却必须删除它们，避免一次性令牌随通知泄漏。两个语义各自演化，各自的门禁各自红。
    解析不出来回空串而不是 null：调用方把它当载荷字段值用，"没有可发的网址"就该是空 */
 export function outboundUrl(u) {
   try {
@@ -584,10 +582,9 @@ export function outboundUrl(u) {
   }
 }
 
-/* 网址与目标一致（精确或 origin+pathname 相等）的标签页判定 */
+/* 页面认领要求完整 URL 身份一致；运行中的合法导航由 shouldAdoptTaskUrl 单独判断。 */
 export function tabShowsUrl(tab, url) {
   if (!tab || !tab.url || !url) return false;
-  if (tab.url === url) return true;
   const k = urlKey(url);
   return !!k && urlKey(tab.url) === k;
 }
@@ -763,7 +760,8 @@ export function planPrune({ tasks, tabs, adoptLegacyUrls = false } = {}) {
     if (match) {
       claims.add(match.id);
       pending.delete(match.id);
-      next[match.id] = Object.assign({}, task, { url: match.url || task.url });
+      /* 页面只证明它可认领，不得改写任务原本监控的目标网址。 */
+      next[match.id] = Object.assign({}, task);
       remap.push({ from: id, to: match.id, url: next[match.id].url });
     } else if (task.url && HTTP_URL.test(task.url)) {
       /* 带上整个 task：执行器等到窗口结束后要么把它挂到到位的页面上，要么原样重开
