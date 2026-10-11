@@ -8,7 +8,7 @@
 - v1.4 升级 Issue #6 已关闭；PR #7 已于 2026-09-29 squash merge，合并提交：`2503348f056581db6ede5d2ff2eb3a32abc47bd3`。
 - 版本契约由根目录 `.project-orchestrator.yml` 声明，后续升级策略为 `manual-pr`。
 - v1.4 按任务类型动态路由：Chat 负责规划/Review/授权，WorkBuddy 负责真实 Chrome/跨工具/发布环境执行，Codex 负责仓库实现，Runner/CI 独立负责自动验证。
-- 当前产品版本仍为 `2.1.0`；Orchestrator 升级没有修改扩展产品代码、权限、manifest 行为、版本号或 release 语义。
+- 正式发布版本仍为 `2.1.0`；当前正准备 `2.2.0`，尚未完成 Tag 和 Release。
 - GitHub Issues / Pull Requests + `docs/STATE.md` 是当前状态、任务生命周期、执行与 Review 的权威体系。
 - `AGENTS.md` 保留被测试直接对账的技术契约与长期工程约束，但不承担当前状态、活跃任务或执行授权的权威职责。
 - `BACKLOG.md` 仅为迁移前历史参考，不再新增活跃任务。
@@ -33,12 +33,10 @@
 
 | 来源 | GitHub Issue | 状态 / 下一角色 | 当前含义 |
 |---|---:|---|---|
-| V1 | #3 | `status:planning` / `agent:workbuddy` | Chrome 真机手工验证；不自动授权产品修改 |
-| 发版 | #4 | `status:planning` / `agent:chat` | 决定并执行 2.1.0 之后累计改动的下一版本；未授权自动发版、改版本或打/推 tag |
-| Chrome 重启恢复 | #3 / PR #9 | `status:blocked` / `agent:workbuddy` | PR #9 已合并；Issue #3 中真实 Chrome 验收发现帧注入缺陷，由 #10 修复后交 WorkBuddy 复测 |
-| 帧注入参数位置 | #10 / Draft PR | `status:review` / `agent:chat` | 严格 Chrome API mock 与关键词/验证墙执行链回归已完成；待 Chat Review，之后由 WorkBuddy 真机复测 |
+| 发版 | #4 | `status:planning` / `agent:chat` | 2.2.0 发布准备中；用户确认按「保留历史 Release/Tag」策略发布，需经 CI 后完成版本 Tag 与正式 Release |
+| 延期验收 | #15 | `status:planning` / `agent:chat` | Windows 通知、系统 DPI、微信真实渲染等未测专项持续跟踪，不能标为 PASS |
 
-Issue #6 与 PR #7 均为 `status:done`。新任务直接创建 GitHub Issue，不再向 `BACKLOG.md` 增加活跃待办。
+Issue #3 核心 Chrome 验收已完成关闭；Issue #8/#10/#11 的代码修复以及 #13 的疑点归因均已结案。PR #9/#12/#14 已合并，详情以对应 GitHub Issue/PR 和 CI 为准。准备分支中 manifest 已规划升至 2.2.0，发布完成前正式 Release 仍是 2.1.0。
 
 ## 自动化与 Runner
 
@@ -70,7 +68,7 @@ Issue #6 与 PR #7 均为 `status:done`。新任务直接创建 GitHub Issue，�
 
 ## 下一动作
 
-复审 Draft PR #10 的执行器参数形状、严格 Chrome API mock 与两条检测链正向执行证据，见 PR 最新 Handoff 和 `docs/ISSUE-10-VALIDATION.md`。Review 通过后由 WorkBuddy 按 Issue #3 的 Handoff 复测关键词命中和验证墙；复测完成前 Issue #10 保持开放。Issue #4 发版仍需明确授权时机与版本号。保持 Draft，不自动 merge、改版本、tag 或 Release。
+在 `release/prepare-v2.2.0` 的发布准备 PR 中，确认 manifest 2.2.0、CHANGELOG 用户摘要及完整工程记录、历史 Release/Tag 保留策略与发布契约回归。通过 GitHub-hosted CI、Chat Review 后，合并至 main，再创建 `tab-auto-refresh/v2.2.0` Tag 触发现有 Release workflow。核对资产与历史 v2.1.0 仍存在。Issue #15 继续作为延期实测账。
 
 ## 维护规则
 

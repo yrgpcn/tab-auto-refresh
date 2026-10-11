@@ -6,14 +6,14 @@
       三处写的是同一串，而这一串必须真匹配到仓库里的每一个 `.test.mjs`
    2. 校验命令 `node scripts/validate.mjs`：同样三处，且那个文件真存在
    3. `node-version` 与 `actions/setup-node@vN`：两份 workflow ↔ `AGENTS.md` 的两处写法
-   4. 一个名字串起十一处：`release.yml` 的 tag 模式 `tab-auto-refresh/v*` 的名字段 ↔
+   4. 一个名字串起十处：`release.yml` 的 tag 模式 `tab-auto-refresh/v*` 的名字段 ↔
       根 `package.json` 的 `name` ↔ 插件目录真名 ↔ 三处 `${GITHUB_REF_NAME#…/}` ↔
-      清理那一步的 `matching-refs/tags/tab-auto-refresh%2F` ↔ `AGENTS.md` 与 `README.md`
+      `AGENTS.md` 与 `README.md`
       那句发布说明 ↔ `CHANGELOG.md` 每个发布标题的名字段 ↔ `git archive` 的 `--prefix` 与
       `:<目录>` ↔ 版本比对那一步 `require('./tab-auto-refresh/manifest.json')` 的目录段
    5. 版本算术：manifest 版本拼成 tag，按 workflow 里那两步参数展开剥回来还得是它
    6. 步骤次序与写权限：校验和单测排在版本比对之前、版本比对排在打包之前……
-      有 `gh release create/delete` 与 `git push --delete` 的文件必须声明 `contents: write`
+      `gh release create` 的 workflow 必须有 `contents: write`，发布后必须保留旧 Release / Tag
 
    为什么这一格值得单独立账（实测，见文件末尾）：glob 漂一个字母时 `node --test` 退出码 0
    并且只报 `ℹ tests 0`，CI 从此对着空集合绿过去，本轮新加的门禁一条都不会在 CI 上跑；
@@ -228,8 +228,7 @@ const ROLES = [
   ["闸门（校验 + 单测）", /scripts\/validate\.mjs[\s\S]*--test|--test[\s\S]*scripts\/validate\.mjs/],
   ["比对 tag 版本与 manifest 版本", /TAG_VERSION/],
   ["打包 zip", /git\s+archive/],
-  ["建 Release", /gh\s+release\s+create/],
-  ["清理旧 Release 与 tag", /gh\s+release\s+delete/]
+  ["建 Release", /gh\s+release\s+create/]
 ];
 function orderLedger(steps) {
   const found = ROLES.map(([role, re]) => {
@@ -293,7 +292,6 @@ if (NS === TAG_PATTERN) throw new Error(`tag 模式 "${TAG_PATTERN}" 不是 "<�
 
 const REF_STRIPS = [...REL_TEXT.matchAll(/\$\{GITHUB_REF_NAME#([^}]*)\}/g)].map((m) => m[1]);
 const V_STRIPS = [...REL_TEXT.matchAll(/\$\{VERSION#([^}]*)\}/g)].map((m) => m[1]);
-const PRUNE_ENCODED = (REL_TEXT.match(/matching-refs\/tags\/([A-Za-z0-9_%-]+)/) || [])[1] || null;
 const ARCHIVE_PREFIX = (REL_TEXT.match(/--prefix="([^"]*)"/) || [])[1] || null;
 const ARCHIVE_REF = (REL_TEXT.match(/"\$\{GITHUB_REF_NAME\}:([^"\s]+)"/) || [])[1] || null;
 const REQUIRE_PATH = (REL_TEXT.match(/require\('([^']*manifest\.json)'\)/) || [])[1] || null;
@@ -315,7 +313,6 @@ const NAME_SITES = [
   { label: "插件目录真名（含 manifest.json 的那一个）", value: PLUGIN_DIRS[0] },
   { label: `${REL_FILE} 的 \${GITHUB_REF_NAME#…/}（共 ${REF_STRIPS.length} 处）`,
     value: [...new Set(REF_STRIPS)].length === 1 ? REF_STRIPS[0].replace(/\/$/, "") : "多种写法" },
-  { label: `${REL_FILE} 清理那一步的 URL 编码前缀`, value: PRUNE_ENCODED && decodeURIComponent(PRUNE_ENCODED).replace(/\/$/, "") },
   ...DOC_MENTIONS,
   { label: `CHANGELOG.md 的发布标题名字段（共 ${RELEASE_HEADINGS.length} 个）`,
     value: [...new Set(RELEASE_HEADINGS)].length === 1 ? RELEASE_HEADINGS[0] : "多种写法" },
@@ -387,10 +384,10 @@ test("node-version 与 setup-node 版本：两份 workflow 与 AGENTS.md 写的�
     "两份 workflow 与文档的 Node 版本不一致：一边绿不等于另一边绿");
 });
 
-test("一个名字十一处齐平：tag 前缀 ↔ package.json ↔ 插件目录 ↔ 剥前缀 ↔ 清理的编码前缀 ↔ 两份说明书 ↔ CHANGELOG ↔ archive 的 --prefix 与引用路径 ↔ require 的目录段", () => {
+test("一个名字十处齐平：tag 前缀 ↔ package.json ↔ 插件目录 ↔ 剥前缀 ↔ 两份说明书 ↔ CHANGELOG ↔ archive 的 --prefix 与引用路径 ↔ require 的目录段", () => {
   assert.deepEqual(nameLedger(NS, NAME_SITES), [],
-    "这个名字漂了的地方不会报错，只会让那一步安静地不做事：tag 不触发发布、旧 Release 不清、产物目录名与文档不符");
-  assert.equal(NAME_SITES.length, 11, `名字账的站点数是 ${NAME_SITES.length}，本文件按十一处写`);
+    "这个名字漂了的地方不会报错，只会让那一步安静地不做事：tag 不触发发布、产物目录名与文档不符");
+  assert.equal(NAME_SITES.length, 10, `名字账的站点数是 ${NAME_SITES.length}，本文件按十处写`);
 });
 
 test("版本算术真跑一遍：manifest 版本拼成 tag，按 workflow 那两步剥回来还得是它", () => {
@@ -399,14 +396,29 @@ test("版本算术真跑一遍：manifest 版本拼成 tag，按 workflow 那两
   assert.ok(ZIP_TPLS.length >= 1, "切不到 zip 产物名，产物名与 --prefix 那本账就空跑了");
 });
 
-test("release.yml 的步骤次序：闸门 → 版本比对 → 打包 → 建 Release → 清理，说明书那句同序", () => {
+test("release.yml 的步骤次序：闸门 → 版本比对 → 打包 → 建 Release，说明书同序", () => {
   assert.deepEqual(orderLedger(REL_STEPS), [],
-    "次序就是语义：校验排在打包后面等于把没测过的东西发出去，清理排在建 Release 前面等于先把上一版删了");
+    "次序就是语义：校验必须早于版本比对和打包，打包必须早于新 Release 创建");
   const line = /workflow.*发布|发布.*workflow|打 tag[^\n]*/.exec(AGENTS_TEXT)?.[0] || "";
   const a = line.indexOf("校验");
   const b = line.indexOf("比对");
   assert.ok(a >= 0 && b >= 0 && a < b,
     "AGENTS.md 那句发布说明里「先跑校验与单测」与「再比对 tag 版本」的顺序反了或找不到：文档说的次序与 workflow 做的不是一回事");
+});
+
+test("发布不允许删除历史 Release 或 Tag", () => {
+  const runs = runText(REL_STEPS);
+  const forbidden = [
+    /gh\\s+release\\s+delete/i,
+    /git\\s+push[^\\n]*--delete/i,
+    /git\\s+tag\\s+-d(?:\\s|$)/i,
+    /gh\\s+api[^\\n]*(?:-X|--method)\\s+DELETE/i,
+    /git\\s+push[^\\n]*:(?:refs\\/)?tags\\//i
+  ];
+  for (const pattern of forbidden) {
+    assert.ok(!pattern.test(runs), "发现会删除旧版 Release 或 Tag 的命令：" + pattern);
+  }
+  assert.match(runs, /gh\\s+release\\s+create/, "仍需创建新版本 Release");
 });
 
 test("写操作与 contents: write 成对：要写的必须声明，不写的不许白要", () => {

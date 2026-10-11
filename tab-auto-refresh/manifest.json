@@ -1,12 +1,24 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extName__",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "minimum_chrome_version": "120",
   "default_locale": "zh_CN",
   "description": "__MSG_extDesc__",
-  "permissions": ["alarms", "storage", "tabs", "contextMenus", "notifications", "cookies", "scripting", "idle", "power"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": [
+    "alarms",
+    "storage",
+    "tabs",
+    "contextMenus",
+    "notifications",
+    "cookies",
+    "scripting",
+    "idle",
+    "power"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -22,7 +34,9 @@
   },
   "commands": {
     "toggle-refresh": {
-      "suggested_key": { "default": "Alt+Shift+R" },
+      "suggested_key": {
+        "default": "Alt+Shift+R"
+      },
       "description": "__MSG_commandToggleRefresh__"
     }
   },
