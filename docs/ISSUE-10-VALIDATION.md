@@ -20,7 +20,7 @@ Chrome 的 `scripting.executeScript()` 把 `allFrames`、`frameIds` 定义在 `t
 
 - `node scripts/validate.mjs`：通过，扫描 57 个 JS / 4 个 JSON 文件。
 - `node --test "tests/**/*.test.mjs"`：676 / 676 通过，0 fail / cancelled / skipped。
-- GitHub Actions PR CI：待运行并回填链接与状态。
+- GitHub-hosted PR [CI](https://github.com/yrgpcn/tab-auto-refresh/actions/runs/38116640557) 与 [Orchestrator PR Check](https://github.com/yrgpcn/tab-auto-refresh/actions/runs/38116640547)：均成功。
 
 ## 风险、回滚与交接
 
