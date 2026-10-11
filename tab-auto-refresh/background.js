@@ -774,10 +774,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
    （frameIds:[0] 就是顶层框架）。加多框架只该增加覆盖面，不该因为某个子框架进不去
    反而丢掉原来单框架能成的场景。两次都失败才抛给调用方 */
 async function executeInAllFrames(base) {
+  const target = base.target || {};
   try {
-    return await chrome.scripting.executeScript(Object.assign({}, base, { allFrames: true }));
+    return await chrome.scripting.executeScript(Object.assign({}, base, {
+      target: Object.assign({}, target, { allFrames: true })
+    }));
   } catch (e) {
-    return await chrome.scripting.executeScript(Object.assign({}, base, { frameIds: [0] }));
+    return await chrome.scripting.executeScript(Object.assign({}, base, {
+      target: Object.assign({}, target, { frameIds: [0] })
+    }));
   }
 }
 

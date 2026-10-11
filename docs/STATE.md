@@ -35,7 +35,8 @@
 |---|---:|---|---|
 | V1 | #3 | `status:planning` / `agent:workbuddy` | Chrome 真机手工验证；不自动授权产品修改 |
 | 发版 | #4 | `status:planning` / `agent:chat` | 决定并执行 2.1.0 之后累计改动的下一版本；未授权自动发版、改版本或打/推 tag |
-| Chrome 重启恢复 | #8 / Draft PR #9 | `status:review` / `agent:chat` | 已补审查修复与回归，交 Chat 复审；真机重启证据仍由 #3 承接 |
+| Chrome 重启恢复 | #3 / PR #9 | `status:blocked` / `agent:workbuddy` | PR #9 已合并；Issue #3 中真实 Chrome 验收发现帧注入缺陷，由 #10 修复后交 WorkBuddy 复测 |
+| 帧注入参数位置 | #10 / Draft PR | `status:review` / `agent:chat` | 严格 Chrome API mock 与关键词/验证墙执行链回归已完成；待 Chat Review，之后由 WorkBuddy 真机复测 |
 
 Issue #6 与 PR #7 均为 `status:done`。新任务直接创建 GitHub Issue，不再向 `BACKLOG.md` 增加活跃待办。
 
@@ -69,7 +70,7 @@ Issue #6 与 PR #7 均为 `status:done`。新任务直接创建 GitHub Issue，�
 
 ## 下一动作
 
-复审 Draft PR #9 的启动恢复门控、Cookie 冲突诊断降级与失败隔离，证据见 PR 最新 Handoff 和 `docs/ISSUE-8-VALIDATION.md`。Issue #3 的 V1 真机重启验证尚未完成；Issue #4 发版仍需明确授权时机与版本号。保持 Draft，不自动 merge、改版本、tag 或 Release。
+复审 Draft PR #10 的执行器参数形状、严格 Chrome API mock 与两条检测链正向执行证据，见 PR 最新 Handoff 和 `docs/ISSUE-10-VALIDATION.md`。Review 通过后由 WorkBuddy 按 Issue #3 的 Handoff 复测关键词命中和验证墙；复测完成前 Issue #10 保持开放。Issue #4 发版仍需明确授权时机与版本号。保持 Draft，不自动 merge、改版本、tag 或 Release。
 
 ## 维护规则
 
