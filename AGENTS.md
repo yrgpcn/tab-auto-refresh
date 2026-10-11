@@ -23,11 +23,11 @@
   只量整页高度与界面事实、一个字节图都不写。它那份 chrome mock 是弹窗用面的手抄副本，对齐由
   `tests/tab-auto-refresh/screenshot-mock.test.mjs` 守着（见验证清单第 3 条）
 - 两份 workflow 自己的账在 `tests/tab-auto-refresh/pipeline-ledger.test.mjs`：测试 glob（三处齐平并且每一处真吃到
-  现遍历出来的全部测试文件）、校验命令、`node-version` 与 `setup-node` 版本、一个名字在十一处的写法
-  （tag 模式的名字段 ↔ `package.json` 的 `name` ↔ 插件目录真名 ↔ 三处剥前缀 ↔ 清理那一步的 URL 编码前缀 ↔
+  现遍历出来的全部测试文件）、校验命令、`node-version` 与 `setup-node` 版本、一个名字在十处的写法
+  （tag 模式的名字段 ↔ `package.json` 的 `name` ↔ 插件目录真名 ↔ 三处剥前缀 ↔
   两份说明书 ↔ `CHANGELOG.md` 每个发布标题的名字段 ↔ `git archive` 的前缀与引用路径 ↔ 版本比对那一步 `require`
-  的目录段）、版本算术、步骤次序与写权限（闸门 → 版本比对 → 打包 → 建 Release → 清理；有 `gh release create`
-  就要有 `contents: write`）。**挪测试文件（新增一层子目录）要确认那三处 glob 仍吃得到它；换仓库名要一次改齐那十一处。**
+  的目录段）、版本算术、步骤次序与写权限（闸门 → 版本比对 → 打包 → 建 Release；有 `gh release create`
+  就要有 `contents: write`），并禁止清除旧版本 Release / Tag。**挪测试文件（新增一层子目录）要确认那三处 glob 仍吃得到它；换仓库名要一次改齐那十处。**
   这一本存在的实测理由：测试 glob 的目录名漂一个字母时 `node --test` 退出码仍是 0、只报一行 `ℹ tests 0`，
   也就是"Actions 绿"不等于"门禁跑过"
 - 审计的"A 系列"到第二十五轮（A43）清账，2026-09-20 起收口：默认不再自开新一轮。第二十一到二十五轮五轮改的
@@ -71,7 +71,7 @@
   键名带引号写在注释里也算"提到"，这是刻意选的宽松面（宁可漏报也不去写一套认不出注释的切分）
 - 版本号在 `tab-auto-refresh/manifest.json` 维护
 - 发布：改 manifest 版本号并更新 CHANGELOG → 提交到 `main` → 打 tag `tab-auto-refresh/vX.Y.Z`（前缀勿改）→
-  推 `main` 与 tag，Actions 自动打包、建 Release 并清理旧 Release 与 tag
+  推 `main` 与 tag，Actions 自动打包、建 Release；历史 Release 与 Tag 永久保留，未经额外明确授权禁止自动清理
 
 ### 三条改法纪律
 

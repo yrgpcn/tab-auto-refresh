@@ -286,9 +286,12 @@ test("分类器不把 git 术语和代码成语当成路径", () => {
 const BACKLOG = readFileSync(join(ROOT, "BACKLOG.md"), "utf8").replace(/\r\n/g, "\n");
 const UNRELEASED = unreleasedSection(readFileSync(join(ROOT, "CHANGELOG.md"), "utf8").replace(/\r\n/g, "\n"));
 
-test("CHANGELOG 的 [未发布] 段取到的是正文，不是空串也不是整份文件", () => {
+test("CHANGELOG 的 [未发布] 段准确截断且已发布详细日志仍完整", () => {
   /* 下面两条判据只吃这一段，段取空就等于永不触发 */
-  assert.ok(UNRELEASED.length >= 8000, `[未发布] 段只取到 ${UNRELEASED.length} 字`);
+  assert.ok(UNRELEASED.length >= "## [未发布]".length, "发布后的待发区允许为空，但标题必须存在");
+  /* 用户可读发行摘要已移入版本小节；长技术日志必须另存而非丢失。 */
+  const details = readFileSync(join(ROOT, "docs/RELEASE-DETAILS-2.2.0.md"), "utf8");
+  assert.ok(details.length >= 8000, "v2.2.0 历史工程日志丢失");
   assert.ok(UNRELEASED.startsWith("## [未发布]"));
   assert.ok(!/\n## \[tab-auto-refresh/.test(UNRELEASED), "越界吃进了已发布版本段落");
 });
