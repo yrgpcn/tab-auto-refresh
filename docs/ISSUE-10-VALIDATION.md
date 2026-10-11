@@ -18,8 +18,6 @@ Chrome 的 `scripting.executeScript()` 把 `allFrames`、`frameIds` 定义在 `t
 
 ## 全量验证与 CI
 
-PR head commit：待提交后填写。
-
 - `node scripts/validate.mjs`：通过，扫描 57 个 JS / 4 个 JSON 文件。
 - `node --test "tests/**/*.test.mjs"`：676 / 676 通过，0 fail / cancelled / skipped。
 - GitHub Actions PR CI：待运行并回填链接与状态。
