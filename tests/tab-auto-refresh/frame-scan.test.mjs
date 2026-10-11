@@ -328,6 +328,30 @@ test("顶层与子框架的区分靠 window.top 同一性比较", () => {
   assert.equal(runCaptchaProbe({ top: false }).top, false);
 });
 
+test("小型 reCAPTCHA 挂件不会触发整页验证墙暂停", async () => {
+  const env = await boot({ tasks: { 7: task() } });
+  env.onScript((opts) => opts.func && !opts.args
+    ? [
+        { frameId: 0, result: runCaptchaProbe({ title: "正常页面" }) },
+        { frameId: 1, result: runCaptchaProbe({
+          top: false,
+          title: "reCAPTCHA",
+          href: "https://www.google.com/recaptcha/api2/anchor",
+          w: 300,
+          h: 180
+        }) }
+      ]
+    : opts.args ? [{ frameId: 0, result: [] }] : undefined);
+  for (let i = 0; i < 3; i++) {
+    await env.fire.tabUpdated(7, { status: "complete" });
+    await flush();
+  }
+  assert.equal(env.store.local.tasks[7].autoPaused, undefined);
+  assert.ok(!env.calls.notifCreated.some(([id]) => id.startsWith("task-paused")));
+  assert.equal(env.calls.executeScriptAccepted.filter((call) => call.func && !call.args).length, 3,
+    "小挂件结果必须来自真正执行的 allFrames 探测");
+});
+
 /* ---------- 4) 执行器接线 ---------- */
 
 const PAGE = "https://a.test/board";
@@ -351,7 +375,7 @@ const flush = () => new Promise((r) => setTimeout(r, 50));
 /* 按调用形状识别是哪一路注入：带 args 是关键词，带 func 无 args 是验证墙，带 files 是保活 */
 const kind = (o) => (o.args ? "keyword" : o.func ? "wall" : o.files ? "keepalive" : "other");
 
-test("关键词与验证墙两处注入都是 allFrames", async () => {
+test("关键词与验证墙两处注入把 allFrames 放在 target 内", async () => {
   const env = await boot({ tasks: { 7: task({ keywords: ["A"] }) } });
   env.onScript((opts) =>
     opts.args
@@ -366,9 +390,29 @@ test("关键词与验证墙两处注入都是 allFrames", async () => {
   for (const c of env.calls.executeScript) by[kind(c)] = c;
   assert.ok(by.keyword, "没跑关键词注入");
   assert.ok(by.wall, "没跑验证墙注入");
-  assert.equal(by.keyword.allFrames, true, "关键词注入只看顶层框架");
-  assert.equal(by.wall.allFrames, true, "验证墙注入只看顶层框架");
-  assert.equal(by.keyword.frameIds, undefined, "allFrames 与 frameIds 同时给了，真实 Chrome 会整次拒");
+  assert.equal(by.keyword.target.allFrames, true, "关键词注入未覆盖全部框架");
+  assert.equal(by.wall.target.allFrames, true, "验证墙注入未覆盖全部框架");
+  for (const call of [by.keyword, by.wall]) {
+    assert.equal(Object.hasOwn(call, "allFrames"), false, "allFrames 不能放在 ScriptInjection 顶层");
+    assert.equal(Object.hasOwn(call, "frameIds"), false, "frameIds 不能放在 ScriptInjection 顶层");
+    assert.equal(Object.hasOwn(call.target, "frameIds"), false, "target 不能同时指定 allFrames 与 frameIds");
+  }
+  assert.equal(env.calls.executeScriptAccepted.filter((call) => call.args).length, 1,
+    "关键词执行器注入应通过 API mock 校验");
+  assert.equal(env.calls.executeScriptAccepted.filter((call) => call.func && !call.args).length, 1,
+    "验证墙执行器注入应通过 API mock 校验");
+});
+
+test("Chrome API mock 按真实 InjectionTarget 规范拒绝顶层 allFrames/frameIds", async () => {
+  const env = await boot({ tasks: { 7: task() } });
+  const injection = { target: { tabId: 7 }, func: () => true };
+  await assert.rejects(env.chrome.scripting.executeScript({ ...injection, allFrames: true }), /Unexpected property: 'allFrames'/);
+  await assert.rejects(env.chrome.scripting.executeScript({ ...injection, frameIds: [0] }), /Unexpected property: 'frameIds'/);
+  await assert.rejects(env.chrome.scripting.executeScript({ ...injection, target: { tabId: 7, allFrames: true, frameIds: [0] } }), /cannot be used together/);
+  await assert.rejects(env.chrome.scripting.executeScript({ target: { tabId: 7 } }), /Exactly one of func and files/);
+  await assert.rejects(env.chrome.scripting.executeScript({ ...injection, files: ["content/keepalive.js"] }), /Exactly one of func and files/);
+  await assert.rejects(env.chrome.scripting.executeScript({ ...injection, args: "not-an-array" }), /args requires func/);
+  assert.equal(env.calls.executeScriptAccepted.length, 0, "无效调用不得执行注入 hook");
 });
 
 test("命中只在子框架：整条链照样落地", async () => {
@@ -389,6 +433,8 @@ test("命中只在子框架：整条链照样落地", async () => {
     "子框架里的命中丢了"
   );
   assert.equal(env.store.local.tasks[7], undefined);
+  assert.equal(env.calls.executeScriptAccepted.filter((call) => call.args).length, 1,
+    "关键词命中必须来自通过 API 形状校验后执行的注入");
 });
 
 test("墙只在子框架：连续三次加载后自动暂停", async () => {
@@ -418,6 +464,8 @@ test("墙只在子框架：连续三次加载后自动暂停", async () => {
   }
   assert.equal(env.store.local.tasks[7].autoPaused.reason, "captcha", "子框架里的墙没被认出来");
   assert.ok(env.calls.notifCreated.some(([id]) => id.startsWith("task-paused")));
+  assert.equal(env.calls.executeScriptAccepted.filter((call) => call.func && !call.args).length, 3,
+    "墙自动暂停必须来自三次通过 API 形状校验的执行器调用");
 });
 
 test("保活脚本注入没被顺手扩到全部框架", async () => {
@@ -439,7 +487,7 @@ test("allFrames 整次被拒：退回顶层再试一次，命中照样落地", a
      所以退回单框架重试。A3 不许把原来能成的场景换成新的失败 */
   const env = await boot({ tasks: { 7: task({ keywords: ["已售罄"] }) } });
   env.onScript((opts) => {
-    if (opts.allFrames) throw new Error("Cannot access frame");
+    if (opts.target.allFrames) throw new Error("Cannot access frame");
     return opts.args
       ? [{ result: ["已售罄"] }]
       : [{ result: runCaptchaProbe({ title: "正常页面" }) }];
@@ -448,7 +496,7 @@ test("allFrames 整次被拒：退回顶层再试一次，命中照样落地", a
   await flush();
   const kw = env.calls.executeScript.filter((o) => kind(o) === "keyword");
   assert.ok(
-    kw.some((o) => o.allFrames === true) && kw.some((o) => !o.allFrames && o.frameIds && o.frameIds[0] === 0),
+    kw.some((o) => o.target.allFrames === true) && kw.some((o) => !o.target.allFrames && o.target.frameIds && o.target.frameIds[0] === 0),
     "没有退回顶层重试那一次：" + JSON.stringify(kw)
   );
   assert.ok(
@@ -458,20 +506,28 @@ test("allFrames 整次被拒：退回顶层再试一次，命中照样落地", a
   assert.equal(env.store.local.tasks[7], undefined, "命中后默认要停任务");
 });
 
-test("两次都注入不进去：不发通知也不停任务", async () => {
+test("关键词全帧与顶层回退都失败：不发通知也不停任务", async () => {
   const env = await boot({ tasks: { 7: task({ keywords: ["A"] }) } });
-  env.onScript(() => {
-    throw new Error("Cannot access frame");
+  env.onScript((opts) => {
+    if (opts.args) throw new Error("Cannot access frame");
+    return [{ result: runCaptchaProbe({ title: "正常页面" }) }];
   });
   await env.fire.tabUpdated(7, { status: "complete" });
   await flush();
   assert.deepEqual(env.calls.notifCreated.map(([id]) => id), []);
   assert.ok(env.store.local.tasks[7], "注入失败被当成了命中");
   const kw = env.calls.executeScript.filter((o) => kind(o) === "keyword");
-  assert.equal(kw.length, 2, "首轮就该是两次（allFrames + 顶层回退），实际 " + kw.length);
+  assert.equal(kw.length, 2, "关键词注入应尝试 allFrames 与顶层回退，实际 " + kw.length);
 });
 
 /* 红→绿对照（做法见 alarm-gate.test.mjs 末尾：副本改在仓库外，仓库源码一个字不动）。
+   Issue #10（2026-10-11）：保留旧 executeInAllFrames 时，严格 mock 的首轮运行 28 条中 4 条失败：
+     「关键词与验证墙两处注入把 allFrames 放在 target 内」拒绝错误的 ScriptInjection 顶层字段；
+     「命中只在子框架」没有发出 keyword-hit；「墙只在子框架：连续三次加载后自动暂停」没有暂停任务；
+     「allFrames 整次被拒：退回顶层再试一次，命中照样落地」无法观察到正确的 InjectionTarget。
+   修复 target.allFrames / target.frameIds 的位置并加强 API mock 后，关键词与验证墙各有独立的
+   executeScriptAccepted 正向计数；小型 reCAPTCHA 不误暂停、双重注入失败不误通知或停止任务。专项最终 29 条通过。
+
    2026-09-19 实跑，十处变异，每次只改副本里的一处：
      V="$(cygpath -w "$LOCALAPPDATA/node-tools/ctl-a3")"
      TAR_BG="$V/background.js" TAR_LOGIC="$V/shared/logic.js" \

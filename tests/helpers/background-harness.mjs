@@ -53,6 +53,7 @@ export function makeEnv({ startupComplete = false } = {}) {
     alarmsCleared: [],
     badge: [],
     executeScript: [],
+    executeScriptAccepted: [],
     reloaded: [],
     navigated: [],
     messagesSent: [],
@@ -339,6 +340,44 @@ export function makeEnv({ startupComplete = false } = {}) {
         /* 记下每次调用的参数：注入面（target / allFrames / world）本身就是要断言的东西，
            只数次数等于没管过它 */
         calls.executeScript.push(opts);
+        const validInjectionKeys = new Set(["target", "func", "args", "files", "world", "worldId", "injectImmediately"]);
+        for (const key of Object.keys(opts || {})) {
+          if (!validInjectionKeys.has(key)) throw new TypeError(`Unexpected property: '${key}'`);
+        }
+        const hasFunc = typeof opts?.func === "function";
+        const hasFiles = Array.isArray(opts?.files) && opts.files.length > 0 && opts.files.every((file) => typeof file === "string");
+        if (hasFunc === hasFiles) throw new TypeError("Exactly one of func and files must be specified");
+        if (Object.hasOwn(opts || {}, "args") && (!hasFunc || !Array.isArray(opts.args))) {
+          throw new TypeError("args requires func and must be an array");
+        }
+        const target = opts?.target;
+        if (!target || typeof target.tabId !== "number") {
+          throw new TypeError("target.tabId must be a number");
+        }
+        const validTargetKeys = new Set(["tabId", "frameIds", "allFrames", "documentIds"]);
+        for (const key of Object.keys(target)) {
+          if (!validTargetKeys.has(key)) throw new TypeError(`Unexpected target property: '${key}'`);
+        }
+        if (target.allFrames === true && Object.hasOwn(target, "frameIds")) {
+          throw new TypeError("target.allFrames and target.frameIds cannot be used together");
+        }
+        if (Object.hasOwn(target, "frameIds") && Object.hasOwn(target, "documentIds")) {
+          throw new TypeError("target.frameIds and target.documentIds cannot be used together");
+        }
+        if (Object.hasOwn(target, "allFrames") && typeof target.allFrames !== "boolean") {
+          throw new TypeError("target.allFrames must be a boolean");
+        }
+        if (Object.hasOwn(target, "frameIds") &&
+            (!Array.isArray(target.frameIds) || target.frameIds.length === 0 ||
+             target.frameIds.some((id) => !Number.isInteger(id)))) {
+          throw new TypeError("target.frameIds must be a nonempty array of integers");
+        }
+        if (Object.hasOwn(target, "documentIds") &&
+            (!Array.isArray(target.documentIds) || target.documentIds.length === 0 ||
+             target.documentIds.some((id) => typeof id !== "string"))) {
+          throw new TypeError("target.documentIds must be a nonempty array of strings");
+        }
+        calls.executeScriptAccepted.push(opts);
         /* 默认"注入成功、没命中"（[{result:false}]）。这个默认值让关键词命中链的命中分支
            与验证墙的暂停分支在测试里永远走不到，所以用例要能改口：env.onScript((opts) => ...)
            按调用点返回结果，返回 undefined 表示"这次不改口"。
