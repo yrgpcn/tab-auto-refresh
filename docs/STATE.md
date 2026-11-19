@@ -1,3 +1,5 @@
+> **当前 Project Orchestrator 契约：v2（2026-11-19）**。以下旧版 v1.4、WorkBuddy 与历史状态记录保留供追溯，不覆盖现行 [v2 路由](ROUTING.md)。实际在途任务、审查与授权以 GitHub 最新 Issue/PR 为准；本次仅更改协作规范，不调整产品进度。仅实际使用 CI 或 CI 是验收/合并必需项时才核查 CI 与 CircleCI 备选。
+
 # 项目状态
 
 `docs/STATE.md` 是 tab-auto-refresh 的高层恢复入口。任务级真实状态以 GitHub Issues / Pull Requests 为准。
