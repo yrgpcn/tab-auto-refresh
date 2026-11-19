@@ -1,3 +1,5 @@
+> **当前有效路由：Project Orchestrator v2（2026-11-19）**。下文任何 v1.4 / WorkBuddy 分派说明只作历史追溯，不再用于新工作。新任务由 Chat 制定目标、审核与合并决策；一名主 Codex 对已授权工作包完整交付、自主解决普通缺陷，并可协调有明确写入边界的子 Agent；真实环境/外部系统工作仅由具备相应权限的 Codex/受权操作方执行，**不再分派给 WorkBuddy**。Runner/CI 是独立验证层，**仅在任务真实使用 CI 或验收/合并门禁需要 CI 时**检查 CI 可用性；Actions 因账单/额度/Runner 阻塞时主动评估已授权 CircleCI，不更改原生 required checks。GitHub Issue/PR 是当前事实来源；历史 WorkBuddy owner 必须明确改派，不能推定执行完成。本次迁移不更改业务、外部服务、数据权限、CI 触发器、部署或合并授权。
+
 # 状态与 Agent 路由
 
 `tab-auto-refresh` 使用 **Project Orchestrator v1.4**。版本声明见根目录 `.project-orchestrator.yml`。

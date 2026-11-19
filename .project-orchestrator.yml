@@ -1,11 +1,10 @@
-version: "1.4"
+version: "2.0"
 upgrade_policy: manual-pr
 state_file: docs/STATE.md
 routing_file: docs/ROUTING.md
 
 roles:
   chat: enabled
-  workbuddy: enabled
   codex: enabled
   runner: verifier
 
