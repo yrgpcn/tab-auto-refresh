@@ -1,4 +1,5 @@
-version: "2.0"
+version: "2.5"
+source_commit: "e753fa739a4b2c8940735c4788518c76625d73b1"
 upgrade_policy: manual-pr
 state_file: docs/STATE.md
 routing_file: docs/ROUTING.md
@@ -6,6 +7,32 @@ routing_file: docs/ROUTING.md
 roles:
   chat: enabled
   codex: enabled
+  antigravity: enabled
   runner: verifier
+
+providers:
+  supported:
+    - codex
+    - antigravity
+  auto_detect: true
+  max_subagents: max_supported
+  concurrency:
+    mode: max_supported
+    parallel_subagents: true
+  designated_host: null
+
+scheduler:
+  enabled: false # staged read-only baseline; no local scheduler installed
+
+approval_policy:
+  tier1_routine_engineering: true
+  tier2_low_risk_merge: false
+  tier3_high_risk_actions: false
+  require_exact_head: true
+
+notifications:
+  channel: null
+  queue_target: null # operator-configured private notification target
+  enabled: false # opt-in by adopter
 
 source_of_truth: github

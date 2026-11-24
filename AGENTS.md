@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **Project Orchestrator v2.5 治理约定**（source commit e753fa739a4b2c8940735c4788518c76625d73b1）：单主执行角色支持 OpenAI Codex 或 Google Antigravity（按运行环境实际支持的最大并发数调度隔离子 Agent），ChatGPT 负责规划与 exact-HEAD 独立终审（执行端不可自批）；GitHub Issue/PR 为任务与证据权威来源，Tier 1 常规缺陷自主交付，Tier 2 自动合并默认关闭，Tier 3 高风险/发布/敏感变更须用户明确授权；仅实际需要 CI 时检查 Actions 或 CircleCI 备选；阶段边界保持只读手动交接与禁自动派发（STAGE_ACCEPTED_READ_ONLY_MANUAL_HANDOFF）。
+
 > Project Orchestrator 现在是项目当前状态、任务与 Review 的权威体系。接手先读 docs/STATE.md，再检查当前 GitHub Issues / Pull Requests。
 > 本文件从这里往下保留的是被测试直接对账的技术契约与长期工程约束，不再承担当前任务清单或项目状态记忆。
 > BACKLOG.md 仅作迁移前历史参考；活跃工作以 GitHub Issues 为准。历史审计记录也不等同于新的执行授权。
