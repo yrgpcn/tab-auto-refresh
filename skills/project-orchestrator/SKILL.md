@@ -1,3 +1,5 @@
+> **v2.5 治理更新**（`e753fa739a4b2c8940735c4788518c76625d73b1`）：已升级至 Project Orchestrator v2.5——支持单主 `agent:codex` 或 `agent:antigravity`（`task-lease/v1` 互斥）与 `max_supported` 并发子 Agent、ChatGPT exact-HEAD 独立终审、GitHub 仓库任务权威与简短入口、Tier 1–3 分级预授权（Tier 2 自动合并默认关闭）及按需 CI/CircleCI 备选；停用 WorkBuddy 新派发，阶段边界保持 `STAGE_ACCEPTED_READ_ONLY_MANUAL_HANDOFF / AUTONOMOUS_DISPATCH_BLOCKED`。
+
 # tab-auto-refresh Project Orchestrator v1.4
 
 用于在本仓库恢复状态、按任务类型路由工作，并保持 Chat / WorkBuddy / Codex / Runner / GitHub 一致。

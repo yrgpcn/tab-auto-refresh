@@ -1,3 +1,5 @@
+> **v2.5 规范补充**（`e753fa739a4b2c8940735c4788518c76625d73b1`）：现行执行引擎支持单主 `agent:codex` 或 `agent:antigravity`（`task-lease/v1` 互斥）+ `max_supported` 并发子 Agent，ChatGPT 独立 exact-HEAD 终审；停用 WorkBuddy 新派发，完整要求以 GitHub Issue/PR 为准并回写结果；Tier 1 常规缺陷自主交付，Tier 2 自动合并默认关闭，Tier 3 需 Chat 用户明确授权；仅实际需要 CI 时检查 Actions/CircleCI；当前处于 `STAGE_ACCEPTED_READ_ONLY_MANUAL_HANDOFF / AUTONOMOUS_DISPATCH_BLOCKED`（文档不自动派发）。
+
 # Project Orchestrator v1.4 工作流
 
 核心原则：**按任务类型选择最小必要角色，不强制固定 Chat → WorkBuddy → Codex 顺序。**

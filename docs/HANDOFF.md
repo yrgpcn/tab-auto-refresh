@@ -1,3 +1,5 @@
+> **v2.5 交接补充**（`e753fa739a4b2c8940735c4788518c76625d73b1`）：支持单主 Codex 或 Google Antigravity + `max_supported` 子 Agent 与 ChatGPT 独立终审（不再新派 WorkBuddy）；交接须以 GitHub Issue/PR 为权威来源、绑定 exact HEAD 与验证边界，且当前处于 `STAGE_ACCEPTED_READ_ONLY_MANUAL_HANDOFF / AUTONOMOUS_DISPATCH_BLOCKED`（静态交接文本不触发自动调度）。
+
 # Handoff 协议
 
 跨 Chat / WorkBuddy / Codex 交接时，不复制整段聊天；在 Issue / PR 中留下最小可执行上下文。
